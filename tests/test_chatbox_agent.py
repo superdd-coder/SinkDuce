@@ -216,6 +216,43 @@ class TestChatboxCore:
         # Agentic 查库 only runs this many times (rest get a stop message)
         assert mock_agentic.run.call_count <= _MAX_AGENTIC_SEARCH_CALLS
 
+    def test_meeting_lookup_passes_seen_packs_within_turn(self, store, mock_llm, mock_agentic):
+        from src.chatbox.agent import ChatboxAgent
+
+        n = [0]
+
+        def _side_effect(**kwargs):
+            n[0] += 1
+            if n[0] <= 2:
+                return _fake_llm_response(tool_calls=[{
+                    "id": f"call_{n[0]}",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup_meeting_transcript",
+                        "arguments": '{"query":"next steps"}',
+                    },
+                }])
+            return _fake_llm_response(content="done")
+
+        mock_llm._client.chat.completions.create.side_effect = _side_effect
+        agent = ChatboxAgent(store, mock_llm, mock_agentic)
+        store.create_session(title="m", session_id="meeting_abc")
+        seen_args: list[set] = []
+
+        def fake_lookup(mid, q, **kwargs):
+            seen_args.append(set(kwargs.get("seen_pack_keys") or []))
+            if len(seen_args) == 1:
+                return '{"hit_count": 2, "context": "AB"}', {"m:0", "m:1"}
+            return '{"hit_count": 1, "context": "C"}', {"m:1", "m:2"}
+
+        with patch(
+            "src.meeting.transcript_index.lookup_json_and_keys",
+            side_effect=fake_lookup,
+        ):
+            agent.chat("meeting_abc", "接下来要做什么", mode="direct")
+        assert seen_args[0] == set()
+        assert seen_args[1] == {"m:0", "m:1"}
+
 
 # ── TestChatboxSession ────────────────────────────────────────
 
@@ -488,26 +525,22 @@ class TestChatboxEdgeCases:
             for m in quick_msgs
         )
 
-        # ── Meeting: system prompt, live transcript, dialogue, speaker ──
+        # ── Meeting: system prompt, dialogue, speaker — no full transcript dump ──
         meeting = store.create_session(session_id="meeting_abc123")
-        # Legacy DB system rows must be ignored; live load supplies transcript
         store.add_message(meeting.id, "system", "STALE_SHOULD_NOT_APPEAR")
         store.add_message(meeting.id, "user", "what was said?")
         store.add_message(meeting.id, "assistant", "summary")
         store.add_message(meeting.id, "user", "more?")
-        with patch(
-            "src.chatbox.meeting_context.meeting_transcript_context_message",
-            return_value="FULL_TRANSCRIPT_TEXT",
-        ):
-            meet_msgs = agent._build_messages(
-                meeting.id, "more?",
-                system_prompt="MEETING_SYSTEM",
-                catalog_text="Knowledge base reference:\n- NO",
-                pre_message_context="Speaker mapping: S1=Alice",
-            )
+        meet_msgs = agent._build_messages(
+            meeting.id, "more?",
+            system_prompt="MEETING_SYSTEM",
+            catalog_text="Knowledge base reference:\n- NO",
+            pre_message_context="Speaker mapping: S1=Alice",
+        )
         assert meet_msgs[0]["content"] == "MEETING_SYSTEM"
-        assert meet_msgs[1]["role"] == "system"
-        assert meet_msgs[1]["content"] == "FULL_TRANSCRIPT_TEXT"
+        assert not any(
+            "FULL_TRANSCRIPT_TEXT" in (m.get("content") or "") for m in meet_msgs
+        )
         assert not any(
             "STALE_SHOULD_NOT_APPEAR" in (m.get("content") or "") for m in meet_msgs
         )
@@ -519,10 +552,7 @@ class TestChatboxEdgeCases:
             if m["role"] == "system" and "Speaker mapping" in (m.get("content") or "")
         ]
         assert speaker_idxs
-        # speaker after transcript and dialogue
-        assert speaker_idxs[0] > 1
-        transcript_idx = 1
-        assert speaker_idxs[0] > transcript_idx
+        assert speaker_idxs[0] > 0
 
 
 # ── Helpers ───────────────────────────────────────────────────

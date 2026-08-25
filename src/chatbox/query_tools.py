@@ -123,6 +123,38 @@ SEARCH_KNOWLEDGE_BASE_TOOL = _fn(
     required=["raw_query"],
 )
 
+LOOKUP_MEETING_TRANSCRIPT_TOOL = _fn(
+    "lookup_meeting_transcript",
+    (
+        "PRIMARY search over this meeting's spoken transcript (not the written summary). "
+        "Each call is an independent search: there is no offset, continuation, or "
+        "cursor. [ref:N] in the result is a sentence id, not a read position. "
+        "The server locks the search to the current meeting. "
+        "If a named speaker filter returns nothing, tell the user; a short preview "
+        "may show who actually said it. Ask before searching the whole meeting "
+        "(speaker_scope=all). Cite only [ref:N] ids that appear in the tool result."
+    ),
+    {
+        "query": {
+            "type": "string",
+            "description": (
+                "WHAT information you need — not a position in the meeting, "
+                "and not the user question verbatim when it is broad. "
+                "Natural phrase naming people, actions, numbers, or topics."
+            ),
+        },
+        "speaker_scope": {
+            "type": "string",
+            "enum": ["auto", "all"],
+            "description": (
+                "auto (default): server may filter to speakers named in the user "
+                "question. all: search the whole meeting (only after the user agrees)."
+            ),
+        },
+    },
+    required=["query"],
+)
+
 LOOKUP_COLLECTION_TOOL = _fn(
     "lookup_collection",
     (
@@ -514,7 +546,11 @@ QUICK_STRUCTURE_NAMES: tuple[str, ...] = tuple(
     n for n in AGENT_STRUCTURE_NAMES if n != "list_collections"
 )
 
-SEARCH_TOOL_NAMES = frozenset({"search_knowledge_base", "lookup_collection"})
+SEARCH_TOOL_NAMES = frozenset({
+    "search_knowledge_base",
+    "lookup_collection",
+    "lookup_meeting_transcript",
+})
 STRUCTURE_TOOL_NAMES = frozenset(STRUCTURE_TOOL_SCHEMAS.keys())
 
 
@@ -543,7 +579,7 @@ def tools_for_mode(
 ) -> list[dict[str, Any]]:
     """Return OpenAI tools array for agentic / direct / meeting."""
     if is_meeting:
-        return []
+        return [LOOKUP_MEETING_TRANSCRIPT_TOOL]
     if mode == "direct":
         tools = [LOOKUP_COLLECTION_TOOL]
         for name in QUICK_STRUCTURE_NAMES:
@@ -565,7 +601,7 @@ def allowed_tool_names(
     web_search_enabled: bool = False,
 ) -> frozenset[str]:
     if is_meeting:
-        return frozenset()
+        return frozenset({"lookup_meeting_transcript"})
     names: set[str]
     if mode == "direct":
         names = {"lookup_collection", *QUICK_STRUCTURE_NAMES}

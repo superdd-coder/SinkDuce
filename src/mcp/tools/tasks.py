@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # src.tasks.task_manager.
 _ALLOWED_STATUSES = {"pending", "processing", "completed", "failed"}
 _ALLOWED_TYPES = {"upload", "consolidate", "doc_summary", "sparse_recalc",
-                  "meeting_summary", "meeting_extract"}
+                  "meeting_summary", "meeting_extract", "meeting_transcript_index"}
 
 
 async def get_task_status(task_id: str) -> str:

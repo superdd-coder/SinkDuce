@@ -33,6 +33,7 @@ from src.services import services
 from src.tasks.task_manager import task_manager, Task, TaskStatus
 from src.meeting.refs import (
     clean_refs as _clean_refs,
+    finalize_summary_markdown as _finalize_summary_markdown,
     normalize_brackets as _normalize_brackets,
     normalize_refs as _normalize_refs,
     parse_tagger_response as _parse_tagger_response,
@@ -184,10 +185,18 @@ async def transcribe_handler(task: Task, meeting_id: str, **kwargs) -> dict:
         store.delete_pipeline_data(meeting_id)
     except Exception as exc:
         logger.warning("[TRANSCRIBE-HANDLER] delete_pipeline_data failed (non-fatal): %s", exc)
+    try:
+        from src.meeting.transcript_index import purge_meeting_transcripts
+
+        purge_meeting_transcripts(meeting_id)
+    except Exception:
+        logger.warning("[TRANSCRIBE-HANDLER] transcript purge skipped: %s", meeting_id)
     store.update_meeting(
         meeting_id,
         status=MeetingStatus.transcribing,
         transcription_error=None,
+        transcript_index_status="",
+        transcript_index_error="",
         processing_state=ProcessingState.idle.value,
         summary_gen_state=GenerationState.idle.value,
         blueprint_gen_state=GenerationState.idle.value,
@@ -1018,7 +1027,7 @@ class MeetingService(
                             thinking=think_summarizer,
                             thinking_effort=think_effort if think_summarizer else None,
                         )
-                        validated = _clean_refs(_normalize_refs(_normalize_brackets(raw)), list(payload_ids))
+                        validated = _finalize_summary_markdown(raw, list(payload_ids))
                         md_path = store.save_section_md(
                             meeting_id, tab_id, validated
                         )
@@ -1706,6 +1715,7 @@ def _bind_meeting_mixins() -> None:
         "_files_dir",
         "_num_id",
         "_clean_refs",
+        "_finalize_summary_markdown",
         "_normalize_brackets",
         "_normalize_refs",
         "_parse_tagger_response",

@@ -64,6 +64,25 @@ def normalize_refs(md: str) -> str:
     )
 
 
+_SPK_NAME_GLOSS_RE = re.compile(
+    r"(\[spk:[^\]]+\])\s*[（(][^）)\n]{1,80}[）)]",
+    re.IGNORECASE,
+)
+
+
+def strip_speaker_name_glosses(md: str) -> str:
+    """Drop LLM-guessed names glued to speaker tags: ``[spk:0] (Alex)``."""
+    if not md:
+        return md
+    return _SPK_NAME_GLOSS_RE.sub(r"\1", md)
+
+
+def finalize_summary_markdown(md: str, valid_ids: list[str]) -> str:
+    """Normalize brackets/refs, strip speaker-name glosses, drop invalid cites."""
+    cleaned = strip_speaker_name_glosses(normalize_refs(normalize_brackets(md)))
+    return clean_refs(cleaned, valid_ids)
+
+
 def clean_refs(md: str, valid_ids: list[str]) -> str:
     """Strip [stt_XXX] tags whose sentence IDs are not in *valid_ids*."""
     valid_set = set(valid_ids)

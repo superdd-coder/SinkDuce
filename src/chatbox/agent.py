@@ -51,29 +51,16 @@ class ChatResponse:
 # ═══════════════════════════════════════════════════════════════════
 
 def _build_speaker_mapping(meeting_id: str) -> str:
-    """Build speaker mapping string for meeting chat.
+    """Speaker mapping for meeting chat (tests / callers)."""
+    from src.chatbox.meeting_context import format_speaker_mapping
 
-    Reads speaker_names from the meeting store and formats as:
-        Current speaker mapping:
-        - speaker1: John
-        - speaker2: Sarah
+    return format_speaker_mapping(meeting_id)
 
-    Injected as ephemeral context before each user message.
-    """
-    try:
-        from src.meeting.store import get_meeting
-        meeting = get_meeting(meeting_id)
-    except Exception:
-        return "No speaker names configured for this meeting."
-    if meeting is None or meeting.speaker_names is None:
-        return "No speaker names configured for this meeting."
-    lines = ["Current speaker mapping:"]
-    for spk_id, name in meeting.speaker_names.items():
-        display_name = name if name else "(unnamed)"
-        lines.append(f"- {spk_id}: {display_name}")
-    if not meeting.speaker_names:
-        return "No speaker names configured for this meeting."
-    return "\n".join(lines)
+
+def _build_meeting_ephemeral_context(meeting_id: str) -> str:
+    from src.chatbox.meeting_context import build_meeting_ephemeral_context
+
+    return build_meeting_ephemeral_context(meeting_id)
 
 
 def _format_current_time() -> str:
@@ -158,7 +145,10 @@ class ChatboxAgent:
         if mode == "direct":
             if is_meeting:
                 from src.prompts import MEETING_CHAT_SYSTEM_PROMPT
-                return [], MEETING_CHAT_SYSTEM_PROMPT, ""
+                tools = tools_for_mode(
+                    "direct", is_meeting=True, web_search_enabled=web_search_enabled,
+                )
+                return tools, MEETING_CHAT_SYSTEM_PROMPT, ""
             tools = tools_for_mode(
                 "direct", is_meeting=False, web_search_enabled=web_search_enabled,
             )
@@ -360,20 +350,7 @@ class ChatboxAgent:
         sp = system_prompt if system_prompt is not None else self._system_prompt
         messages.append({"role": "system", "content": sp})
 
-        # ── Meeting: live transcript (or explicit unavailable) after fixed system ──
-        # Always inject one message so the model never assumes a hidden transcript.
-        if is_meeting:
-            meeting_id = session_id[len("meeting_"):]
-            try:
-                from src.chatbox.meeting_context import meeting_transcript_context_message
-                live_tx = meeting_transcript_context_message(meeting_id)
-            except Exception:
-                logger.exception(
-                    "Failed to load live transcript for session %s", session_id
-                )
-                from src.chatbox.meeting_context import MEETING_TRANSCRIPT_UNAVAILABLE
-                live_tx = MEETING_TRANSCRIPT_UNAVAILABLE
-            messages.append({"role": "system", "content": live_tx})
+        # Meeting transcript is retrieved via lookup_meeting_transcript, not dumped here.
 
         # ── History: last N dialogue turns ──
         # Declined web searches stay in history so the model knows what was refused.
@@ -449,11 +426,11 @@ class ChatboxAgent:
         self._check_session_truncation(session_id)
 
         collections = self._get_collections(session_id)
-        # Speaker mapping for meeting sessions (ephemeral, per-message)
-        meeting_speaker_mapping = None
+        meeting_ephemeral_ctx = None
+        seen_tx_packs: set[str] = set()
         if session_id.startswith("meeting_"):
             meeting_id = session_id[len("meeting_"):]
-            meeting_speaker_mapping = _build_speaker_mapping(meeting_id)
+            meeting_ephemeral_ctx = _build_meeting_ephemeral_context(meeting_id)
         total_tool_calls = 0
         agentic_search_calls = 0  # search_knowledge_base only
 
@@ -469,7 +446,7 @@ class ChatboxAgent:
                 session_id, user_message, extra_messages=extra_messages,
                 collections=collections,
                 system_prompt=_sys_prompt, catalog_text=_cat_text,
-                pre_message_context=meeting_speaker_mapping,
+                pre_message_context=meeting_ephemeral_ctx,
             )
 
             # CHECKPOINT: log multimodal messages
@@ -520,6 +497,22 @@ class ChatboxAgent:
                                 "Web search requires the streaming Chat UI for user "
                                 f"confirmation (query was: {wq!r}). No internet search was run."
                             )
+                        total_tool_calls += 1
+                    elif tool_name == "lookup_meeting_transcript":
+                        from src.meeting.transcript_index import lookup_json_and_keys
+                        mid = (
+                            session_id[len("meeting_"):]
+                            if session_id.startswith("meeting_")
+                            else ""
+                        )
+                        tool_content, found_keys = lookup_json_and_keys(
+                            mid,
+                            str(args.get("query") or user_message),
+                            speaker_scope=str(args.get("speaker_scope") or "auto"),
+                            user_question=user_message,
+                            seen_pack_keys=seen_tx_packs,
+                        )
+                        seen_tx_packs |= found_keys
                         total_tool_calls += 1
                     elif tool_name in STRUCTURE_TOOL_NAMES:
                         tool_content = execute_structure_tool(
@@ -664,7 +657,7 @@ class ChatboxAgent:
                 session_id, user_message, extra_messages=extra_messages,
                 collections=collections,
                 system_prompt=_sys_prompt, catalog_text=_cat_text,
-                pre_message_context=meeting_speaker_mapping,
+                pre_message_context=meeting_ephemeral_ctx,
             )
             final_answer = _force_generate_answer(self._llm, messages)
 
@@ -774,11 +767,11 @@ class ChatboxAgent:
         # Quick-chat truncation check
         msg_count = self._check_session_truncation(session_id)
 
-        # Speaker mapping for meeting sessions (ephemeral, per-message)
-        meeting_speaker_mapping = None
+        meeting_ephemeral_ctx = None
+        seen_tx_packs: set[str] = set()
         if session_id.startswith("meeting_"):
             meeting_id = session_id[len("meeting_"):]
-            meeting_speaker_mapping = _build_speaker_mapping(meeting_id)
+            meeting_ephemeral_ctx = _build_meeting_ephemeral_context(meeting_id)
 
         _quick_warn = (
             msg_count is not None
@@ -840,7 +833,7 @@ class ChatboxAgent:
                 session_id, user_message, extra_messages=extra_messages,
                 collections=collections,
                 system_prompt=_sys_prompt, catalog_text=_cat_text,
-                pre_message_context=meeting_speaker_mapping,
+                pre_message_context=meeting_ephemeral_ctx,
             )
             tools_round = _tools_this_round()
 
@@ -1289,6 +1282,30 @@ class ChatboxAgent:
                                     _web_n += 1
                                 _sources_this_call = _web_n
                                 _ui_source_type = "web"
+                        total_tool_calls += 1
+
+                    elif not _skip_exec and tool_name == "lookup_meeting_transcript":
+                        from src.meeting.transcript_index import (
+                            hit_count_from_lookup_json,
+                            lookup_json_and_keys,
+                        )
+                        mid = (
+                            session_id[len("meeting_"):]
+                            if session_id.startswith("meeting_")
+                            else ""
+                        )
+                        tool_content, found_keys = lookup_json_and_keys(
+                            mid,
+                            str(args.get("query") or user_message),
+                            speaker_scope=str(args.get("speaker_scope") or "auto"),
+                            user_question=user_message,
+                            seen_pack_keys=seen_tx_packs,
+                        )
+                        seen_tx_packs |= found_keys
+                        _sources_this_call = hit_count_from_lookup_json(
+                            tool_content if isinstance(tool_content, str) else ""
+                        )
+                        _ui_source_type = "meeting"
                         total_tool_calls += 1
 
                     # ── Structure / summary / full-text ──

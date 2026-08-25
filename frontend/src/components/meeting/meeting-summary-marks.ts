@@ -272,6 +272,11 @@ export function prepareMeetingSummaryForTiptapView(
   s = trimEmphasisInteriorSpaces(s)
 
   const names = speakerNames || {}
+  // Drop LLM-guessed names glued to tags: [spk:0] (Alex) / [spk:0]（Alex）
+  s = s.replace(
+    /\[spk:([^\]]+)\]\s*[（(][^）)\n]{1,80}[）)]/g,
+    "[spk:$1]",
+  )
   s = s.replace(/\[spk:(\d+)\]/g, (_, id: string) => names[id] ?? `Speaker ${id}`)
   for (const [id, name] of Object.entries(names)) {
     if (!name) continue

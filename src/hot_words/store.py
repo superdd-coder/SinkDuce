@@ -206,7 +206,17 @@ def collect_meeting_hot_words(meeting) -> list[dict]:
 
 
 def hot_words_prompt_text(meeting) -> str:
-    words = collect_meeting_hot_words(meeting)
+    """Domain terms for summary LLM prompts.
+
+    Meeting People names stay in ASR (``collect_meeting_hot_words``) but are
+    excluded here so the summarizer cannot treat the roster as attendance.
+    """
+    ids = [
+        lid
+        for lid in meeting_library_ids(meeting)
+        if not is_system_library(lid)
+    ]
+    words = collect_hot_words(ids)
     if not words:
         return "(None)"
     return ", ".join(w["text"] for w in words)

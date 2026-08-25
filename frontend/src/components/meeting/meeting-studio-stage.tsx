@@ -516,6 +516,7 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                         <MeetingQuickChat
                           meetingId={meeting.id}
                           meetingTitle={meeting.title ?? ""}
+                          indexStatus={meeting.transcript_index_status}
                           open
                           onOpen={() => {
                             if (!sideRailOpen) setSideRailOpenWithMotion(true)

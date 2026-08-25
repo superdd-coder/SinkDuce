@@ -175,6 +175,12 @@ def prepare_meeting_summary_for_note(
 
     # Artifacts like \Speaker 4\
     md = _re.sub(r"\\+[Ss]peaker\s+(\d+)\\*", r"Speaker \1", md)
+    md = _re.sub(
+        r"(\[spk:[^\]]+\])\s*[（(][^）)\n]{1,80}[）)]",
+        r"\1",
+        md,
+        flags=_re.IGNORECASE,
+    )
 
     names = speaker_names or {}
     if resolve_speakers:

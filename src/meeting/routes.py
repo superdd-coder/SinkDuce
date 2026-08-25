@@ -870,6 +870,30 @@ async def generate_summary(meeting_id: str):
     return _serialize_meeting(updated)
 
 
+@router.post("/meetings/{meeting_id}/transcript-index")
+async def start_transcript_index(meeting_id: str):
+    """Build or rebuild the verbatim transcript vector index."""
+    meeting = store.get_meeting(meeting_id)
+    if not meeting:
+        raise HTTPException(404, "Meeting not found")
+    if (meeting.transcript_index_status or "") == "building":
+        return _serialize_meeting(meeting)
+    sentences = store.get_sentences(meeting_id)
+    transcript = store.get_transcript(meeting_id)
+    if not sentences and not transcript:
+        raise HTTPException(400, "No transcript available")
+    store.update_meeting(meeting_id, transcript_index_status="building", transcript_index_error="")
+    task_manager.create_task(
+        filename=f"tx-index:{meeting_id}",
+        task_type="meeting_transcript_index",
+        meeting_id=meeting_id,
+    )
+    updated = store.get_meeting(meeting_id)
+    if not updated:
+        raise HTTPException(404, "Meeting not found")
+    return _serialize_meeting(updated)
+
+
 def _sse_event(event: str, data: object) -> str:
     """Format a dict as an SSE event string."""
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"

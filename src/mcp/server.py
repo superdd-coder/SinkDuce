@@ -29,7 +29,7 @@ Summaries (4):
 Notes (6):
     list_notes, get_note, create_note, update_note, delete_note, trigger_propagation
 
-Meetings (9):
+Meetings (10):
     list_meetings, get_meeting, get_section, get_meeting_transcript,
     create_meeting, update_meeting, delete_meeting,
     start_meeting_summary, upload_meeting_audio_from_staging
@@ -38,7 +38,7 @@ Hot Words (5):
     list_hot_words_libraries, get_hot_words_library, create_hot_words_library,
     update_hot_words_library, delete_hot_words_library
 
-Total: 5 + 6 + 13 + 3 + 5 + 4 + 6 + 9 + 5 = 56 tools.
+Total: 5 + 6 + 13 + 3 + 5 + 4 + 6 + 10 + 5 = 57 tools.
 
 Architecture
 ------------
@@ -220,8 +220,9 @@ from src.mcp.tools.meetings import (
     delete_meeting,
     start_meeting_summary,
     upload_meeting_audio_from_staging,
+    lookup_meeting_transcript,
 )
-for _t in (list_meetings, get_meeting, get_section, get_meeting_transcript, create_meeting, update_meeting, delete_meeting, start_meeting_summary, upload_meeting_audio_from_staging):
+for _t in (list_meetings, get_meeting, get_section, get_meeting_transcript, create_meeting, update_meeting, delete_meeting, start_meeting_summary, upload_meeting_audio_from_staging, lookup_meeting_transcript):
     desc = _t.__doc__
     if desc and "{base_url}" in desc:
         desc = desc.replace("{base_url}", _base_url)

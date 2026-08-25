@@ -73,7 +73,7 @@ class TestToolRegistration:
         "update_note",
         "delete_note",
         "trigger_propagation",
-        # Meetings (9)
+        # Meetings (10)
         "list_meetings",
         "get_meeting",
         "get_section",
@@ -83,6 +83,7 @@ class TestToolRegistration:
         "delete_meeting",
         "start_meeting_summary",
         "upload_meeting_audio_from_staging",
+        "lookup_meeting_transcript",
         # Hot Words (5)
         "list_hot_words_libraries",
         "get_hot_words_library",
@@ -94,8 +95,8 @@ class TestToolRegistration:
     def test_all_56_tools_registered(self):
         from src.mcp.server import mcp
         tools = mcp._tool_manager._tools
-        assert len(tools) == 56, (
-            f"Expected 56 tools, got {len(tools)}: {sorted(tools.keys())}"
+        assert len(tools) == 57, (
+            f"Expected 57 tools, got {len(tools)}: {sorted(tools.keys())}"
         )
 
     def test_tool_set_matches_expected(self):
@@ -220,10 +221,12 @@ class TestModuleImports:
             list_meetings, get_meeting, get_section, get_meeting_transcript,
             create_meeting, update_meeting, delete_meeting,
             start_meeting_summary, upload_meeting_audio_from_staging,
+            lookup_meeting_transcript,
         )
         for fn in (list_meetings, get_meeting, get_section, get_meeting_transcript,
                    create_meeting, update_meeting, delete_meeting,
-                   start_meeting_summary, upload_meeting_audio_from_staging):
+                   start_meeting_summary, upload_meeting_audio_from_staging,
+                   lookup_meeting_transcript):
             assert asyncio.iscoroutinefunction(fn)
 
     def test_hot_words_imports(self):

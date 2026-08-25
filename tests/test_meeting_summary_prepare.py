@@ -8,6 +8,21 @@ from src.notes.service import (
 )
 
 
+def test_distill_strips_spk_name_glosses():
+    raw = (
+        "- [spk:3] (Ray) explained feed pressure [stt_0050]\n"
+        "- [spk:4]（Herman）confirmed 1.2 kWh [priority: high]\n"
+    )
+    out = prepare_meeting_summary_for_note(
+        raw, {"3": "Xu Ye", "4": "Ray"}, resolve_speakers=False
+    )
+    assert "[spk:3]" in out
+    assert "[spk:4]" in out
+    assert "(Ray)" not in out
+    assert "（Herman）" not in out
+    assert "Xu Ye" not in out
+
+
 def test_distill_keeps_spk_strips_refs_and_priority():
     """Distill path: keep [spk:ID], strip stt refs + priority."""
     raw = (

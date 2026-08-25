@@ -460,7 +460,9 @@ Two distinct cases:
 
 HARD RULES:
 - NEVER combine both forms for the same person in one clause
-  (illegal: "[spk:0] Alex …", "Alex [spk:0] …", "[spk:0] Alex to …").
+  (illegal: "[spk:0] Alex …", "Alex [spk:0] …", "[spk:0] Alex to …",
+  "[spk:0] (Alex)").
+- NEVER write a guessed name in parentheses after [spk:ID].
 - NEVER write a speaker's name in place of [spk:ID] for attribution.
 - Prefer [spk:ID] over a bare name whenever either would work.
 - Bare names are only for people clearly named in dialogue who are
@@ -475,6 +477,7 @@ GOOD:
 BAD (double labeling — forbidden):
 - [spk:0] Alex to prepare the Q3 budget report
 - Alex [spk:0] to prepare the Q3 budget report
+- [spk:0] (Alex) to prepare the Q3 budget report
 - [spk:1] Jordan recommended Option B
 
 BAD (used bare name when a speaker ID applies):
@@ -610,6 +613,38 @@ SENTENCE REFERENCES:
 Output the Markdown document directly — no JSON wrapper, no markdown
 fences, no preamble.  Start immediately with ``## Summary``.
 </task>"""
+
+
+# MEETING_TRANSCRIPT_LOCATOR_PROMPT
+#   Purpose: Retrieval locators for meeting transcript packs. Shares
+#            system prompt + <transcript> prefix with General Summary
+#            for provider prefix-cache hits. No hot-words / notes.
+#   Role: user
+#   Called by: src.meeting.transcript_index.locate_packs
+#   Template vars: {transcript} — same [N] [spk:ID] body as Summary
+#                  {packs} — numbered pack bodies [id] ...
+MEETING_TRANSCRIPT_LOCATOR_PROMPT = """\
+<transcript>
+{transcript}
+</transcript>
+
+<task>
+Write a retrieval locator for each numbered pack below. A locator is a short topic phrase, not a summary and not a quote.
+
+Each pack starts with [N]. In the JSON, "id" must be that same N.
+
+Rules:
+- One entry per [N]
+- One short phrase (about 8-15 words)
+- Name only what this slice is about
+- Do NOT mention speakers, display names, [spk:ID], or [ref:N]
+- Do NOT quote the spoken lines
+- Output ONLY JSON (no markdown fences): {{"contexts": [{{"id": 0, "context": "..."}}, {{"id": 1, "context": "..."}}]}}
+
+Packs:
+{packs}
+</task>
+"""
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -837,7 +872,8 @@ _MEETING_V3_SHARED_SYSTEM = (
     "- Person named in dialogue who is NOT that speaker slot → plain "
     "name as spoken, only when you cannot map them to a [spk:ID].\n"
     "- NEVER combine both for the same person in one clause "
-    "(illegal: \"[spk:0] Alex …\", \"Alex [spk:0] …\").\n"
+    "(illegal: \"[spk:0] Alex …\", \"Alex [spk:0] …\", \"[spk:0] (Alex)\").\n"
+    "- NEVER write a guessed name in parentheses after [spk:ID].\n"
     "- Prefer [spk:ID] over a bare name whenever either would work.\n"
     "- Use [spk:ID] only when attributing a claim, decision, or action "
     "to a person.  Do NOT prefix every sentence with the speaker tag."
@@ -1242,7 +1278,9 @@ Two distinct cases:
 
 HARD RULES:
 - NEVER combine both forms for the same person in one clause
-  (illegal: "[spk:0] Alex …", "Alex [spk:0] …", "[spk:0] Alex to …").
+  (illegal: "[spk:0] Alex …", "Alex [spk:0] …", "[spk:0] Alex to …",
+  "[spk:0] (Alex)").
+- NEVER write a guessed name in parentheses after [spk:ID].
 - NEVER write a speaker's name in place of [spk:ID] for attribution.
 - Prefer [spk:ID] over a bare name whenever either would work.
 - Bare names are only for people clearly named in dialogue who are
@@ -1257,6 +1295,7 @@ GOOD:
 BAD (double labeling — forbidden):
 - [spk:0] Alex to prepare the Q3 budget report
 - Alex [spk:0] to prepare the Q3 budget report
+- [spk:0] (Alex) to prepare the Q3 budget report
 - [spk:1] Jordan recommended Option B
 
 BAD (used bare name when a speaker ID applies):
@@ -1546,83 +1585,62 @@ Output: {{"found":true,"description":"..."}}
 # ═══════════════════════════════════════════════════════════════════════
 
 # MEETING_CHAT_SYSTEM_PROMPT
-#   Purpose: System prompt for the Meeting sidebar chat.  The LLM answers
-#            questions about a specific meeting's transcript, which is
-#            injected ephemerally on every turn (after this prompt, before
-#            dialogue history) by ChatboxAgent._build_messages — not stored
-#            in the session.  A separate ephemeral speaker mapping (via
-#            pre_message_context) resolves speaker IDs to display names.
+#   Purpose: System prompt for Meeting Quick Chat. General summary is
+#            injected ephemerally as an outline; spoken lines are searched
+#            via lookup_meeting_transcript (locked to this meeting).
 #   Role: system
 #   Called by: src/chatbox/agent.py → ChatboxAgent._resolve_tools_and_prompt
-#              (when session_id starts with "meeting_")
-#   Template vars: none (transcript and mapping are injected elsewhere)
+#   Template vars: none
 MEETING_CHAT_SYSTEM_PROMPT = """\
-You are a meeting transcript Q&A assistant. Immediately after this prompt, \
-a second system message provides either (a) the full meeting transcript, \
-or (b) an explicit "MEETING TRANSCRIPT STATUS: unavailable" notice. \
-A separate speaker mapping (injected as context before each user message) \
-resolves speaker IDs to display names.
+You are a meeting transcript Q&A assistant for the CURRENT meeting only.
+
+You do not receive the full transcript. A Meeting outline (General summary) \
+is injected each turn — use it to see what was discussed and to form search \
+queries. Search spoken lines with lookup_meeting_transcript. The server \
+locks the search to this meeting. A speaker mapping (injected each turn) \
+lists display names for speaker IDs.
 
 YOUR ROLE:
-- Answer only from the provided transcript message. Prefer paraphrasing \
-and synthesis over verbatim quoting.
-- If the transcript status is unavailable (or the transcript body is empty), \
-tell the user clearly that you do not have the meeting record yet. Suggest \
-waiting until transcription finishes or re-opening the meeting after it is ready.
+- Overview and what comes next: the outline may be enough.
+- Wording, numbers, who said what: search. Use names and topics from the \
+outline as the information need.
+- Cite [ref:N] only from search tool results. Outline citations are hints \
+for search, not substitutes.
+- Each search call is complete. If excerpts miss a fact, search for that \
+fact with a more specific need.
+- speaker_scope=all only after the user agrees (empty named-speaker hits \
++ preview).
+- Prefer paraphrasing over verbatim quoting.
+- In your reply, write display names from the mapping. Do not leave \
+[spk:ID] in the user-facing answer. If a slot has no mapped name, \
+write Speaker N — do not invent a personal name.
 - NEVER invent meeting content: no fabricated topics, decisions, action \
-items, speaker quotes, template placeholders (e.g. [project name], \
-[具体成果]), or fake structure filled with brackets.
+items, speaker quotes, or unmapped personal names.
 
-NAME RESOLUTION (only when a real transcript is present):
-1. When the user references a person by name (e.g. "What did John say?"), \
-look up the speaker mapping to find the corresponding speaker ID, then \
-locate that speaker's lines in the transcript and summarize them in your \
-own words.
-2. If no mapping entry matches the name, search the transcript directly \
-for the name.  If still not found, inform the user: "No speaker named \
-'{name}' found in this transcript.  Available speakers: {list}."
-3. If the speaker mapping says "(unnamed)", tell the user that speaker \
-has not been named yet.
+SPEAKER FILTER:
+- If the user names a person in the mapping, the server filters to packs \
+that CONTAIN that speaker. You do not need to pass speaker IDs.
+- If hits are empty but preview_unfiltered is present, tell the user the \
+named speaker was not found and who appears in the preview. Ask whether \
+to search the whole meeting. Only then call again with speaker_scope=all.
+- Do not treat preview_unfiltered as words spoken by the named person.
 
-CITATION FORMAT (only when a real transcript is present):
-- Cite sentences as [ref:N] (prefix ref: plus the integer from the \
-transcript line header). Place [ref:N] after the relevant sentence \
-or paragraph — right after the cited fact or claim.
-- Combine IDs: [ref:67,70] or ranges [ref:67-70] for closely related references.
-- NEVER invent sentence numbers — only cite numbers that actually appear \
-in the transcript.
-- NEVER cite with a bare [67] — that is ordinary text, not a citation.
-- ONLY use [ref:N] citations. Do NOT embed quoted transcript text in your \
-answer — the user can follow the [ref:N] link to hear the original audio.
-- When multiple speakers discuss the same topic, attribute each point to \
-the correct speaker.
-- When the transcript is unavailable, do not use [ref:N] citations at all.
+CITATION FORMAT:
+- Cite sentences as [ref:N] using ONLY ids that appear in the tool result.
+- Combine IDs: [ref:67,70] or ranges [ref:67-70].
+- NEVER invent sentence numbers. NEVER cite with a bare [67].
+- Do NOT paste long transcript quotes; the user can open [ref:N] to hear audio.
+- When the user asks for exact wording, quote briefly with [ref:N].
 
 WRITING STYLE:
-- Write in natural, fluent prose. You are having a conversation, not \
-presenting evidence excerpts.
-- When the user asks about a topic and a real transcript is present, \
-synthesize the relevant points into a coherent answer. Do NOT read off a \
-list of verbatim quotes with citations.
-- A good answer distills the discussion: "John proposed launching in Q3 \
-and cited budget approval as the key dependency [ref:45-48]" is better than \
-"John said: 'We should launch in Q3 because...' [ref:45] He also said: 'The \
-budget...' [ref:46]"
-- Reserve direct quotation ONLY when the exact wording matters (e.g., a \
-specific decision, name, or number that must be precise).
-- When the user specifically asks for the exact wording or a direct quote, provide the
-original transcript text with a [ref:N] citation.
+- Natural prose, not a list of quotes.
+- Distill: "John proposed launching in Q3 [ref:45-48]" is better than \
+stacked verbatim lines.
+- Markdown for readability. Keep answers focused.
 
 WHEN INFORMATION IS MISSING:
-- If the transcript is unavailable, say so and stop — do not fill gaps \
-with guesses or placeholders.
-- If a real transcript is present but does not contain information relevant \
-to the question, say so clearly and suggest related topics that ARE in the \
-transcript.
-
-FORMATTING:
-- Use Markdown for readability (headers, lists, bold/italic).
-- Keep answers focused — this is a quick Q&A, not a research report.
+- If neither the outline nor search covers the question, say so clearly.
+- Do not fill gaps with guesses.
 """
 
 

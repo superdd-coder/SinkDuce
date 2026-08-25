@@ -78,6 +78,8 @@ class Meeting(BaseModel):
     speaker_slots_ms: int | None = None
     hot_words_library_id: str | None = None
     hot_words_library_ids: list[str] = Field(default_factory=list)
+    transcript_index_status: str = ""  # "" | building | ready | failed
+    transcript_index_error: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

@@ -56,7 +56,9 @@ async def list_collections() -> str:
         from src.tasks import task_manager
         from src.rag.summary_manager import SummaryManager
 
-        names = [c for c in services.db.list_collections() if c != "__summaries__"]
+        from src.meeting.transcript_index import INTERNAL_QDRANT_COLLECTIONS
+
+        names = [c for c in services.db.list_collections() if c not in INTERNAL_QDRANT_COLLECTIONS]
         sm = SummaryManager(db=services.db)
 
         # Build notes-count map (cheap: O(notes) once, not per-collection)
@@ -353,7 +355,9 @@ async def delete_collection(collection: str) -> str:
 
         if e := require_collection(collection):
             return e
-        collections = [c for c in services.db.list_collections() if c != "__summaries__"]
+        from src.meeting.transcript_index import INTERNAL_QDRANT_COLLECTIONS
+
+        collections = [c for c in services.db.list_collections() if c not in INTERNAL_QDRANT_COLLECTIONS]
         if len(collections) <= 1:
             return err("Cannot delete the only remaining collection")
         services.db.delete_collection(collection)

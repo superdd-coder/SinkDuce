@@ -84,6 +84,8 @@ export interface Meeting {
   hot_words_library_ids?: string[]
   created_at: string
   updated_at: string
+  transcript_index_status?: "" | "building" | "ready" | "failed"
+  transcript_index_error?: string
 }
 
 export const getMeetings = () =>
@@ -91,6 +93,9 @@ export const getMeetings = () =>
 
 export const getMeeting = (id: string) =>
   request<Meeting>(`/meetings/${id}`)
+
+export const startTranscriptIndex = (id: string) =>
+  request<Meeting>(`/meetings/${id}/transcript-index`, { method: "POST" })
 
 export const createMeeting = (title?: string) =>
   request<Meeting>("/meetings", {

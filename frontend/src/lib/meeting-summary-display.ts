@@ -24,6 +24,10 @@ export function prepareMeetingSummaryForNote(
     .replace(/］/g, "]")
 
   // 2. Speakers
+  md = md.replace(
+    /\[spk:([^\]]+)\]\s*[（(][^）)\n]{1,80}[）)]/g,
+    "[spk:$1]",
+  )
   const names = speakerNames || {}
   for (const [spkId, name] of Object.entries(names)) {
     if (!name) continue

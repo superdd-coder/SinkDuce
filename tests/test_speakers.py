@@ -444,6 +444,26 @@ class TestAttachAfterTranscription:
         assert fetched.speaker_slots["spk0"].embedding
         assert fetched.speaker_slots["spk0"].speech_sec == pytest.approx(8.0)
 
+    def test_auto_match_name_excludes_disambiguator(self, meeting_and_speakers):
+        from src.meeting.models import TranscriptSegment
+        from src.meeting.store import create_meeting, get_meeting
+        from src.speakers.service import attach_after_transcription, enroll
+        from src.speakers.store import create_person
+
+        person = create_person("Ray", disambiguator="GreenTech Technical Team")
+        enroll(person.id, "prior", "spk0", _unit([1.0, 0.0, 0.0]).tolist(), 20.0)
+        meeting = create_meeting("New")
+        _seed_transcript(
+            meeting,
+            [TranscriptSegment(start=0.0, end=8.0, text="hello", speaker_id="spk0")],
+        )
+        attach_after_transcription(
+            meeting.id, segment_embeddings=[_unit([1.0, 0.0, 0.0])]
+        )
+        fetched = get_meeting(meeting.id)
+        assert fetched.speaker_people["spk0"] == person.id
+        assert fetched.speaker_names["spk0"] == "Ray"
+
     def test_assign_uses_saved_slot_without_cam(self, meeting_and_speakers):
         from src.meeting.models import TranscriptSegment
         from src.meeting.store import create_meeting, get_meeting
@@ -672,6 +692,34 @@ class TestAssignAndCommit:
         assert {p.id for p in list_people()} == before
         assert fetched.speaker_matches["spk0"].cleared is True
         assert fetched.speaker_matches["spk0"].enrolled is False
+
+    def test_rebuild_speaker_names_uses_display_name_not_note(self, meeting_and_speakers):
+        from src.speakers.service import rebuild_speaker_names
+        from src.speakers.store import create_person, person_label, person_public_dict
+
+        person = create_person("Ray", disambiguator="GreenTech Technical Team")
+        names = rebuild_speaker_names({"4": person.id})
+        assert names["4"] == "Ray"
+        assert "GreenTech" not in names["4"]
+        assert " · " not in names["4"]
+        assert person_label(person) == "Ray · GreenTech Technical Team"
+        assert person_public_dict(person)["label"] == "Ray · GreenTech Technical Team"
+
+    def test_assign_speaker_name_excludes_disambiguator(self, meeting_and_speakers):
+        from src.meeting.models import TranscriptSegment
+        from src.meeting.store import create_meeting, get_meeting
+        from src.speakers.service import assign_speaker
+        from src.speakers.store import create_person
+
+        person = create_person("Ray", disambiguator="GreenTech Technical Team")
+        meeting = create_meeting("Names")
+        _seed_transcript(
+            meeting,
+            [TranscriptSegment(start=0.0, end=4.0, text="hi", speaker_id="spk0")],
+        )
+        assign_speaker(meeting.id, "spk0", person.id)
+        fetched = get_meeting(meeting.id)
+        assert fetched.speaker_names["spk0"] == "Ray"
 
     def test_assign_display_name_survives_name_rebuild(self, meeting_and_speakers):
         from src.meeting.models import TranscriptSegment

@@ -7,6 +7,7 @@ import { humanSourceLabel } from "@/lib/source-display"
 import { parseMeetingRefGroups, MEETING_CITE_RE_SOURCE } from "@/lib/meeting-ref-chips"
 import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
 import { createSession, getSession, deleteSession, iterateSessionSse, postSessionMessage } from "@/api/client"
+import { getMeeting, startTranscriptIndex, type Meeting } from "@/api/meeting"
 import { useT } from "@/i18n/use-t"
 import { tr } from "@/i18n/tr"
 
@@ -429,6 +430,7 @@ interface MeetingQuickChatProps {
    * rail — legacy flex-sibling that expands width when open (default).
    */
   layout?: "dock" | "rail"
+  indexStatus?: Meeting["transcript_index_status"]
 }
 
 export function MeetingQuickChat({
@@ -440,8 +442,12 @@ export function MeetingQuickChat({
   onRefClick,
   className,
   layout = "rail",
+  indexStatus: indexStatusProp,
 }: MeetingQuickChatProps) {
   const t = useT()
+  const [indexStatus, setIndexStatus] = useState(indexStatusProp || "")
+  const [indexError, setIndexError] = useState("")
+  const [indexStarting, setIndexStarting] = useState(false)
   const [messages, setMessages] = useState<QAMessage[]>([])
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState(false)
@@ -460,6 +466,39 @@ export function MeetingQuickChat({
   const [hintExiting, setHintExiting] = useState(false)
   const [hintMessage, setHintMessage] = useState(() => t(HINT_KEYS[0]))
   const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    setIndexStatus(indexStatusProp || "")
+  }, [indexStatusProp])
+
+  useEffect(() => {
+    if (!open || indexStatus !== "building") return
+    let stop = false
+    const tick = async () => {
+      try {
+        const m = await getMeeting(meetingId)
+        if (stop) return
+        setIndexStatus(m.transcript_index_status || "")
+        setIndexError(m.transcript_index_error || "")
+      } catch { /* ignore */ }
+    }
+    const id = setInterval(tick, 2000)
+    void tick()
+    return () => { stop = true; clearInterval(id) }
+  }, [open, indexStatus, meetingId])
+
+  const buildIndex = async () => {
+    setIndexStarting(true)
+    try {
+      const m = await startTranscriptIndex(meetingId)
+      setIndexStatus(m.transcript_index_status || "building")
+      setIndexError(m.transcript_index_error || "")
+    } catch (e) {
+      setIndexError(e instanceof Error ? e.message : "failed")
+    } finally {
+      setIndexStarting(false)
+    }
+  }
 
   // ── Init session ──
 
@@ -613,7 +652,7 @@ export function MeetingQuickChat({
 
   const send = useCallback(async () => {
     const text = input.trim()
-    if (!text || streaming || !sessionId) return
+    if (!text || streaming || !sessionId || indexStatus !== "ready") return
 
     setInput("")
     if (textareaRef.current) {
@@ -678,7 +717,7 @@ export function MeetingQuickChat({
       setStreaming(false)
       abortRef.current = null
     }
-  }, [input, streaming, sessionId, meetingId, pinToBottom])
+  }, [input, streaming, sessionId, meetingId, pinToBottom, indexStatus])
 
   const handleSSEEvent = (
     assistantId: string, type: string,
@@ -694,16 +733,27 @@ export function MeetingQuickChat({
           m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + `\n🔍 Searching: ${data.query || ""}...` } : m
         ));
         break
-      case "tool_call_start":
+      case "tool_call_start": {
+        const tool = String(data.tool || "tool")
+        const q = data.raw_query || data.query
+        const line = q
+          ? `\n📡 ${tool}: ${String(q).slice(0, 120)}`
+          : `\n📡 ${tool}`
         setMessages((prev) => prev.map((m) =>
-          m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + `\n📡 Calling ${data.tool || "tool"}...` } : m
+          m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + line } : m
         ));
         break
-      case "tool_result":
+      }
+      case "tool_result": {
+        const n = data.sources_count
+        const line = typeof n === "number"
+          ? `\n✅ ${tr("meeting.txLookupHits", { n })}`
+          : `\n✅ ${t("common.done")}`
         setMessages((prev) => prev.map((m) =>
-          m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + `\n✅ Found ${data.sources_count || 0} sources` } : m
+          m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + line } : m
         ));
         break
+      }
       case "done":
         console.log("[QuickChat] DONE event received — sources:", data.sources, "type:", typeof data.sources, "isArray:", Array.isArray(data.sources))
         if (data.sources) {
@@ -764,7 +814,7 @@ export function MeetingQuickChat({
   const panelContent = (
     <div
       className={cn(
-        "pm-qc-panel",
+        "pm-qc-panel relative",
         layout === "dock" && "pm-meeting-qc-dock-inner",
       )}
       style={layout === "rail" ? { width: SIDEBAR_W } : undefined}
@@ -834,6 +884,32 @@ export function MeetingQuickChat({
         </div>
       </header>
 
+      {indexStatus !== "ready" ? (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+          {indexStatus === "building" ? (
+            <>
+              <Loader2 className="size-5 animate-spin text-[var(--pm-green)]" />
+              <p className="text-sm text-muted-foreground">{t("meeting.txIndexBuilding")}</p>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-muted-foreground">{t("meeting.txIndexNeedBuild")}</p>
+              {indexStatus === "failed" && (
+                <p className="text-xs text-destructive">{indexError || t("meeting.txIndexFailed")}</p>
+              )}
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void buildIndex()}
+                disabled={indexStarting}
+              >
+                {indexStarting ? t("meeting.txIndexBuilding") : t("meeting.txIndexBuild")}
+              </Button>
+            </>
+          )}
+        </div>
+      ) : (
+      <>
       <div className="pm-panel-scroll-shell pm-qc-thread-shell">
       <div
         ref={messagesScrollRef}
@@ -1027,6 +1103,8 @@ export function MeetingQuickChat({
           />
         </div>
       </div>
+      </>
+      )}
     </div>
   )
 

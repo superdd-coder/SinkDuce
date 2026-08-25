@@ -43,9 +43,31 @@ class TestAllowlists:
         assert "search_knowledge_base" not in names
         assert "list_notes" not in names
 
-    def test_meeting_has_no_tools(self):
-        assert tools_for_mode("direct", is_meeting=True) == []
-        assert allowed_tool_names("direct", is_meeting=True) == frozenset()
+    def test_meeting_has_transcript_lookup_only(self):
+        names = {t["function"]["name"] for t in tools_for_mode("direct", is_meeting=True)}
+        assert names == {"lookup_meeting_transcript"}
+        assert allowed_tool_names("direct", is_meeting=True) == frozenset(
+            {"lookup_meeting_transcript"}
+        )
+
+    def test_meeting_lookup_tool_is_a_search_not_a_reader(self):
+        from src.chatbox.query_tools import LOOKUP_MEETING_TRANSCRIPT_TOOL
+        from src.prompts import MEETING_CHAT_SYSTEM_PROMPT
+
+        fn = LOOKUP_MEETING_TRANSCRIPT_TOOL["function"]
+        desc = fn["description"].lower()
+        query_desc = fn["parameters"]["properties"]["query"]["description"].lower()
+        assert "search" in desc
+        assert "independent" in desc or "each call" in desc
+        assert "later parts" not in desc
+        assert "next page" not in desc
+        assert "information need" in query_desc or "what information" in query_desc
+        prompt = MEETING_CHAT_SYSTEM_PROMPT.lower()
+        assert "full transcript" in prompt or "entire transcript" in prompt
+        assert "outline" in prompt or "general summary" in prompt
+        assert "display name" in prompt
+        assert "later parts" not in prompt
+        assert "next page" not in prompt
 
     def test_quick_structure_subset(self):
         assert "list_collections" not in QUICK_STRUCTURE_NAMES
@@ -393,7 +415,7 @@ class TestChatboxStructureTools:
             assert mock_exec.call_args[1]["forced_collection"] == "col_mine"
             assert mock_exec.call_args[1]["mode"] == "direct"
 
-    def test_meeting_mode_no_tools(self, store):
+    def test_meeting_mode_transcript_lookup_tool(self, store):
         from src.chatbox.agent import ChatboxAgent
 
         llm = MagicMock()
@@ -403,10 +425,9 @@ class TestChatboxStructureTools:
             content="meeting answer"
         )
         agent = ChatboxAgent(store, llm, MagicMock())
-        # Session id pattern used for meeting chats
         s = store.create_session(title="m", session_id="meeting_m1")
         agent.chat(s.id, "summary?", mode="direct")
         kwargs = llm._client.chat.completions.create.call_args[1]
-        # tools may be empty list or absent depending on API; empty is required
         tools = kwargs.get("tools") or []
-        assert tools == []
+        names = {t["function"]["name"] for t in tools}
+        assert names == {"lookup_meeting_transcript"}
