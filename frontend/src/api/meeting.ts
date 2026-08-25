@@ -97,6 +97,49 @@ export const getMeeting = (id: string) =>
 export const startTranscriptIndex = (id: string) =>
   request<Meeting>(`/meetings/${id}/transcript-index`, { method: "POST" })
 
+export interface MeetingGroupMember {
+  meeting_id: string
+  n: number
+}
+
+export interface MeetingGroup {
+  id: string
+  title: string
+  members: MeetingGroupMember[]
+  created_at: string
+  updated_at: string
+  last_chat_at: string
+}
+
+export const listMeetingGroups = () =>
+  request<MeetingGroup[]>("/meeting-groups")
+
+export const getMeetingGroup = (id: string) =>
+  request<MeetingGroup>(`/meeting-groups/${id}`)
+
+export const createMeetingGroup = (meetingId: string, title?: string) =>
+  request<MeetingGroup>("/meeting-groups", {
+    method: "POST",
+    body: JSON.stringify({ meeting_id: meetingId, title: title || "" }),
+  })
+
+export const addMeetingGroupMember = (groupId: string, meetingId: string) =>
+  request<MeetingGroup>(`/meeting-groups/${groupId}/members`, {
+    method: "POST",
+    body: JSON.stringify({ meeting_id: meetingId }),
+  })
+
+export const removeMeetingGroupMember = (groupId: string, meetingId: string) =>
+  request<MeetingGroup>(`/meeting-groups/${groupId}/members/${meetingId}`, {
+    method: "DELETE",
+  })
+
+export const deleteMeetingGroup = (groupId: string) =>
+  request<{ message?: string }>(`/meeting-groups/${groupId}`, { method: "DELETE" })
+
+export const listGroupsForMeeting = (meetingId: string) =>
+  request<MeetingGroup[]>(`/meetings/${meetingId}/groups`)
+
 export const createMeeting = (title?: string) =>
   request<Meeting>("/meetings", {
     method: "POST",

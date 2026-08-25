@@ -51,6 +51,20 @@ class TranscriptionResult(BaseModel):
     language: str | None = None
 
 
+class MeetingGroupMember(BaseModel):
+    meeting_id: str
+    n: int
+
+
+class MeetingGroup(BaseModel):
+    id: str = ""
+    title: str = ""
+    members: list[MeetingGroupMember] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_chat_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class Meeting(BaseModel):
     id: str = ""
     title: str = ""

@@ -24,6 +24,12 @@ import {
   type SectionRailModel,
 } from "./meeting-tabs"
 import { MeetingList } from "./meeting-list"
+import { MeetingGroupStage } from "./meeting-group-stage"
+import {
+  listMeetingGroups,
+  deleteMeetingGroup as apiDeleteMeetingGroup,
+  type MeetingGroup,
+} from "@/api/meeting"
 import type { MediaBarHandle } from "./media-bar"
 
 import {
@@ -72,6 +78,9 @@ export function MeetingView({ active = true }: { active?: boolean }) {
 
   // Data
   const [meetings, setMeetings] = useState<Meeting[]>([])
+  const [railTab, setRailTab] = useState<"meetings" | "groups">("meetings")
+  const [groups, setGroups] = useState<MeetingGroup[]>([])
+  const [activeGroup, setActiveGroup] = useState<string | null>(null)
   const [meeting, setMeeting] = useState<Meeting | null>(null)
   const applyMeeting = useCallback((m: Meeting) => {
     setMeeting((prev) => mergeMeetingUpdate(prev, m))
@@ -568,10 +577,17 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     } catch { /* ignore */ }
   }, [])
 
+  const fetchGroups = useCallback(async () => {
+    try {
+      setGroups(await listMeetingGroups())
+    } catch { /* ignore */ }
+  }, [])
+
   // Load collections for ID -> name mapping
   useEffect(() => {
     fetchCollections()
-  }, [fetchCollections])
+    void fetchGroups()
+  }, [fetchCollections, fetchGroups])
 
   // Fetch single meeting detail
   const fetchMeeting = useCallback(async (id: string) => {
@@ -1550,7 +1566,11 @@ export function MeetingView({ active = true }: { active?: boolean }) {
           activeMeeting={activeMeeting}
           recordingMeetingId={recordingMeetingId}
           keepFocusOnCreate={!!(recorder.isRecording || recorder.isPaused)}
-          onSelect={handleSelectMeeting}
+          onSelect={(id: string) => {
+            setActiveGroup(null)
+            setRailTab("meetings")
+            handleSelectMeeting(id)
+          }}
           onCreated={(id: string, opts?: { stayOnCurrent?: boolean }) => {
             void fetchMeetings()
             // While capturing, never switch the stage onto the new meeting —
@@ -1558,12 +1578,44 @@ export function MeetingView({ active = true }: { active?: boolean }) {
             if (opts?.stayOnCurrent || recorder.isRecording || recorder.isPaused) {
               return
             }
+            setActiveGroup(null)
             setActiveMeeting(id)
           }}
           onDelete={handleDelete}
+          railTab={railTab}
+          onRailTab={(tab) => {
+            setRailTab(tab)
+            if (tab === "groups") void fetchGroups()
+          }}
+          groups={groups}
+          activeGroup={activeGroup}
+          onSelectGroup={(id) => {
+            setActiveGroup(id)
+            setRailTab("groups")
+          }}
+          onDeleteGroup={(id) => {
+            void apiDeleteMeetingGroup(id).then(() => {
+              if (activeGroup === id) setActiveGroup(null)
+              void fetchGroups()
+            })
+          }}
         />
 
         <div className="pm-meeting-stage">
+          {activeGroup && railTab === "groups" ? (
+            <div className="h-full min-h-0 flex-1">
+            <MeetingGroupStage
+              groupId={activeGroup}
+              meetings={meetings}
+              onOpenMeeting={(id) => {
+                setActiveGroup(null)
+                setRailTab("meetings")
+                handleSelectMeeting(id)
+              }}
+              onGroupChanged={() => void fetchGroups()}
+            />
+            </div>
+          ) : null}
           {/*
             Steady stage:
               Left: title chrome + Summary/Notes content card
@@ -1574,6 +1626,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
             className={cn(
               "pm-meeting-stage-surface",
               "pm-meeting-soft-fade",
+              activeGroup && railTab === "groups" && "hidden",
               meetingSoftFaded && "is-faded",
               stageModePhase === "hiding" && "is-mode-exiting",
               sideRailMotion && "is-side-motion",

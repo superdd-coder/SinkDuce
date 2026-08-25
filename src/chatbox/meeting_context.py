@@ -174,6 +174,62 @@ def build_meeting_ephemeral_context(meeting_id: str) -> str:
     return "\n\n".join(parts)
 
 
+def build_group_ephemeral_context(group_id: str) -> str:
+    """Roster for Group Chat: n, id, date, speakers, index status. Not persisted."""
+    from src.meeting.group_store import get_group
+    from src.meeting.store import get_meeting
+
+    group = get_group(group_id)
+    if group is None:
+        return "GROUP STATUS: not found."
+    lines = [f"Group: {group.title or group_id}", ""]
+    unindexed: list[str] = []
+    for mem in sorted(group.members, key=lambda m: m.n):
+        meeting = get_meeting(mem.meeting_id)
+        title = (meeting.title if meeting else None) or mem.meeting_id
+        date = ""
+        if meeting and meeting.created_at:
+            date = meeting.created_at.date().isoformat()
+        status = (meeting.transcript_index_status if meeting else "") or ""
+        idx = status if status else "missing"
+        lines.append(
+            f"{mem.n}  {title}     id: {mem.meeting_id}  {date}  index:{idx}"
+        )
+        names = speaker_display_map(mem.meeting_id) if meeting else {}
+        if names:
+            mapped = " · ".join(f"{sid} {name}" for sid, name in names.items())
+            lines.append(f"   speakers: {mapped}")
+        if status != "ready":
+            unindexed.append(f"{mem.n} {title}")
+    if unindexed:
+        lines.append("")
+        lines.append(
+            "Unindexed (do not search transcripts; tell the user): "
+            + "; ".join(unindexed)
+        )
+    return "\n".join(lines)
+
+
+def read_group_meeting_summary(group_id: str, meeting_id: str) -> str:
+    """General summary for a group member, display names applied."""
+    import json
+
+    from src.meeting.group_store import get_group
+
+    group = get_group(group_id)
+    if group is None:
+        return json.dumps({"error": "Group not found"})
+    if not any(m.meeting_id == meeting_id for m in group.members):
+        return json.dumps({"error": "meeting_id not in this group"})
+    names = speaker_display_map(meeting_id)
+    text = apply_speaker_display_names(load_general_summary_text(meeting_id), names)
+    n = next((m.n for m in group.members if m.meeting_id == meeting_id), 0)
+    return json.dumps(
+        {"meeting_id": meeting_id, "n": n, "summary": text or ""},
+        ensure_ascii=False,
+    )
+
+
 def meeting_transcript_context_message(meeting_id: str) -> str:
     """Ephemeral system content for the transcript slot (always non-empty).
 

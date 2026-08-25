@@ -50,6 +50,16 @@ class TestAllowlists:
             {"lookup_meeting_transcript"}
         )
 
+    def test_group_has_lookup_and_summary_tools(self):
+        names = {t["function"]["name"] for t in tools_for_mode("direct", is_group=True)}
+        assert names == {"lookup_group_transcript", "read_meeting_summary"}
+        assert allowed_tool_names("direct", is_group=True) == frozenset(names)
+        from src.chatbox.query_tools import LOOKUP_GROUP_TRANSCRIPT_TOOL
+
+        params = LOOKUP_GROUP_TRANSCRIPT_TOOL["function"]["parameters"]["properties"]
+        assert "meeting_ids" in params
+        assert "latest" not in str(params).lower()
+
     def test_meeting_lookup_tool_is_a_search_not_a_reader(self):
         from src.chatbox.query_tools import LOOKUP_MEETING_TRANSCRIPT_TOOL
         from src.prompts import MEETING_CHAT_SYSTEM_PROMPT
@@ -68,6 +78,20 @@ class TestAllowlists:
         assert "display name" in prompt
         assert "later parts" not in prompt
         assert "next page" not in prompt
+
+    def test_meeting_lookup_mentions_are_not_speaker_filters(self):
+        from src.chatbox.query_tools import LOOKUP_MEETING_TRANSCRIPT_TOOL
+        from src.prompts import MEETING_CHAT_SYSTEM_PROMPT
+
+        fn = LOOKUP_MEETING_TRANSCRIPT_TOOL["function"]
+        desc = fn["description"].lower()
+        prompt = MEETING_CHAT_SYSTEM_PROMPT.lower()
+        assert "not in the mapping" in prompt or "outside the mapping" in prompt
+        assert "mention" in prompt
+        assert "absent" in prompt or "not in the meeting" in prompt
+        assert "keyword" in prompt or "search" in prompt
+        assert "speaker_scope=all" in prompt
+        assert "not in the mapping" in desc or "outside the mapping" in desc or "mention" in desc
 
     def test_quick_structure_subset(self):
         assert "list_collections" not in QUICK_STRUCTURE_NAMES

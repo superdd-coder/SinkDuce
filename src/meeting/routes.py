@@ -100,6 +100,104 @@ def _active_transcription_supports_hot_words() -> bool:
         return False
 
 
+def _serialize_group(group) -> dict:
+    return group.model_dump(mode="json")
+
+
+def _delete_group_session(group_id: str) -> None:
+    try:
+        from src.services import services
+
+        store = getattr(services, "session_store", None)
+        if store is not None:
+            store.delete_session(f"group_{group_id}")
+    except Exception:
+        logger.debug("group session delete skipped %s", group_id, exc_info=True)
+
+
+@router.get("/meeting-groups")
+async def list_meeting_groups():
+    from src.meeting.group_store import list_groups
+
+    return [_serialize_group(g) for g in list_groups()]
+
+
+@router.post("/meeting-groups")
+async def create_meeting_group(body: dict = Body()):
+    from src.meeting.group_store import create_group
+
+    meeting_id = (body.get("meeting_id") or "").strip()
+    meeting = store.get_meeting(meeting_id)
+    if meeting is None:
+        raise HTTPException(404, "Meeting not found")
+    group = create_group(
+        title=(body.get("title") or "").strip(),
+        meeting_id=meeting_id,
+        meeting_title=meeting.title or "",
+    )
+    return _serialize_group(group)
+
+
+@router.get("/meeting-groups/{group_id}")
+async def get_meeting_group(group_id: str):
+    from src.meeting.group_store import get_group
+
+    group = get_group(group_id)
+    if group is None:
+        raise HTTPException(404, "Group not found")
+    return _serialize_group(group)
+
+
+@router.delete("/meeting-groups/{group_id}")
+async def delete_meeting_group(group_id: str):
+    from src.meeting.group_store import delete_group, get_group
+
+    if get_group(group_id) is None:
+        raise HTTPException(404, "Group not found")
+    _delete_group_session(group_id)
+    delete_group(group_id)
+    return {"message": "Group deleted"}
+
+
+@router.post("/meeting-groups/{group_id}/members")
+async def add_meeting_group_member(group_id: str, body: dict = Body()):
+    from src.meeting.group_store import add_member, get_group
+
+    if get_group(group_id) is None:
+        raise HTTPException(404, "Group not found")
+    meeting_id = (body.get("meeting_id") or "").strip()
+    meeting = store.get_meeting(meeting_id)
+    if meeting is None:
+        raise HTTPException(404, "Meeting not found")
+    try:
+        group = add_member(group_id, meeting_id)
+    except FileNotFoundError:
+        raise HTTPException(404, "Group not found")
+    return _serialize_group(group)
+
+
+@router.delete("/meeting-groups/{group_id}/members/{meeting_id}")
+async def remove_meeting_group_member(group_id: str, meeting_id: str):
+    from src.meeting.group_store import get_group, remove_member
+
+    if get_group(group_id) is None:
+        raise HTTPException(404, "Group not found")
+    try:
+        group = remove_member(group_id, meeting_id)
+    except FileNotFoundError:
+        raise HTTPException(404, "Group not found")
+    return _serialize_group(group)
+
+
+@router.get("/meetings/{meeting_id}/groups")
+async def list_groups_for_meeting(meeting_id: str):
+    from src.meeting.group_store import groups_for_meeting
+
+    if store.get_meeting(meeting_id) is None:
+        raise HTTPException(404, "Meeting not found")
+    return [_serialize_group(g) for g in groups_for_meeting(meeting_id)]
+
+
 @router.post("/meetings")
 async def create_meeting(body: dict = Body()):
     title = body.get("title") or datetime.now().strftime("%Y-%m-%d %H:%M")

@@ -431,6 +431,9 @@ interface MeetingQuickChatProps {
    */
   layout?: "dock" | "rail"
   indexStatus?: Meeting["transcript_index_status"]
+  /** group — session group_{id}, citations [n], no index overlay */
+  sessionKind?: "meeting" | "group"
+  onGroupCite?: (n: number) => void
 }
 
 export function MeetingQuickChat({
@@ -443,6 +446,8 @@ export function MeetingQuickChat({
   className,
   layout = "rail",
   indexStatus: indexStatusProp,
+  sessionKind = "meeting",
+  onGroupCite,
 }: MeetingQuickChatProps) {
   const t = useT()
   const [indexStatus, setIndexStatus] = useState(indexStatusProp || "")
@@ -518,10 +523,10 @@ export function MeetingQuickChat({
     // the brief transition when the meeting object is still loading.
     if (!meetingId || !meetingTitle || hasInitializedRef.current) return
     hasInitializedRef.current = true
-    const sid = `${MEETING_SESSION_PREFIX}${meetingId}`
+    const sid = `${sessionKind === "group" ? "group_" : MEETING_SESSION_PREFIX}${meetingId}`
     setSessionId(sid)
     initSession(sid)
-  }, [meetingId, meetingTitle])
+  }, [meetingId, meetingTitle, sessionKind])
 
   const initSession = async (sid: string) => {
     setLoadingHistory(true)
@@ -652,7 +657,8 @@ export function MeetingQuickChat({
 
   const send = useCallback(async () => {
     const text = input.trim()
-    if (!text || streaming || !sessionId || indexStatus !== "ready") return
+    if (!text || streaming || !sessionId) return
+    if (sessionKind !== "group" && indexStatus !== "ready") return
 
     setInput("")
     if (textareaRef.current) {
@@ -717,7 +723,7 @@ export function MeetingQuickChat({
       setStreaming(false)
       abortRef.current = null
     }
-  }, [input, streaming, sessionId, meetingId, pinToBottom, indexStatus])
+  }, [input, streaming, sessionId, meetingId, pinToBottom, indexStatus, sessionKind])
 
   const handleSSEEvent = (
     assistantId: string, type: string,
@@ -884,7 +890,7 @@ export function MeetingQuickChat({
         </div>
       </header>
 
-      {indexStatus !== "ready" ? (
+      {sessionKind !== "group" && indexStatus !== "ready" ? (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
           {indexStatus === "building" ? (
             <>
@@ -974,7 +980,7 @@ export function MeetingQuickChat({
                     )}
                     {msg.content ? (
                       <div className="pm-qc-answer break-words">
-                        <TimeContent content={msg.content} onRefClick={onRefClick} />
+                        <TimeContent content={msg.content} onRefClick={onRefClick} onGroupCite={onGroupCite} />
                       </div>
                     ) : msg.isStreaming ? (
                       <div className="pm-qc-typing">
@@ -1205,12 +1211,17 @@ export function MeetingQuickChat({
 // ── Sentence-ref aware inline renderer ──
 // Clickable [ref:N] chips; ranges expand via parseMeetingRefGroups.
 
-function renderInlineWithRefs(text: string, onRefClick?: (sentenceId: string) => void): ReactNode[] {
+function renderInlineWithRefs(
+  text: string,
+  onRefClick?: (sentenceId: string) => void,
+  onGroupCite?: (n: number) => void,
+): ReactNode[] {
   const parts: ReactNode[] = []
   // [ref:67] / [ref:1-5] / [ref:47, 78-86] and 【ref:…】 variants.
   // Bare [67] is ordinary text — do not chip it.
   const regex = new RegExp(
-    `(\\*\\*(.+?)\\*\\*)|(\\*(.+?)\\*)|(\`(.+?)\`)|(${MEETING_CITE_RE_SOURCE})|((?:\\[|【)\\s*priority:\\s*(high|medium|low)\\s*(?:\\]|】))`,
+    `(\\*\\*(.+?)\\*\\*)|(\\*(.+?)\\*)|(\`(.+?)\`)|(${MEETING_CITE_RE_SOURCE})|((?:\\[|【)\\s*priority:\\s*(high|medium|low)\\s*(?:\\]|】))` +
+      (onGroupCite ? `|(\\[(\\d+)\\])` : ""),
     "gi",
   )
   let lastIdx = 0
@@ -1221,9 +1232,9 @@ function renderInlineWithRefs(text: string, onRefClick?: (sentenceId: string) =>
       parts.push(<span key={`t${lastIdx}`}>{text.slice(lastIdx, match.index)}</span>)
     }
     if (match[1]) {
-      parts.push(<strong key={`b${lastIdx}`}>{renderInlineWithRefs(match[2], onRefClick)}</strong>)
+      parts.push(<strong key={`b${lastIdx}`}>{renderInlineWithRefs(match[2], onRefClick, onGroupCite)}</strong>)
     } else if (match[3]) {
-      parts.push(<em key={`i${lastIdx}`}>{renderInlineWithRefs(match[4], onRefClick)}</em>)
+      parts.push(<em key={`i${lastIdx}`}>{renderInlineWithRefs(match[4], onRefClick, onGroupCite)}</em>)
     } else if (match[5]) {
       parts.push(<code key={`c${lastIdx}`} className="bg-muted px-1 rounded text-xs t-mono-family">{match[6]}</code>)
     } else if (match[8]) {
@@ -1241,6 +1252,18 @@ function renderInlineWithRefs(text: string, onRefClick?: (sentenceId: string) =>
           </button>,
         )
       }
+    } else if (match[12] && onGroupCite) {
+      const n = parseInt(match[12], 10)
+      parts.push(
+        <button
+          type="button"
+          key={`g${lastIdx}`}
+          className="pm-meeting-ref-chip"
+          onClick={(e) => { e.stopPropagation(); onGroupCite(n) }}
+        >
+          {String(n)}
+        </button>,
+      )
     } else if (match[10]) {
       const level = match[10].toLowerCase()
       const colors: Record<string, { bg: string; fg: string }> = {
@@ -1267,30 +1290,31 @@ function renderInlineWithRefs(text: string, onRefClick?: (sentenceId: string) =>
   return parts
 }
 
-function TimeContent({ content, onRefClick }: {
+function TimeContent({ content, onRefClick, onGroupCite }: {
   content: string
   onRefClick?: (sentenceId: string) => void
+  onGroupCite?: (n: number) => void
 }) {
   return (
     <>
       {content.split("\n").map((line, i) => {
         if (line.startsWith("### ")) {
-          return <h3 key={i} className="text-sm font-semibold mt-3 mb-1">{renderInlineWithRefs(line.slice(4), onRefClick)}</h3>
+          return <h3 key={i} className="text-sm font-semibold mt-3 mb-1">{renderInlineWithRefs(line.slice(4), onRefClick, onGroupCite)}</h3>
         }
         if (line.startsWith("## ")) {
-          return <h2 key={i} className="text-base font-semibold mt-3 mb-1">{renderInlineWithRefs(line.slice(3), onRefClick)}</h2>
+          return <h2 key={i} className="text-base font-semibold mt-3 mb-1">{renderInlineWithRefs(line.slice(3), onRefClick, onGroupCite)}</h2>
         }
         if (line.startsWith("# ")) {
-          return <h1 key={i} className="text-lg font-bold mt-3 mb-1">{renderInlineWithRefs(line.slice(2), onRefClick)}</h1>
+          return <h1 key={i} className="text-lg font-bold mt-3 mb-1">{renderInlineWithRefs(line.slice(2), onRefClick, onGroupCite)}</h1>
         }
         if (!line.trim()) return <div key={i} className="h-2" />
         if (/^\s*[-*+]\s/.test(line)) {
-          return <li key={i} className="text-sm leading-relaxed ml-4">{renderInlineWithRefs(line.replace(/^\s*[-*+]\s/, ""), onRefClick)}</li>
+          return <li key={i} className="text-sm leading-relaxed ml-4">{renderInlineWithRefs(line.replace(/^\s*[-*+]\s/, ""), onRefClick, onGroupCite)}</li>
         }
         if (/^>\s/.test(line)) {
-          return <blockquote key={i} className="border-l-2 border-muted-foreground/30 pl-3 italic text-muted-foreground text-xs leading-relaxed mb-1">{renderInlineWithRefs(line.replace(/^>\s*/, ""), onRefClick)}</blockquote>
+          return <blockquote key={i} className="border-l-2 border-muted-foreground/30 pl-3 italic text-muted-foreground text-xs leading-relaxed mb-1">{renderInlineWithRefs(line.replace(/^>\s*/, ""), onRefClick, onGroupCite)}</blockquote>
         }
-        return <p key={i} className="text-sm leading-relaxed mb-1">{renderInlineWithRefs(line, onRefClick)}</p>
+        return <p key={i} className="text-sm leading-relaxed mb-1">{renderInlineWithRefs(line, onRefClick, onGroupCite)}</p>
       })}
     </>
   )

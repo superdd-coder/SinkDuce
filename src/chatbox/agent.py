@@ -142,6 +142,13 @@ class ChatboxAgent:
     ):
         """Return (tools, system_prompt, catalog_text) for the given mode."""
         is_meeting = session_id.startswith("meeting_")
+        is_group = session_id.startswith("group_")
+        if is_group:
+            from src.prompts import MEETING_GROUP_CHAT_SYSTEM_PROMPT
+            tools = tools_for_mode(
+                "direct", is_group=True, web_search_enabled=web_search_enabled,
+            )
+            return tools, MEETING_GROUP_CHAT_SYSTEM_PROMPT, ""
         if mode == "direct":
             if is_meeting:
                 from src.prompts import MEETING_CHAT_SYSTEM_PROMPT
@@ -178,8 +185,12 @@ class ChatboxAgent:
         web_search_enabled: bool = False,
     ) -> bool:
         is_meeting = session_id.startswith("meeting_")
+        is_group = session_id.startswith("group_")
         return tool_name in allowed_tool_names(
-            mode, is_meeting=is_meeting, web_search_enabled=web_search_enabled,
+            mode,
+            is_meeting=is_meeting,
+            is_group=is_group,
+            web_search_enabled=web_search_enabled,
         )
 
     def _check_session_truncation(self, session_id: str) -> int | None:
@@ -269,6 +280,8 @@ class ChatboxAgent:
         """Max user+final-assistant dialogue units for LLM history by session type."""
         if session_id.startswith("meeting_"):
             return _MAX_HISTORY_DIALOGUE_MEETING
+        if session_id.startswith("group_"):
+            return _MAX_HISTORY_DIALOGUE_MAIN
         if session_id.startswith("quick_"):
             return _MAX_HISTORY_DIALOGUE_QUICK
         return _MAX_HISTORY_DIALOGUE_MAIN
@@ -343,6 +356,7 @@ class ChatboxAgent:
         """
         is_meeting = session_id.startswith("meeting_")
         is_quick = session_id.startswith("quick_")
+        is_group = session_id.startswith("group_")
 
         messages: list[dict] = []
 
@@ -363,6 +377,7 @@ class ChatboxAgent:
             hist = self._store.get_messages(session_id, limit=max_dialogue)
 
         # Meeting: ignore any legacy system rows (old transcript appends).
+        # Group: Chat-style history (keep tool rows); no stored transcript dump.
         # Non-meeting: keep system_hist for rare stored system context.
         system_hist = [] if is_meeting else [m for m in hist if m.role == "system"]
         dialogue_hist = [m for m in hist if m.role != "system"]
@@ -370,8 +385,21 @@ class ChatboxAgent:
         for m in system_hist:
             messages.append(self._store_message_to_llm_dict(m))
 
-        for m in dialogue_hist:
-            messages.append(self._store_message_to_llm_dict(m))
+        last_hist_i = len(dialogue_hist) - 1
+        stamp_clock = session_id.startswith("meeting_") or session_id.startswith("group_")
+        for i, m in enumerate(dialogue_hist):
+            d = self._store_message_to_llm_dict(m)
+            if (
+                stamp_clock
+                and i == last_hist_i
+                and m.role == "user"
+                and (m.content or "") == user_message
+                and user_message
+            ):
+                d["content"] = (
+                    f"[Current time: {_format_current_time()}]\n\n{user_message}"
+                )
+            messages.append(d)
 
         # ── Catalog (main Chat only; ephemeral; after history; never DB) ──
         if not is_meeting and not is_quick:
@@ -431,6 +459,12 @@ class ChatboxAgent:
         if session_id.startswith("meeting_"):
             meeting_id = session_id[len("meeting_"):]
             meeting_ephemeral_ctx = _build_meeting_ephemeral_context(meeting_id)
+        elif session_id.startswith("group_"):
+            from src.chatbox.meeting_context import build_group_ephemeral_context
+
+            meeting_ephemeral_ctx = build_group_ephemeral_context(
+                session_id[len("group_"):]
+            )
         total_tool_calls = 0
         agentic_search_calls = 0  # search_knowledge_base only
 
@@ -513,6 +547,36 @@ class ChatboxAgent:
                             seen_pack_keys=seen_tx_packs,
                         )
                         seen_tx_packs |= found_keys
+                        total_tool_calls += 1
+                    elif tool_name == "lookup_group_transcript":
+                        from src.meeting.transcript_index import execute_group_lookup_json
+
+                        gid = (
+                            session_id[len("group_"):]
+                            if session_id.startswith("group_")
+                            else ""
+                        )
+                        raw_ids = args.get("meeting_ids")
+                        mids = raw_ids if isinstance(raw_ids, list) else None
+                        tool_content = execute_group_lookup_json(
+                            gid,
+                            str(args.get("query") or user_message),
+                            meeting_ids=mids,
+                            speaker_scope=str(args.get("speaker_scope") or "auto"),
+                            user_question=user_message,
+                        )
+                        total_tool_calls += 1
+                    elif tool_name == "read_meeting_summary":
+                        from src.chatbox.meeting_context import read_group_meeting_summary
+
+                        gid = (
+                            session_id[len("group_"):]
+                            if session_id.startswith("group_")
+                            else ""
+                        )
+                        tool_content = read_group_meeting_summary(
+                            gid, str(args.get("meeting_id") or "")
+                        )
                         total_tool_calls += 1
                     elif tool_name in STRUCTURE_TOOL_NAMES:
                         tool_content = execute_structure_tool(
@@ -772,6 +836,12 @@ class ChatboxAgent:
         if session_id.startswith("meeting_"):
             meeting_id = session_id[len("meeting_"):]
             meeting_ephemeral_ctx = _build_meeting_ephemeral_context(meeting_id)
+        elif session_id.startswith("group_"):
+            from src.chatbox.meeting_context import build_group_ephemeral_context
+
+            meeting_ephemeral_ctx = build_group_ephemeral_context(
+                session_id[len("group_"):]
+            )
 
         _quick_warn = (
             msg_count is not None
@@ -1306,6 +1376,46 @@ class ChatboxAgent:
                             tool_content if isinstance(tool_content, str) else ""
                         )
                         _ui_source_type = "meeting"
+                        total_tool_calls += 1
+
+                    elif not _skip_exec and tool_name == "lookup_group_transcript":
+                        from src.meeting.transcript_index import (
+                            execute_group_lookup_json,
+                            hit_count_from_lookup_json,
+                        )
+
+                        gid = (
+                            session_id[len("group_"):]
+                            if session_id.startswith("group_")
+                            else ""
+                        )
+                        raw_ids = args.get("meeting_ids")
+                        mids = raw_ids if isinstance(raw_ids, list) else None
+                        tool_content = execute_group_lookup_json(
+                            gid,
+                            str(args.get("query") or user_message),
+                            meeting_ids=mids,
+                            speaker_scope=str(args.get("speaker_scope") or "auto"),
+                            user_question=user_message,
+                        )
+                        _sources_this_call = hit_count_from_lookup_json(
+                            tool_content if isinstance(tool_content, str) else ""
+                        )
+                        _ui_source_type = "meeting"
+                        total_tool_calls += 1
+
+                    elif not _skip_exec and tool_name == "read_meeting_summary":
+                        from src.chatbox.meeting_context import read_group_meeting_summary
+
+                        gid = (
+                            session_id[len("group_"):]
+                            if session_id.startswith("group_")
+                            else ""
+                        )
+                        tool_content = read_group_meeting_summary(
+                            gid, str(args.get("meeting_id") or "")
+                        )
+                        _sources_this_call = None
                         total_tool_calls += 1
 
                     # ── Structure / summary / full-text ──

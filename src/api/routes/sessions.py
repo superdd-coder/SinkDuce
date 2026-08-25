@@ -107,7 +107,12 @@ def list_sessions():
     store = _get_store()
     sessions = store.list_sessions()
     # Filter out quick-chat sessions — they are collection-scoped, not user-facing
-    sessions = [s for s in sessions if not s.id.startswith("quick_") and not s.id.startswith("meeting_")]
+    sessions = [
+        s for s in sessions
+        if not s.id.startswith("quick_")
+        and not s.id.startswith("meeting_")
+        and not s.id.startswith("group_")
+    ]
     return [_session_response(s, store) for s in sessions]
 
 

@@ -195,6 +195,12 @@ def delete_meeting(meeting_id: str) -> bool:
         purge_meeting_transcripts(meeting_id)
     except Exception:
         logger.warning("transcript index purge skipped for %s", meeting_id, exc_info=True)
+    try:
+        from src.meeting.group_store import drop_meeting_from_all_groups
+
+        drop_meeting_from_all_groups(meeting_id)
+    except Exception:
+        logger.warning("group membership drop skipped for %s", meeting_id, exc_info=True)
     shutil.rmtree(directory)
     return True
 

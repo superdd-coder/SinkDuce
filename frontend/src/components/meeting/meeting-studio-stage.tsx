@@ -16,6 +16,7 @@ import {
   type MeetingQcSpinPhase,
 } from "./meeting-quick-chat"
 import { type Meeting, type TranscriptSegment, type LanguageHintOption } from "@/api/client"
+import { MeetingGroupsMeta } from "./meeting-groups-meta"
 import type { SidebarView } from "@/stores/app-store"
 import { useT } from "@/i18n/use-t"
 
@@ -277,6 +278,7 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                           <span className="pm-meeting-meta-key">{t("common.speakers")}</span>
                           <span className="pm-meeting-meta-val">{metaSpeakers}</span>
                         </div>
+                        <MeetingGroupsMeta meetingId={meeting.id} />
                         <div className="pm-meeting-meta-row">
                           <span className="pm-meeting-meta-key">{t("common.collections")}</span>
                           <span className="pm-meeting-meta-val">
