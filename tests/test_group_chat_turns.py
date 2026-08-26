@@ -82,6 +82,30 @@ def test_retry_kwargs_disable_thinking_then_drop_forced_tool():
     assert second["tool_choice"] == "auto"
 
 
+def test_group_transcript_lookup_is_offloaded_from_the_event_loop():
+    """Hybrid retrieve must not stall GET /meetings during Group Chat."""
+    import inspect
+    import threading
+
+    import asyncio
+
+    from src.chatbox.agent import _run_blocking
+
+    src = inspect.getsource(__import__("src.chatbox.agent", fromlist=["ChatboxAgent"]))
+    # chat_stream path (not the sync query fallback)
+    assert "await _run_blocking(\n                            execute_group_lookup_json" in src.replace(
+        "\r\n", "\n"
+    ) or "await _run_blocking(execute_group_lookup_json" in src
+
+    caller = threading.get_ident()
+
+    def job() -> int:
+        return threading.get_ident()
+
+    worker = asyncio.run(_run_blocking(job))
+    assert worker != caller
+
+
 def test_group_prompt_treats_summary_as_orientation_not_evidence():
     from src.prompts import MEETING_GROUP_CHAT_SYSTEM_PROMPT
     from src.chatbox.query_tools import LOOKUP_GROUP_TRANSCRIPT_TOOL, READ_MEETING_SUMMARY_TOOL

@@ -102,6 +102,11 @@ def _group_stream_tool_choice(
     return "auto"
 
 
+async def _run_blocking(fn, /, *args, **kwargs):
+    """Run sync retrieval/LLM-adjacent work off the asyncio event loop."""
+    return await asyncio.to_thread(fn, *args, **kwargs)
+
+
 def _thinking_on_for_tool_round(thinking: bool, tool_choice) -> bool:
     """DashScope/Qwen thinking rejects a forced function tool_choice."""
     if not thinking:
@@ -1497,7 +1502,8 @@ class ChatboxAgent:
                             if session_id.startswith("meeting_")
                             else ""
                         )
-                        tool_content, found_keys = lookup_json_and_keys(
+                        tool_content, found_keys = await _run_blocking(
+                            lookup_json_and_keys,
                             mid,
                             str(args.get("query") or user_message),
                             speaker_scope=str(args.get("speaker_scope") or "auto"),
@@ -1524,7 +1530,8 @@ class ChatboxAgent:
                         )
                         raw_ids = args.get("meeting_ids")
                         mids = raw_ids if isinstance(raw_ids, list) else None
-                        tool_content = execute_group_lookup_json(
+                        tool_content = await _run_blocking(
+                            execute_group_lookup_json,
                             gid,
                             str(args.get("query") or user_message),
                             meeting_ids=mids,
@@ -1546,8 +1553,9 @@ class ChatboxAgent:
                             if session_id.startswith("group_")
                             else ""
                         )
-                        tool_content = read_group_meeting_summary(
-                            gid, str(args.get("meeting_id") or "")
+                        tool_content = await _run_blocking(
+                            read_group_meeting_summary,
+                            gid, str(args.get("meeting_id") or ""),
                         )
                         _sources_this_call = None
                         total_tool_calls += 1
