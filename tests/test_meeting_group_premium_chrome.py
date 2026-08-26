@@ -90,6 +90,19 @@ def test_overlay_title_aligns_with_player_and_uses_collapse_icon():
     assert "pm-ff-prose" in title or "Source Serif" in title
 
 
+def test_group_stage_stays_mounted_when_switching_to_meetings():
+    """Keep Group Chat mounted (hidden) so SSE survives Meetings tab / view switch."""
+    view = (ROOT / "frontend" / "src" / "components" / "meeting" / "meeting-view.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert "{paintGroupStage && paintGroupId ? (" not in view
+    assert "paintGroupId" in view
+    assert "<MeetingGroupStage" in view
+    wrap = view.split("<MeetingGroupStage")[0][-500:]
+    assert "hidden" in wrap
+    assert "aria-hidden" in wrap
+
+
 def test_group_delete_asks_before_api():
     """Rail trash opens a confirm dialog; it does not call the delete API inline."""
     view = (ROOT / "frontend" / "src" / "components" / "meeting" / "meeting-view.tsx").read_text(

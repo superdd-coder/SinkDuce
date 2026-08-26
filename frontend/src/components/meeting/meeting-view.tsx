@@ -1656,8 +1656,14 @@ export function MeetingView({ active = true }: { active?: boolean }) {
 
         <div className="pm-meeting-stage">
           <div className={cn("pm-meeting-stage-kind", !kindOpaque && "is-exiting")}>
-          {paintGroupStage && paintGroupId ? (
-            <div className="h-full min-h-0 flex-1">
+          {paintGroupId ? (
+            <div
+              className={cn(
+                "h-full min-h-0 flex-1",
+                !paintGroupStage && "hidden",
+              )}
+              aria-hidden={!paintGroupStage}
+            >
             <MeetingGroupStage
               groupId={paintGroupId}
               meetings={meetings}
@@ -1666,7 +1672,8 @@ export function MeetingView({ active = true }: { active?: boolean }) {
               onMeetingsChanged={fetchMeetings}
             />
             </div>
-          ) : (
+          ) : null}
+          {!paintGroupStage ? (
           <>
           {/*
             Steady stage:
@@ -1847,7 +1854,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
             )}
           </div>
           </>
-          )}
+          ) : null}
           </div>
         </div>
       </div>

@@ -549,6 +549,9 @@ export function MeetingQuickChat({
     const idChanged = prevMeetingIdRef.current !== meetingId
     prevMeetingIdRef.current = meetingId
     if (idChanged) {
+      abortRef.current?.abort()
+      abortRef.current = null
+      setStreaming(false)
       setMessages([])
       setMsgCount(0)
       hasInitializedRef.current = false
