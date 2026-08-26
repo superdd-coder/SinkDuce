@@ -1,13 +1,14 @@
-import type { Dispatch, RefObject, SetStateAction } from "react"
+import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react"
 import { Loader2, Mic, Play, Sparkles, Square, Upload, Users } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { uploadMeetingImage, type Meeting, type TranscriptSegment, type LanguageHintOption } from "@/api/client"
+import { type Meeting, type TranscriptSegment, type LanguageHintOption } from "@/api/client"
 import { TranscriptTab, SpeakersTab } from "./transcript-panel"
 import { CaptureMiniPlayer, type CaptureMiniPlayerHandle } from "./capture-mini-player"
 import { LanguageHintsSelector } from "./language-hints-selector"
 import { HotWordsSelector } from "./hot-words-selector"
-import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { LiveCaptureControlCard } from "./live-capture-control-card"
+import { MeetingNotesCard } from "./meeting-notes-card"
+import type { MeetingNotesStatus } from "@/hooks/use-meeting-notes"
 import { useT } from "@/i18n/use-t"
 
 export type MeetingCaptureMode = "setup" | "audio" | "transcribing" | "speakers" | "live"
@@ -59,8 +60,67 @@ export interface MeetingCaptureStagesProps {
   handleSegmentClick: (start: number, end?: number) => void
   liveNotes: string
   handleLiveNotesChange: (value: string) => void
+  notesStatus: MeetingNotesStatus
+  notesRailOpen: boolean
+  onToggleNotesRail: () => void
   pauseRecording: () => void
   resumeRecording: () => void
+}
+
+function PrepStage({
+  mode,
+  meetingId,
+  notesOpen,
+  onToggleNotes,
+  notes,
+  onNotesChange,
+  notesStatus,
+  children,
+}: {
+  mode: "empty" | "audio-ready" | "transcribing"
+  meetingId: string
+  notesOpen: boolean
+  onToggleNotes: () => void
+  notes: string
+  onNotesChange: (value: string) => void
+  notesStatus: MeetingNotesStatus
+  children: ReactNode
+}) {
+  const t = useT()
+  return (
+    <div
+      className={cn("pm-meeting-mode-empty", notesOpen && "is-notes-open")}
+      data-meeting-mode={mode}
+    >
+      <div className="pm-meeting-e-main">{children}</div>
+      <aside
+        id={`meeting-notes-rail-${meetingId}`}
+        className="pm-meeting-notes-rail"
+        aria-hidden={!notesOpen}
+      >
+        <div className="pm-meeting-notes-dock">
+          <button
+            type="button"
+            className={cn("pm-meeting-notes-handle", !!notes.trim() && "has-content")}
+            aria-expanded={notesOpen}
+            aria-controls={`meeting-notes-rail-${meetingId}`}
+            aria-label={t("meeting.notesHandle")}
+            onClick={onToggleNotes}
+          >
+            <span className="pm-meeting-notes-handle-label">{t("common.notes")}</span>
+            {!!notes.trim() && <span className="pm-meeting-notes-handle-dot" aria-hidden />}
+          </button>
+          <MeetingNotesCard
+            meetingId={meetingId}
+            value={notes}
+            onChange={onNotesChange}
+            status={notesStatus}
+            placeholder={t("meeting.writeNotesPrep")}
+          />
+        </div>
+      </aside>
+    </div>
+  )
 }
 
 export function MeetingCaptureStages(p: MeetingCaptureStagesProps) {
@@ -111,6 +171,9 @@ export function MeetingCaptureStages(p: MeetingCaptureStagesProps) {
     handleSegmentClick,
     liveNotes,
     handleLiveNotesChange,
+    notesStatus,
+    notesRailOpen,
+    onToggleNotesRail,
     pauseRecording,
     resumeRecording,
   } = p
@@ -135,7 +198,15 @@ mode === "setup" ? (
                * 3) or
                * 4) Upload audio → leaves setup; language becomes file model
                */
-              <div className="pm-meeting-mode-empty" data-meeting-mode="empty">
+              <PrepStage
+                mode="empty"
+                meetingId={meeting.id}
+                notesOpen={notesRailOpen}
+                onToggleNotes={onToggleNotesRail}
+                notes={liveNotes}
+                onNotesChange={handleLiveNotesChange}
+                notesStatus={notesStatus}
+              >
                 <div className="pm-meeting-e-stage">
                   <p className="pm-meeting-e-kicker">{t("meeting.newMeeting")}</p>
                   <h3 className="pm-meeting-e-title">{t("meeting.capture")}</h3>
@@ -246,10 +317,18 @@ mode === "setup" ? (
                     <p className="pm-meeting-e-error">{recorder.error}</p>
                   )}
                 </div>
-              </div>
+              </PrepStage>
             ) : mode === "audio" ? (
               /* ═══ Capture · Audio ready (upload / post-live before file-tx) ═══ */
-              <div className="pm-meeting-mode-empty" data-meeting-mode="audio-ready">
+              <PrepStage
+                mode="audio-ready"
+                meetingId={meeting.id}
+                notesOpen={notesRailOpen}
+                onToggleNotes={onToggleNotesRail}
+                notes={liveNotes}
+                onNotesChange={handleLiveNotesChange}
+                notesStatus={notesStatus}
+              >
                 <div className="pm-meeting-e-stage pm-meeting-e-stage--wide">
                   <p className="pm-meeting-e-kicker">{t("meeting.audioReady")}</p>
                   <h3 className="pm-meeting-e-title">{t("meeting.reviewAudio")}</h3>
@@ -321,10 +400,18 @@ mode === "setup" ? (
                     </p>
                   )}
                 </div>
-              </div>
+              </PrepStage>
             ) : mode === "transcribing" ? (
               /* ═══ Capture · File transcription in progress ═══ */
-              <div className="pm-meeting-mode-empty" data-meeting-mode="transcribing">
+              <PrepStage
+                mode="transcribing"
+                meetingId={meeting.id}
+                notesOpen={notesRailOpen}
+                onToggleNotes={onToggleNotesRail}
+                notes={liveNotes}
+                onNotesChange={handleLiveNotesChange}
+                notesStatus={notesStatus}
+              >
                 <div className="pm-meeting-e-stage pm-meeting-e-stage--wide">
                   <p className="pm-meeting-e-kicker">{t("meeting.transcribing")}</p>
                   <h3 className="pm-meeting-e-title">{t("meeting.fileTranscribing")}</h3>
@@ -379,7 +466,7 @@ mode === "setup" ? (
                     </button>
                   </div>
                 </div>
-              </div>
+              </PrepStage>
             ) : mode === "speakers" ? (
               /* ═══ Capture · Review: transcript + speakers, then Summarize → Studio ═══ */
               <div className="pm-meeting-mode-live" data-meeting-mode="speakers">
@@ -586,24 +673,14 @@ mode === "setup" ? (
                       />
                     </div>
                   </div>
-                  <div className="pm-meeting-f-card">
-                    <div className="pm-meeting-f-card-h">
-                      <span className="pm-meeting-f-card-label">{t("common.notes")}</span>
-                      <span className="pm-meeting-f-card-meta">{t("meeting.savedLive")}</span>
-                    </div>
-                    <div className="pm-meeting-f-card-body pm-meeting-f-notes">
-                      <MarkdownEditor
-                        value={liveNotes}
-                        onChange={handleLiveNotesChange}
-                        minHeight="200px"
-                        placeholder={t("meeting.writeNotesWhile")}
-                        onImageUpload={async (file) => {
-                          const result = await uploadMeetingImage(meeting.id, file)
-                          return result.url
-                        }}
-                      />
-                    </div>
-                  </div>
+                  <MeetingNotesCard
+                    meetingId={meeting.id}
+                    value={liveNotes}
+                    onChange={handleLiveNotesChange}
+                    status={notesStatus}
+                    placeholder={t("meeting.writeNotesWhile")}
+                    idleMeta={t("meeting.savedLive")}
+                  />
                 </div>
               </div>
     ) : null

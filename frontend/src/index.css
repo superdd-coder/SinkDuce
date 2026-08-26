@@ -20955,7 +20955,7 @@ button.pm-ws-path-row {
   width: 100%;
   height: 100%;
   box-sizing: border-box;
-  border-radius: inherit;
+  border-radius: var(--pm-r-lg, 20px);
   /* visible so nested --pm-shadow-sm is not clipped by the cream shell */
   overflow: visible;
   background: var(--pm-float, #fdfbf7);
@@ -20971,6 +20971,9 @@ button.pm-ws-path-row {
 .pm-meeting-stage-surface.is-mode-capture {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
+}
+.pm-meeting-stage-surface.is-mode-empty {
+  overflow: hidden;
 }
 
 /*
@@ -21339,12 +21342,145 @@ button.pm-ws-path-row {
 
 /* ── E · Empty capture ── */
 .pm-meeting-mode-empty {
+  --pm-notes-handle-w: 2rem;
+  --pm-notes-panel-w: 50%;
   grid-column: 1 / -1;
   grid-row: 1 / -1;
   min-height: 0;
   display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  position: relative;
+  overflow: hidden;
+}
+.pm-meeting-e-main {
+  flex: 1 1 0%;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
   align-items: center;
   justify-content: center;
+  padding-right: var(--pm-notes-handle-w);
+  box-sizing: border-box;
+  transition: padding-right var(--pm-meeting-side-motion, 480ms cubic-bezier(0.32, 0.72, 0, 1));
+}
+.pm-meeting-mode-empty.is-notes-open .pm-meeting-e-main {
+  padding-right: var(--pm-notes-panel-w);
+}
+.pm-meeting-notes-handle {
+  position: relative;
+  align-self: center;
+  flex: 0 0 auto;
+  z-index: 1;
+  writing-mode: vertical-rl;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font: 550 11px/1.2 var(--pm-ff, system-ui, sans-serif);
+  color: var(--pm-green, #1a5e3d);
+  background: #ffffff;
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
+  border-right: none;
+  border-radius: 14px 0 0 14px;
+  padding: 18px 9px;
+  margin: 0;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow:
+    0 1px 2px rgba(18, 20, 16, 0.05),
+    0 6px 16px -4px rgba(18, 20, 16, 0.10);
+  transition:
+    color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    border-color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-meeting-notes-handle::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  right: -8px;
+  width: 12px;
+  background: #ffffff;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 160ms linear;
+}
+.pm-meeting-mode-empty.is-notes-open .pm-meeting-notes-handle::after {
+  opacity: 1;
+}
+.pm-meeting-notes-handle:hover {
+  color: var(--pm-green-deep, #0f4a2d);
+}
+.pm-meeting-notes-handle-label {
+  display: block;
+}
+.pm-meeting-notes-handle-dot {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--pm-green, #1a5e3d);
+  transform: translateX(-50%);
+}
+.pm-meeting-notes-rail {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--pm-notes-panel-w);
+  min-width: 0;
+  min-height: 0;
+  overflow: visible;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 16px 12px 0;
+  box-sizing: border-box;
+  transform: translateX(calc(100% - var(--pm-notes-handle-w) + 6px));
+  transition: transform var(--pm-meeting-side-motion, 480ms cubic-bezier(0.32, 0.72, 0, 1));
+}
+.pm-meeting-notes-dock {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+.pm-meeting-notes-dock .pm-meeting-f-card {
+  flex: 1 1 0;
+  min-width: 0;
+  height: auto;
+  overflow: hidden;
+  box-shadow: none;
+  pointer-events: none;
+}
+.pm-meeting-mode-empty.is-notes-open .pm-meeting-notes-rail {
+  transform: translateX(0);
+  pointer-events: auto;
+}
+.pm-meeting-mode-empty.is-notes-open .pm-meeting-notes-dock .pm-meeting-f-card {
+  pointer-events: auto;
+}
+.pm-meeting-mode-empty.is-notes-open .pm-meeting-notes-dock {
+  filter:
+    drop-shadow(0 1px 2px rgba(18, 20, 16, 0.05))
+    drop-shadow(0 8px 20px rgba(18, 20, 16, 0.10));
+}
+.pm-meeting-mode-empty.is-notes-open .pm-meeting-notes-handle {
+  margin: 0 -6px 0 0;
+  border-color: transparent;
+  box-shadow: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-meeting-e-main,
+  .pm-meeting-notes-rail,
+  .pm-meeting-notes-handle,
+  .pm-meeting-notes-handle::after {
+    transition: none;
+  }
 }
 .pm-meeting-e-stage {
   display: flex;

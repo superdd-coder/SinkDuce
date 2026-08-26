@@ -42,6 +42,7 @@ import { type CaptureMiniPlayerHandle } from "./capture-mini-player"
 import { MeetingCaptureStages } from "./meeting-capture-stages"
 import { MeetingStudioStage } from "./meeting-studio-stage"
 import { MeetingViewOverlays } from "./meeting-view-overlays"
+import { useMeetingNotes } from "@/hooks/use-meeting-notes"
 
 /** Keep live notes when a mutation response omitted notes_content (PUT/upload). */
 function mergeMeetingUpdate(prev: Meeting | null, next: Meeting): Meeting {
@@ -85,9 +86,30 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   const applyMeeting = useCallback((m: Meeting) => {
     setMeeting((prev) => mergeMeetingUpdate(prev, m))
   }, [])
-  const liveNotesTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  /** Draft notes while recording survive switching away and back */
-  const liveNotesDraftsRef = useRef<Map<string, string>>(new Map())
+  const notes = useMeetingNotes({
+    meetingId: meeting?.id ?? activeMeeting,
+    serverContent: meeting?.notes_content ?? "",
+    onSaved: applyMeeting,
+  })
+  const notesRailOpenRef = useRef<Map<string, boolean>>(new Map())
+  const [notesRailOpen, setNotesRailOpen] = useState(false)
+  useEffect(() => {
+    const id = meeting?.id
+    if (!id) {
+      setNotesRailOpen(false)
+      return
+    }
+    setNotesRailOpen(notesRailOpenRef.current.get(id) ?? false)
+  }, [meeting?.id])
+  const toggleNotesRail = useCallback(() => {
+    const id = meeting?.id
+    if (!id) return
+    setNotesRailOpen((prev) => {
+      const next = !prev
+      notesRailOpenRef.current.set(id, next)
+      return next
+    })
+  }, [meeting?.id])
   const meetingContentRef = useRef<HTMLDivElement>(null)
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([])
 
@@ -988,6 +1010,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   // Handlers
   const handleUploadAudio = async (file: File) => {
     if (!activeMeeting) return
+    notes.flush(activeMeeting)
     try {
       const m = await uploadMeetingAudio(activeMeeting, file)
       applyMeeting(m)
@@ -1043,6 +1066,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       return
     }
     toast.message(t("meeting.startingCapture"))
+    notes.flush(ownerId)
     // Bind owner before start so the first PCM chunks persist to this meeting.
     if (ownerId) {
       captureOwnerRef.current = ownerId
@@ -1078,18 +1102,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     // Keep captureOwnerRef for upload target even if user is viewing another meeting
     const owner = captureOwnerRef.current ?? recordingMeetingId
     // Flush live notes immediately so Studio/Summarize does not mount on a stale empty field
-    if (liveNotesTimer.current) {
-      clearTimeout(liveNotesTimer.current)
-      liveNotesTimer.current = null
-    }
-    if (owner) {
-      const draft = liveNotesDraftsRef.current.get(owner)
-      if (draft !== undefined) {
-        updateMeeting(owner, { notes: draft })
-          .then((m) => applyMeeting(m))
-          .catch(() => {})
-      }
-    }
+    notes.flush(owner)
     // Lock Capture on "Transcribing" UI before realtime save sets status=completed
     // (otherwise speakers gate flashes until file-tx starts).
     if (owner && hasFileProvider) {
@@ -1113,6 +1126,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     recordingMeetingId,
     hasFileProvider,
     applyMeeting,
+    notes.flush,
   ])
 
   /** Uncommitted hot-words pick when a transcript already exists (cleared on leave / refresh). */
@@ -1124,6 +1138,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
 
   const handleTranscribe = async () => {
     if (!activeMeeting) return
+    notes.flush(activeMeeting)
     if (!hasFileProvider) {
       toast.error(t("meeting.noProviderSetup"), {
         action: { label: t("nav.settings"), onClick: () => setSidebarView("llm_provider") },
@@ -1589,23 +1604,6 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   )
 
   const emptyUploadRef = useRef<HTMLInputElement>(null)
-  const [liveNotes, setLiveNotes] = useState(meeting?.notes_content ?? "")
-  useEffect(() => {
-    if (!meeting?.id) return
-    const draft = liveNotesDraftsRef.current.get(meeting.id)
-    setLiveNotes(draft !== undefined ? draft : (meeting.notes_content ?? ""))
-  }, [meeting?.id, meeting?.notes_content])
-  const handleLiveNotesChange = (value: string) => {
-    setLiveNotes(value)
-    if (!activeMeeting) return
-    liveNotesDraftsRef.current.set(activeMeeting, value)
-    if (liveNotesTimer.current) clearTimeout(liveNotesTimer.current)
-    liveNotesTimer.current = setTimeout(() => {
-      updateMeeting(activeMeeting, { notes: value })
-        .then((m) => applyMeeting(m))
-        .catch(() => {})
-    }, 800)
-  }
   const formatRecTime = (seconds: number) => {
     const m = Math.floor(seconds / 60)
     const s = seconds % 60
@@ -1747,8 +1745,11 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                 liveSegments={transcription.segments}
                 livePartial={transcription.currentPartial}
                 handleSegmentClick={handleSegmentClick}
-                liveNotes={liveNotes}
-                handleLiveNotesChange={handleLiveNotesChange}
+                liveNotes={notes.draft}
+                handleLiveNotesChange={notes.change}
+                notesStatus={notes.status}
+                notesRailOpen={notesRailOpen}
+                onToggleNotesRail={toggleNotesRail}
                 pauseRecording={recorder.pauseRecording}
                 resumeRecording={recorder.resumeRecording}
               />
@@ -1773,6 +1774,8 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                 metaSpeakers={metaSpeakers}
                 hasFileProvider={hasFileProvider}
                 handleMeetingUpdate={handleMeetingUpdate}
+                notesContent={notes.draft}
+                onNotesChange={notes.change}
                 handleSegmentClick={handleSegmentClick}
                 requestSideTab={requestSideTab}
                 setQuickChatOpen={setQuickChatOpen}
