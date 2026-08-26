@@ -104,6 +104,27 @@ def _serialize_group(group) -> dict:
     return group.model_dump(mode="json")
 
 
+def _ensure_transcript_index(meeting_id: str) -> None:
+    """Start transcript index if the meeting has speech and is not already indexed."""
+    meeting = store.get_meeting(meeting_id)
+    if meeting is None:
+        return
+    if (meeting.transcript_index_status or "") in ("ready", "building"):
+        return
+    sentences = store.get_sentences(meeting_id)
+    transcript = store.get_transcript(meeting_id)
+    if not sentences and not transcript:
+        return
+    store.update_meeting(
+        meeting_id, transcript_index_status="building", transcript_index_error=""
+    )
+    task_manager.create_task(
+        filename=f"tx-index:{meeting_id}",
+        task_type="meeting_transcript_index",
+        meeting_id=meeting_id,
+    )
+
+
 def _delete_group_session(group_id: str) -> None:
     try:
         from src.services import services
@@ -135,6 +156,7 @@ async def create_meeting_group(body: dict = Body()):
         meeting_id=meeting_id,
         meeting_title=meeting.title or "",
     )
+    _ensure_transcript_index(meeting_id)
     return _serialize_group(group)
 
 
@@ -173,6 +195,7 @@ async def add_meeting_group_member(group_id: str, body: dict = Body()):
         group = add_member(group_id, meeting_id)
     except FileNotFoundError:
         raise HTTPException(404, "Group not found")
+    _ensure_transcript_index(meeting_id)
     return _serialize_group(group)
 
 

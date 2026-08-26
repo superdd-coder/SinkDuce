@@ -160,14 +160,17 @@ LOOKUP_MEETING_TRANSCRIPT_TOOL = _fn(
 LOOKUP_GROUP_TRANSCRIPT_TOOL = _fn(
     "lookup_group_transcript",
     (
-        "PRIMARY search over spoken transcripts for meetings in this Group. "
-        "The server locks the search to this Group. Pass meeting_ids from the "
-        "roster (ids, not group numbers) to search a subset; omit to search "
-        "every indexed member. One call is one retrieve — not a page. "
-        "A name in the roster speaker maps is filtered per meeting with that "
-        "meeting's speaker id. A name outside the mapping is a mention: put it "
-        "in query; do not treat them as absent. Cite group numbers [n] in the "
-        "user-facing answer, not sentence ids."
+        "PRIMARY evidence: search spoken transcripts for meetings in this Group. "
+        "Required before the user-facing answer. Written summaries are only a "
+        "map of the series — use them to pick meeting_ids and the information "
+        "need, then search here. The server locks the search to this Group. "
+        "Pass meeting_ids from the roster (ids, not group numbers) to search a "
+        "subset; omit to search every indexed member. One call is one retrieve "
+        "— not a page. A name in the roster speaker maps is filtered per "
+        "meeting with that meeting's speaker id. A name outside the mapping is "
+        "a mention: put it in query; do not treat them as absent. Cite as "
+        "[n:k] (n = meeting header, k = [ref:k] in excerpts). The user sees "
+        "only n. Do not paste excerpt lines."
     ),
     {
         "query": {
@@ -202,9 +205,10 @@ READ_MEETING_SUMMARY_TOOL = _fn(
     "read_meeting_summary",
     (
         "Read the written General summary for one meeting in this Group. "
-        "Use for series knowledge (plan, decisions). Verbatim wording and "
-        "numbers still go through lookup_group_transcript. meeting_id must be "
-        "a roster id for this Group."
+        "Orientation / itinerary only: which meeting, who, what the series is "
+        "about. Do not treat it as spoken evidence and do not answer from it "
+        "alone. After reading, search spoken lines with "
+        "lookup_group_transcript. meeting_id must be a roster id for this Group."
     ),
     {
         "meeting_id": {

@@ -2,6 +2,8 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 
 import { normalizeLocale, t, translate } from "../frontend/src/i18n/index.ts"
+import enCatalog from "../frontend/src/i18n/en.json" with { type: "json" }
+import zhCatalog from "../frontend/src/i18n/zh-CN.json" with { type: "json" }
 import {
   systemFolderDisplayName,
   systemFolderDisplayPath,
@@ -98,6 +100,35 @@ test("add-node message editor chrome is localized", () => {
   assert.equal(t("zh-CN", "fileMgmt.writeMessagePh"), "写一条消息… 输入 / 使用命令")
   assert.equal(t("en", "fileMgmt.noFilesAttachedYet"), "No files attached yet")
   assert.equal(t("zh-CN", "fileMgmt.noFilesAttachedYet"), "还没有附件")
+})
+
+test("catalogs do not use doubled mustache placeholders", () => {
+  assert.equal(JSON.stringify(enCatalog).includes("{{"), false)
+  assert.equal(JSON.stringify(zhCatalog).includes("{{"), false)
+})
+
+test("group delete confirm copy is localized", () => {
+  assert.equal(t("en", "meeting.deleteGroupQ"), "Delete group?")
+  assert.equal(t("zh-CN", "meeting.deleteGroupQ"), "删除这个 Group？")
+  assert.match(t("en", "meeting.deleteGroupBody"), /Meetings stay/)
+  assert.match(t("zh-CN", "meeting.deleteGroupBody"), /会议/)
+  assert.equal(t("en", "meeting.groupDeleted"), "Group deleted")
+  assert.equal(t("zh-CN", "meeting.groupDeleted"), "Group 已删除")
+})
+
+test("groupCount interpolates n without leftover braces", () => {
+  assert.equal(t("en", "meeting.groupCount", { n: 5 }), "5 meetings")
+  assert.equal(t("zh-CN", "meeting.groupCount", { n: 5 }), "5 场")
+})
+
+test("group cite source rows localize sentence id", () => {
+  assert.equal(t("en", "meeting.citeSentenceId", { id: "stt_0053" }), "Sentence stt_0053")
+  assert.equal(t("zh-CN", "meeting.citeSentenceId", { id: "stt_0053" }), "句子 stt_0053")
+})
+
+test("txLookupHits interpolates n without leftover braces", () => {
+  assert.equal(t("en", "meeting.txLookupHits", { n: 3 }), "3 transcript packs")
+  assert.equal(t("zh-CN", "meeting.txLookupHits", { n: 3 }), "3 段原话")
 })
 
 test("t interpolates {var} placeholders", () => {

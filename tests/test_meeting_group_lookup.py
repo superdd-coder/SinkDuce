@@ -192,3 +192,94 @@ def test_group_lookup_rejects_outside_member_and_skips_unindexed():
         retriever.retrieve.assert_called_once()
         mids = retriever.retrieve.call_args.kwargs["filter_condition"].must[0].match.any
         assert list(mids) == ["m_ready"] or set(mids) == {"m_ready"}
+
+
+def test_group_cites_every_hit_sentence_in_retrieve_order():
+    from src.meeting.transcript_index import group_cites_from_hits
+
+    hits = [
+        {
+            "meeting_id": "m_b",
+            "sentences": [{"ref_n": 6, "sentence_id": "stt_0006", "text": "2.80"}],
+        },
+        {
+            "meeting_id": "m_a",
+            "sentences": [{"ref_n": 12, "sentence_id": "stt_0012", "text": "2.30"}],
+        },
+        {
+            "meeting_id": "m_b",
+            "sentences": [{"ref_n": 9, "sentence_id": "stt_0009", "text": "later"}],
+        },
+    ]
+    meta = {
+        "m_a": {"n": 1, "title": "Alpha", "date": "2026-08-01"},
+        "m_b": {"n": 2, "title": "Beta", "date": "2026-08-12"},
+    }
+    cites = group_cites_from_hits(hits, meta)
+    assert cites == [
+        {
+            "n": 2,
+            "meeting_id": "m_b",
+            "ref_n": 6,
+            "sentence_id": "stt_0006",
+            "title": "Beta",
+            "date": "2026-08-12",
+        },
+        {
+            "n": 1,
+            "meeting_id": "m_a",
+            "ref_n": 12,
+            "sentence_id": "stt_0012",
+            "title": "Alpha",
+            "date": "2026-08-01",
+        },
+        {
+            "n": 2,
+            "meeting_id": "m_b",
+            "ref_n": 9,
+            "sentence_id": "stt_0009",
+            "title": "Beta",
+            "date": "2026-08-12",
+        },
+    ]
+
+
+def test_group_lookup_json_includes_cites():
+    import json
+    from unittest.mock import MagicMock, patch
+
+    from src.meeting.models import Meeting, MeetingGroup, MeetingGroupMember
+    from src.meeting.transcript_index import execute_group_lookup_json
+    from src.rag.retriever import RetrievedChunk
+
+    group = MeetingGroup(
+        id="g1",
+        title="G",
+        members=[MeetingGroupMember(meeting_id="m_ready", n=1)],
+    )
+    ready = Meeting(id="m_ready", title="Ready", transcript_index_status="ready")
+    chunk = RetrievedChunk(
+        text="hello",
+        score=0.9,
+        metadata={
+            "meeting_id": "m_ready",
+            "pack_index": 0,
+            "sentences": [
+                {"ref_n": 3, "sentence_id": "stt_0003", "text": "hello"}
+            ],
+        },
+    )
+    retriever = MagicMock()
+    retriever.retrieve.return_value = [chunk]
+    with (
+        patch("src.meeting.group_store.get_group", return_value=group),
+        patch("src.meeting.store.get_meeting", return_value=ready),
+        patch("src.meeting.transcript_index.load_sentences_for_meeting", return_value=[]),
+        patch("src.services.services") as services,
+    ):
+        services.retriever = retriever
+        services.reranker = None
+        data = json.loads(execute_group_lookup_json("g1", "hello"))
+    assert data["cites"][0]["n"] == 1
+    assert data["cites"][0]["sentence_id"] == "stt_0003"
+    assert "[n:k]" in data["cite_as"]

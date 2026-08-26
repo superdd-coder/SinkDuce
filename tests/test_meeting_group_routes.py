@@ -72,6 +72,53 @@ def test_add_member_and_delete_group_drops_session(client):
         drop.assert_called_once_with(gid)
 
 
+def test_add_member_starts_index_when_missing(client):
+    http, meeting = client
+    from src.meeting.store import create_meeting, update_meeting
+
+    other = create_meeting("Follow-up")
+    update_meeting(other.id, transcript_index_status="")
+    gid = http.post("/meeting-groups", json={"meeting_id": meeting.id, "title": "G"}).json()["id"]
+    with (
+        patch("src.meeting.store.get_sentences", return_value=[{"text": "hi"}]),
+        patch("src.meeting.routes.task_manager.create_task") as create_task,
+    ):
+        res = http.post(f"/meeting-groups/{gid}/members", json={"meeting_id": other.id})
+    assert res.status_code == 200
+    create_task.assert_called()
+    assert create_task.call_args.kwargs["task_type"] == "meeting_transcript_index"
+    assert create_task.call_args.kwargs["meeting_id"] == other.id
+
+
+def test_create_group_starts_index_when_missing(client):
+    http, meeting = client
+    from src.meeting.store import update_meeting
+
+    update_meeting(meeting.id, transcript_index_status="")
+    with (
+        patch("src.meeting.store.get_sentences", return_value=[{"text": "hi"}]),
+        patch("src.meeting.routes.task_manager.create_task") as create_task,
+    ):
+        res = http.post("/meeting-groups", json={"meeting_id": meeting.id, "title": "G"})
+    assert res.status_code == 200
+    create_task.assert_called()
+    assert create_task.call_args.kwargs["task_type"] == "meeting_transcript_index"
+    assert create_task.call_args.kwargs["meeting_id"] == meeting.id
+
+
+def test_add_member_skips_index_when_ready(client):
+    http, meeting = client
+    from src.meeting.store import create_meeting, update_meeting
+
+    other = create_meeting("Follow-up")
+    update_meeting(other.id, transcript_index_status="ready")
+    gid = http.post("/meeting-groups", json={"meeting_id": meeting.id, "title": "G"}).json()["id"]
+    with patch("src.meeting.routes.task_manager.create_task") as create_task:
+        res = http.post(f"/meeting-groups/{gid}/members", json={"meeting_id": other.id})
+    assert res.status_code == 200
+    create_task.assert_not_called()
+
+
 def test_delete_meeting_removes_from_groups(client):
     http, meeting = client
     from src.meeting.store import create_meeting, delete_meeting

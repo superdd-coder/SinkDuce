@@ -291,6 +291,50 @@ def stitch_group_hits(
     return "\n\n".join(blocks)
 
 
+def group_cites_from_hits(
+    hit_packs: list[dict[str, Any]],
+    meeting_meta: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Every hit sentence in retrieve order. Same *n* may appear many times.
+
+    LLM tokens stay [n] / [n:k]; the UI renumbers chips 1, 2, 3 in
+    appearance order. Successive [n] maps to the next sentence here.
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[int, str]] = set()
+    for pack in hit_packs:
+        mid = str(pack.get("meeting_id") or "")
+        n = int((meeting_meta.get(mid) or {}).get("n") or 0)
+        if not mid or n <= 0:
+            continue
+        for raw in pack.get("sentences") or []:
+            try:
+                ref_n = int(raw.get("ref_n") or 0)
+            except (TypeError, ValueError):
+                ref_n = 0
+            sid = str(raw.get("sentence_id") or "")
+            if ref_n and not sid:
+                sid = f"stt_{ref_n:04d}"
+            if not sid:
+                continue
+            key = (n, sid)
+            if key in seen:
+                continue
+            seen.add(key)
+            meta_row = meeting_meta.get(mid) or {}
+            out.append(
+                {
+                    "n": n,
+                    "meeting_id": mid,
+                    "ref_n": ref_n,
+                    "sentence_id": sid,
+                    "title": str(meta_row.get("title") or ""),
+                    "date": str(meta_row.get("date") or ""),
+                }
+            )
+    return out
+
+
 def speaker_ids_from_question(
     question: str, mapping: dict[str, str] | None
 ) -> list[str]:
@@ -1068,12 +1112,18 @@ def execute_group_lookup_json(
             reranker=services.reranker,
         )
     context = stitch_group_hits(hits, meta) if hits else ""
+    cites = group_cites_from_hits(hits, meta)
     body = {
         "group_id": group_id,
         "context": context,
         "hit_count": len(hits),
         "unindexed": unindexed,
         "meetings_searched": [c["meeting_id"] for c in clauses],
+        "cites": cites,
+        "cite_as": (
+            "[n:k] — n is the meeting header n, k is [ref:k] in the excerpts. "
+            "The UI renumbers chips 1,2,3 in appearance order. Do not paste excerpt lines."
+        ),
     }
     if unindexed:
         body["message"] = (

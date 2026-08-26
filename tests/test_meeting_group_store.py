@@ -93,6 +93,25 @@ def test_group_roster_lists_id_n_speakers_and_unindexed(groups_dir, tmp_path):
     assert "Follow-up" in text
 
 
+def test_touch_group_session_helper_updates_last_chat(groups_dir):
+    from src.chatbox.agent import _touch_group_session
+    from src.meeting.group_store import create_group, get_group
+
+    g = create_group(title="G", meeting_id="m_a")
+    before = g.last_chat_at
+    _touch_group_session(f"group_{g.id}")
+    after = get_group(g.id)
+    assert after is not None
+    assert after.last_chat_at >= before
+
+
+def test_touch_group_session_ignores_non_group():
+    from src.chatbox.agent import _touch_group_session
+
+    _touch_group_session("meeting_abc")
+    _touch_group_session("quick_x")
+
+
 def test_list_touch_delete(groups_dir):
     from src.meeting.group_store import (
         create_group,

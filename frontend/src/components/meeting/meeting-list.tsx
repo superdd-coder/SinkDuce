@@ -3,6 +3,7 @@ import { Trash2, Mic } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useT } from "@/i18n/use-t"
 import { Button } from "@/components/ui/button"
+import { Tabs, TabsIndicator, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
 import { CreateMeetingButton } from "./create-meeting-dialog"
 import type { Meeting, MeetingGroup } from "@/api/client"
@@ -49,8 +50,10 @@ export function MeetingList({
   const itemRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const [indicator, setIndicator] = useState({ top: 0, height: 0 })
   const [indicatorReady, setIndicatorReady] = useState(false)
+  const [listShown, setListShown] = useState(railTab)
+  const [listOpaque, setListOpaque] = useState(true)
 
-  const indicatorId = railTab === "groups" ? activeGroup : activeMeeting
+  const indicatorId = listShown === "groups" ? activeGroup : activeMeeting
   useEffect(() => {
     if (!indicatorId) {
       setIndicatorReady(false)
@@ -63,7 +66,7 @@ export function MeetingList({
       height: activeEl.offsetHeight,
     })
     requestAnimationFrame(() => setIndicatorReady(true))
-  }, [indicatorId, meetings, groups, railTab])
+  }, [indicatorId, meetings, groups, listShown])
 
   const formatTime = (iso?: string) => {
     if (!iso) return ""
@@ -92,36 +95,33 @@ export function MeetingList({
     return t("meeting.draft")
   }
 
-  const edgeFade = useScrollEdgeFade(listRef, meetings.length)
+  const edgeFade = useScrollEdgeFade(
+    listRef,
+    listShown === "groups" ? groups.length : meetings.length,
+  )
+  useEffect(() => {
+    if (listShown === railTab) return
+    setListOpaque(false)
+    const id = window.setTimeout(() => setListShown(railTab), 220)
+    return () => window.clearTimeout(id)
+  }, [railTab, listShown])
+  useEffect(() => {
+    if (listShown !== railTab || listOpaque) return
+    let inner = 0
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => setListOpaque(true))
+    })
+    return () => {
+      cancelAnimationFrame(outer)
+      cancelAnimationFrame(inner)
+    }
+  }, [listShown, railTab, listOpaque])
 
   return (
     <aside className="pm-meeting-rail" aria-label={t("meeting.meetings")}>
       <div className="pm-meeting-rail-surface">
         <div className="pm-meeting-rail-head pm-rail-head">
-          <div className="flex min-w-0 flex-1 flex-col gap-2">
-            {onRailTab && (
-              <div className="flex rounded-full p-0.5" style={{ background: "color-mix(in srgb, var(--pm-ink) 4%, transparent)" }}>
-                <button
-                  type="button"
-                  className={cn("flex-1 rounded-full py-1 text-[11px] tracking-wide", railTab === "meetings" && "bg-white shadow-sm")}
-                  onClick={() => onRailTab("meetings")}
-                >
-                  {t("meeting.meetingsTab")}
-                </button>
-                <button
-                  type="button"
-                  className={cn("flex-1 rounded-full py-1 text-[11px] tracking-wide", railTab === "groups" && "bg-white shadow-sm")}
-                  onClick={() => onRailTab("groups")}
-                >
-                  {t("meeting.groupsTab")}
-                </button>
-              </div>
-            )}
-            <h2 className="pm-meeting-rail-title pm-rail-title">
-              {railTab === "groups" ? t("meeting.groupsTab") : t("meeting.meetings")}
-            </h2>
-          </div>
-          {railTab !== "groups" && (
+          <h2 className="pm-meeting-rail-title pm-rail-title">{t("meeting.meetings")}</h2>
           <CreateMeetingButton
             onCreated={onCreated}
             stayOnCurrent={keepFocusOnCreate}
@@ -131,12 +131,31 @@ export function MeetingList({
                 : null
             }
           />
-          )}
         </div>
+        {onRailTab && (
+          <div className="px-3 pb-2">
+            <Tabs
+              value={railTab}
+              onValueChange={(v) => {
+                if (v === "meetings" || v === "groups") onRailTab(v)
+              }}
+              className="pm-meeting-rail-tabs gap-0"
+            >
+              <TabsList className="w-full" aria-label={t("meeting.meetings")}>
+                <TabsIndicator className="pm-tabs-indicator" renderBeforeHydration />
+                <TabsTrigger value="meetings">{t("meeting.meetingsTab")}</TabsTrigger>
+                <TabsTrigger value="groups">{t("meeting.groupsTab")}</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
+        )}
 
         <div className="pm-rail-list-shell">
-          <div ref={listRef} className="pm-meeting-rail-list">
-            {((railTab === "groups" && activeGroup) || (railTab !== "groups" && activeMeeting)) && (
+          <div
+            ref={listRef}
+            className={cn("pm-meeting-rail-list is-tab-fade", !listOpaque && "is-dim")}
+          >
+            {((listShown === "groups" && activeGroup) || (listShown !== "groups" && activeMeeting)) && (
               <div
                 className={cn(
                   "pm-chat-sess-indicator",
@@ -150,13 +169,13 @@ export function MeetingList({
               />
             )}
 
-            {railTab === "groups" && groups.length === 0 && (
+            {listShown === "groups" && groups.length === 0 && (
               <div className="pm-chat-sess-empty">
                 <p className="pm-meta">{t("meeting.noGroups")}</p>
               </div>
             )}
 
-            {railTab === "groups" && groups.map((g) => {
+            {listShown === "groups" && groups.map((g) => {
               const isActive = activeGroup === g.id
               return (
                 <div
@@ -191,6 +210,8 @@ export function MeetingList({
                       variant="ghost"
                       size="icon-xs"
                       className="pm-chat-sess-del"
+                      title={t("meeting.deleteGroup")}
+                      aria-label={t("meeting.deleteGroup")}
                       onClick={(e) => {
                         e.stopPropagation()
                         onDeleteGroup(g.id)
@@ -203,14 +224,14 @@ export function MeetingList({
               )
             })}
 
-            {railTab !== "groups" && meetings.length === 0 && (
+            {listShown !== "groups" && meetings.length === 0 && (
               <div className="pm-chat-sess-empty">
                 <Mic className="size-5 pm-chat-sess-empty-icon" />
                 <p className="pm-meta">{t("meeting.noMeetings")}</p>
               </div>
             )}
 
-            {railTab !== "groups" && meetings.map((m) => {
+            {listShown !== "groups" && meetings.map((m) => {
               const isActive = activeMeeting === m.id
               const isCapturing =
                 recordingMeetingId === m.id || m.status === "recording"
@@ -267,7 +288,7 @@ export function MeetingList({
                       {statusLabel(m)}
                     </span>
                     <span className="pm-chat-sess-meta-time">
-                      {formatTime(m.updated_at || m.created_at)}
+                      {formatTime(m.created_at || m.updated_at)}
                     </span>
                   </div>
                   <Button

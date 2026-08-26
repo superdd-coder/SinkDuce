@@ -13,6 +13,7 @@ MEETING_VIEW = ROOT / "frontend" / "src" / "components" / "meeting" / "meeting-v
 MEETING_LIST = ROOT / "frontend" / "src" / "components" / "meeting" / "meeting-list.tsx"
 MEETING_TABS = ROOT / "frontend" / "src" / "components" / "meeting" / "meeting-tabs.tsx"
 MEDIA_BAR = ROOT / "frontend" / "src" / "components" / "meeting" / "media-bar.tsx"
+MEETING_STUDIO = ROOT / "frontend" / "src" / "components" / "meeting" / "meeting-studio-stage.tsx"
 
 
 def test_meeting_rail_width_locked_to_collections_chat():
@@ -128,6 +129,16 @@ def test_meeting_stage_right_matches_collection_qc_width():
     assert ".pm-meeting-side-panel" in css
     assert ".pm-meeting-side-panel.is-active" in css
     assert ".pm-meeting-side-tabs" in css
+
+
+def test_meeting_side_tabs_group_follows_sections():
+    src = MEETING_STUDIO.read_text(encoding="utf-8")
+    i_sec = src.find('TabsTrigger value="sections"')
+    i_grp = src.find('TabsTrigger value="groups"')
+    i_tx = src.find('TabsTrigger value="transcript"')
+    i_spk = src.find('TabsTrigger value="speaker"')
+    assert min(i_sec, i_grp, i_tx, i_spk) > 0
+    assert i_sec < i_grp < i_tx < i_spk
 
 
 def test_meeting_list_uses_rail_and_compact_new():

@@ -1,12 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
-import { X } from "lucide-react"
+import { useCallback, useEffect, useMemo, useRef, useState, type TransitionEvent } from "react"
+import { PanelRightClose } from "lucide-react"
+import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { useT } from "@/i18n/use-t"
-import { Button } from "@/components/ui/button"
+import { formatApiError } from "@/api/http"
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
+  DialogKicker,
   DialogTitle,
 } from "@/components/ui/dialog"
 import {
@@ -15,42 +18,77 @@ import {
   getMeeting,
   getMeetingGroup,
   getMeetingTranscript,
+  removeMeetingGroupMember,
   type Meeting,
   type MeetingGroup,
   type TranscriptSegment,
 } from "@/api/meeting"
 import { MeetingQuickChat } from "./meeting-quick-chat"
 import { TranscriptTab } from "./transcript-panel"
+import { MeetingPickList } from "./meeting-pick-list"
+import { MediaBar, type MediaBarHandle } from "./media-bar"
+
+function findTranscriptHit(
+  segs: TranscriptSegment[],
+  sentenceId?: string,
+): TranscriptSegment | undefined {
+  const raw = (sentenceId || "").trim()
+  if (!raw || segs.length === 0) return undefined
+  const exact = segs.find((s) => s.sentence_id === raw || s.sentence_id?.endsWith(raw))
+  if (exact) return exact
+  const num = raw.match(/(\d+)/)?.[1]
+  if (!num) return undefined
+  const padded = `stt_${num.padStart(4, "0")}`
+  const byId = segs.find((s) => s.sentence_id === padded || s.sentence_id?.endsWith(padded))
+  if (byId) return byId
+  const idx = parseInt(num, 10) - 1
+  if (idx >= 0 && idx < segs.length) return segs[idx]
+  return undefined
+}
 
 export function MeetingGroupStage({
   groupId,
   meetings,
   onOpenMeeting,
   onGroupChanged,
+  onMeetingsChanged,
 }: {
   groupId: string
   meetings: Meeting[]
   onOpenMeeting: (id: string) => void
   onGroupChanged: (g: MeetingGroup) => void
+  onMeetingsChanged?: () => void
 }) {
   const t = useT()
   const [group, setGroup] = useState<MeetingGroup | null>(null)
-  const [overlayN, setOverlayN] = useState<number | null>(null)
   const [overlayMeeting, setOverlayMeeting] = useState<Meeting | null>(null)
+  const [overlayOpen, setOverlayOpen] = useState(false)
+  const overlayOpenRef = useRef(false)
+  overlayOpenRef.current = overlayOpen
   const [segments, setSegments] = useState<TranscriptSegment[]>([])
   const [joinOpen, setJoinOpen] = useState(false)
   const [focusRef, setFocusRef] = useState<{ id: string; ts: number } | undefined>()
+  const [playbackTime, setPlaybackTime] = useState<number | null>(null)
+  const mediaBarRef = useRef<MediaBarHandle | null>(null)
+  const pendingSeekRef = useRef<number | null>(null)
+  const noop = useRef(() => {}).current
+
+  const onGroupChangedRef = useRef(onGroupChanged)
+  onGroupChangedRef.current = onGroupChanged
 
   const reload = useCallback(() => {
     void getMeetingGroup(groupId).then((g) => {
       setGroup(g)
-      onGroupChanged(g)
+      onGroupChangedRef.current(g)
     })
-  }, [groupId, onGroupChanged])
+  }, [groupId])
 
   useEffect(() => {
-    setOverlayN(null)
     setOverlayMeeting(null)
+    setOverlayOpen(false)
+    overlayOpenRef.current = false
+    setSegments([])
+    pendingSeekRef.current = null
     reload()
   }, [groupId, reload])
 
@@ -60,23 +98,84 @@ export function MeetingGroupStage({
     return m
   }, [meetings])
 
-  const openOverlay = async (n: number) => {
-    const mem = group?.members.find((x) => x.n === n)
+  const citeMeetings = useMemo(
+    () =>
+      (group?.members || []).map((mem) => {
+        const m = meetingById.get(mem.meeting_id)
+        return {
+          id: mem.meeting_id,
+          title: m?.title || mem.meeting_id,
+          created_at: m?.created_at,
+        }
+      }),
+    [group, meetingById],
+  )
+
+  const seekPlayer = (start?: number) => {
+    const t = start != null && Number.isFinite(start) ? start : 0
+    pendingSeekRef.current = t
+    mediaBarRef.current?.seekTo(t)
+  }
+
+  useEffect(() => {
+    const t = pendingSeekRef.current
+    if (t == null || !overlayMeeting) return
+    const id = requestAnimationFrame(() => {
+      mediaBarRef.current?.seekTo(t)
+    })
+    return () => cancelAnimationFrame(id)
+  }, [overlayMeeting?.id, segments, focusRef?.ts])
+
+  const finishOverlayExit = (e: TransitionEvent<HTMLElement>) => {
+    if (e.target !== e.currentTarget) return
+    if (e.propertyName !== "opacity") return
+    if (overlayOpenRef.current) return
+    setOverlayMeeting(null)
+    setSegments([])
+    setPlaybackTime(null)
+  }
+
+  const closeOverlay = () => {
+    setOverlayOpen(false)
+    pendingSeekRef.current = null
+    setPlaybackTime(null)
+    if (typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setOverlayMeeting(null)
+      setSegments([])
+    }
+  }
+
+  const openOverlay = async (n: number, sentenceId?: string, meetingId?: string) => {
+    const mem =
+      group?.members.find((x) => Number(x.n) === Number(n)) ||
+      (meetingId ? group?.members.find((x) => x.meeting_id === meetingId) : undefined)
     if (!mem) return
-    setOverlayN(n)
-    const m = meetingById.get(mem.meeting_id) || (await getMeeting(mem.meeting_id))
-    setOverlayMeeting(m)
+    const cached = meetingById.get(mem.meeting_id)
+    if (cached) setOverlayMeeting(cached)
+    setOverlayOpen(true)
+    setPlaybackTime(null)
     try {
+      const m = cached || (await getMeeting(mem.meeting_id))
+      setOverlayMeeting(m)
       const trs = await getMeetingTranscript(mem.meeting_id)
       const segs = (trs.segments || []) as TranscriptSegment[]
       setSegments(segs)
-      const first = segs[0]
-      if (first?.sentence_id) {
-        setFocusRef({ id: first.sentence_id, ts: Date.now() })
+      const hit = findTranscriptHit(segs, sentenceId)
+      const focusId = hit?.sentence_id || sentenceId || segs[0]?.sentence_id
+      if (focusId) {
+        setFocusRef({ id: focusId, ts: Date.now() })
       }
+      seekPlayer(hit?.start ?? segs[0]?.start ?? 0)
     } catch {
       setSegments([])
     }
+  }
+
+  const removeMember = async (meetingId: string) => {
+    const g = await removeMeetingGroupMember(groupId, meetingId)
+    setGroup(g)
+    onGroupChanged(g)
+    if (overlayMeeting?.id === meetingId) closeOverlay()
   }
 
   const addExisting = async (meetingId: string) => {
@@ -87,14 +186,32 @@ export function MeetingGroupStage({
   }
 
   const addNew = async () => {
-    const created = await createMeeting()
-    const g = await addMeetingGroupMember(groupId, created.id)
-    setGroup(g)
-    onGroupChanged(g)
-    onOpenMeeting(created.id)
+    try {
+      const title = new Date().toLocaleString("zh-CN", {
+        year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit",
+      }).replace(/\//g, "-")
+      const created = await createMeeting(title)
+      const g = await addMeetingGroupMember(groupId, created.id)
+      setGroup(g)
+      onGroupChanged(g)
+      onMeetingsChanged?.()
+      toast.success(t("meeting.meetingCreated"))
+      onOpenMeeting(created.id)
+    } catch (err) {
+      toast.error(t("common.failedWithError", { error: formatApiError(err, t) }))
+    }
   }
 
-  const overlayMember = group?.members.find((m) => m.n === overlayN)
+  const statusLabel = (m: Meeting | undefined) => {
+    if (!m) return ""
+    if (m.status === "recording") return t("meeting.recording")
+    if (m.status === "transcribing") return t("meeting.transcribing")
+    if (m.processing_state === "summarizing") return t("meeting.summarizing")
+    if (m.status === "completed") return t("common.ready")
+    return t("meeting.draft")
+  }
+
   const inGroup = new Set((group?.members || []).map((m) => m.meeting_id))
   const joinCandidates = meetings.filter((m) => !inGroup.has(m.id))
 
@@ -113,93 +230,96 @@ export function MeetingGroupStage({
             onClose={() => {}}
             layout="dock"
             sessionKind="group"
-            onGroupCite={(n) => void openOverlay(n)}
+            onGroupCite={(n, sentenceId, meetingId) => void openOverlay(n, sentenceId, meetingId)}
+            citeMeetings={citeMeetings}
           />
         )}
       </div>
 
       <div className="relative min-h-0 min-w-0">
         <section className="absolute inset-0 flex min-h-0 flex-col overflow-hidden rounded-[20px] bg-[var(--pm-float,#fdfbf7)] shadow-[var(--pm-shadow)]">
-          <div className="flex items-baseline justify-between px-3.5 pb-2 pt-3.5">
-            <h3 className="m-0 text-[13px] uppercase tracking-wide">{t("meeting.groupMembers")}</h3>
-            <span className="text-[11px] text-muted-foreground">{group?.members.length || 0}</span>
+          <div className="pm-meeting-rail-head">
+            <h3 className="pm-meeting-rail-title m-0 min-w-0 truncate">{t("meeting.groupMembers")}</h3>
+            <span className="pm-meta tabular-nums shrink-0">{group?.members.length || 0}</span>
           </div>
-          <div className="flex gap-2 px-3.5 pb-3">
-            <Button type="button" variant="ghost" className="h-9 flex-1 rounded-full" onClick={() => void addNew()}>
+          <div className="pm-meeting-group-actions mx-3 mb-2">
+            <button type="button" className="pm-meeting-group-action" onClick={() => void addNew()}>
               {t("meeting.addNewMeeting")}
-            </Button>
-            <Button type="button" variant="ghost" className="h-9 flex-1 rounded-full" onClick={() => setJoinOpen(true)}>
+            </button>
+            <button type="button" className="pm-meeting-group-action" onClick={() => setJoinOpen(true)}>
               {t("meeting.addExistingMeeting")}
-            </Button>
+            </button>
           </div>
-          <div className="min-h-0 flex-1 overflow-auto px-2 pb-3">
-            {(group?.members || [])
-              .slice()
-              .sort((a, b) => {
-                const da = meetingById.get(a.meeting_id)?.created_at || ""
-                const db = meetingById.get(b.meeting_id)?.created_at || ""
-                return da.localeCompare(db)
-              })
-              .map((mem) => {
+          <div className="min-h-0 flex-1 overflow-hidden px-2 pb-2">
+            <MeetingPickList
+              items={(group?.members || []).map((mem) => {
                 const m = meetingById.get(mem.meeting_id)
-                return (
-                  <button
-                    type="button"
-                    key={mem.meeting_id}
-                    className="mb-2 w-full rounded-xl bg-white px-3 py-2.5 text-left shadow-[var(--pm-shadow-sm)]"
-                    onClick={() => onOpenMeeting(mem.meeting_id)}
-                  >
-                    <div className="text-[13px]">
-                      {mem.n}{" "}
-                      {m?.title || mem.meeting_id}
-                    </div>
-                    <div className="mt-0.5 text-[11px] text-muted-foreground">
-                      {m?.transcript_index_status === "ready" ? t("common.ready") : (m?.transcript_index_status || "")}
-                    </div>
-                  </button>
-                )
+                return {
+                  id: mem.meeting_id,
+                  title: m?.title || mem.meeting_id,
+                  status: statusLabel(m),
+                  sortAt: m?.created_at || m?.updated_at,
+                }
               })}
+              emptyText={t("meeting.groupMembersEmpty")}
+              onSelect={(id) => onOpenMeeting(id)}
+              onRemove={(id) => void removeMember(id)}
+              removeLabel={t("meeting.removeFromGroup")}
+            />
           </div>
         </section>
 
         <section
-          className={cn(
-            "absolute inset-0 z-[2] flex min-h-0 flex-col overflow-hidden rounded-[20px] bg-[var(--pm-float,#fdfbf7)] shadow-[var(--pm-shadow)] transition-opacity",
-            overlayMeeting ? "opacity-100" : "pointer-events-none opacity-0",
-          )}
+          className={cn("pm-meeting-tx-overlay", overlayOpen && "is-open")}
+          onTransitionEnd={finishOverlayExit}
         >
-          <div className="flex items-center justify-between gap-2 px-3 pb-2 pt-3">
-            <h3 className="m-0 text-[13px] uppercase tracking-wide">
+          <div className="pm-meeting-tx-overlay-head">
+            <h3 className="pm-meeting-tx-overlay-title">
               {overlayMeeting?.title || ""}
             </h3>
-            <Button
+            <button
               type="button"
-              variant="ghost"
-              size="icon-xs"
-              onClick={() => {
-                setOverlayN(null)
-                setOverlayMeeting(null)
-              }}
+              className="pm-meeting-side-collapse"
+              title={t("meeting.collapseTranscript")}
               aria-label={t("meeting.collapseTranscript")}
+              onClick={closeOverlay}
             >
-              <X className="size-3.5" />
-            </Button>
+              <PanelRightClose className="size-3.5" />
+            </button>
           </div>
-          {overlayMeeting?.audio_path && (
-            <div className="mx-3 mb-2 rounded-xl bg-white p-2.5 shadow-[var(--pm-shadow-sm)]">
-              <audio
-                className="w-full"
-                controls
-                src={`/api/meetings/${overlayMeeting.id}/audio`}
+          {overlayMeeting?.audio_path ? (
+            <div className="mx-3 mb-2 overflow-hidden rounded-[20px] bg-white px-3.5 py-2.5 shadow-[var(--pm-shadow-sm)]">
+              <MediaBar
+                ref={mediaBarRef}
+                meetingId={overlayMeeting.id}
+                status={overlayMeeting.status}
+                hasAudio
+                audioPath={overlayMeeting.audio_path}
+                audioUrl={`/api/meetings/${overlayMeeting.id}/audio`}
+                audioVersion={0}
+                duration={0}
+                isRecording={false}
+                isPaused={false}
+                onUploadAudio={noop}
+                onStartRecord={noop}
+                onStopRecord={noop}
+                onPauseRecord={noop}
+                onResumeRecord={noop}
+                onTranscribe={noop}
+                hasRealtimeProvider={false}
+                hasTranscript
+                playbackOnly
+                onTimeUpdate={setPlaybackTime}
               />
             </div>
-          )}
-          <div className="min-h-0 flex-1 overflow-hidden px-1">
+          ) : null}
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-1">
             <TranscriptTab
               segments={segments}
-              onSegmentClick={() => {}}
+              onSegmentClick={(start) => seekPlayer(start)}
               focusRef={focusRef}
               speakerNames={overlayMeeting?.speaker_names ?? {}}
+              playbackTime={playbackTime}
               showSearch
             />
           </div>
@@ -207,21 +327,24 @@ export function MeetingGroupStage({
       </div>
 
       <Dialog open={joinOpen} onOpenChange={setJoinOpen}>
-        <DialogContent>
-          <DialogHeader>
+        <DialogContent className="pm-meeting-join-dialog">
+          <DialogHeader className="pm-dialog-header--premium">
+            <DialogKicker>{t("meeting.groupsTab")}</DialogKicker>
             <DialogTitle>{t("meeting.joinGroupTitle")}</DialogTitle>
+            <DialogDescription>{t("meeting.joinGroupHint")}</DialogDescription>
           </DialogHeader>
-          <div className="max-h-72 overflow-auto">
-            {joinCandidates.map((m) => (
-              <button
-                type="button"
-                key={m.id}
-                className="mb-2 w-full rounded-xl bg-white px-3 py-2 text-left shadow-[var(--pm-shadow-sm)]"
-                onClick={() => void addExisting(m.id)}
-              >
-                {m.title}
-              </button>
-            ))}
+          <div className="pm-dialog-body min-w-0">
+            <MeetingPickList
+              items={joinCandidates.map((m) => ({
+                id: m.id,
+                title: m.title,
+                status: statusLabel(m),
+                sortAt: m.created_at || m.updated_at,
+              }))}
+              emptyText={t("meeting.joinGroupEmpty")}
+              filterPlaceholder={t("meeting.pickFilterMeetings")}
+              onSelect={(id) => void addExisting(id)}
+            />
           </div>
         </DialogContent>
       </Dialog>
