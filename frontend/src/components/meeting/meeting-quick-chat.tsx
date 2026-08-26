@@ -5,8 +5,32 @@ import { cn } from "@/lib/utils"
 import { createImeEnterGuard } from "@/lib/ime"
 import { humanSourceLabel } from "@/lib/source-display"
 import { parseMeetingRefGroups, MEETING_CITE_RE_SOURCE } from "@/lib/meeting-ref-chips"
+import {
+  displayedGroupCites,
+  enrichGroupCites,
+  formatGroupCiteDate,
+  GROUP_CITE_HOVER_DELAY_MS,
+  GROUP_CITE_RE_SOURCE,
+  groupCitesFromToolTrace,
+  mergeGroupCites,
+  nextGroupCiteOccurrence,
+  parseCitesFromToolBody,
+  parseGroupCites,
+  resolveGroupCite,
+  resolveGroupCiteByRefN,
+  type CiteMeetingLookup,
+  type DisplayedGroupCite,
+  type GroupCite,
+} from "@/lib/group-cites"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
 import { createSession, getSession, deleteSession, iterateSessionSse, postSessionMessage } from "@/api/client"
+import { getMeeting, startTranscriptIndex, type Meeting } from "@/api/meeting"
 import { useT } from "@/i18n/use-t"
 import { tr } from "@/i18n/tr"
 
@@ -18,6 +42,7 @@ interface QAMessage {
   content: string
   thinkingContent?: string
   sources?: { text: string; score: number; metadata: Record<string, unknown> }[]
+  groupCites?: GroupCite[]
   isStreaming?: boolean
   isNew?: boolean
 }
@@ -429,6 +454,11 @@ interface MeetingQuickChatProps {
    * rail — legacy flex-sibling that expands width when open (default).
    */
   layout?: "dock" | "rail"
+  indexStatus?: Meeting["transcript_index_status"]
+  /** group — session group_{id}, citations [n], no index overlay */
+  sessionKind?: "meeting" | "group"
+  onGroupCite?: (n: number, sentenceId?: string, meetingId?: string) => void
+  citeMeetings?: CiteMeetingLookup[]
 }
 
 export function MeetingQuickChat({
@@ -440,8 +470,24 @@ export function MeetingQuickChat({
   onRefClick,
   className,
   layout = "rail",
+  indexStatus: indexStatusProp,
+  sessionKind = "meeting",
+  onGroupCite,
+  citeMeetings,
 }: MeetingQuickChatProps) {
   const t = useT()
+  const handleGroupCite = useCallback((
+    n: number,
+    occurrence = 0,
+    cites?: GroupCite[],
+    refN?: number,
+  ) => {
+    const cite = resolveGroupCite(cites || [], n, { refN, occurrence })
+    onGroupCite?.(n, cite?.sentence_id, cite?.meeting_id)
+  }, [onGroupCite])
+  const [indexStatus, setIndexStatus] = useState(indexStatusProp || "")
+  const [indexError, setIndexError] = useState("")
+  const [indexStarting, setIndexStarting] = useState(false)
   const [messages, setMessages] = useState<QAMessage[]>([])
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState(false)
@@ -461,6 +507,39 @@ export function MeetingQuickChat({
   const [hintMessage, setHintMessage] = useState(() => t(HINT_KEYS[0]))
   const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  useEffect(() => {
+    setIndexStatus(indexStatusProp || "")
+  }, [indexStatusProp])
+
+  useEffect(() => {
+    if (!open || indexStatus !== "building") return
+    let stop = false
+    const tick = async () => {
+      try {
+        const m = await getMeeting(meetingId)
+        if (stop) return
+        setIndexStatus(m.transcript_index_status || "")
+        setIndexError(m.transcript_index_error || "")
+      } catch { /* ignore */ }
+    }
+    const id = setInterval(tick, 2000)
+    void tick()
+    return () => { stop = true; clearInterval(id) }
+  }, [open, indexStatus, meetingId])
+
+  const buildIndex = async () => {
+    setIndexStarting(true)
+    try {
+      const m = await startTranscriptIndex(meetingId)
+      setIndexStatus(m.transcript_index_status || "building")
+      setIndexError(m.transcript_index_error || "")
+    } catch (e) {
+      setIndexError(e instanceof Error ? e.message : "failed")
+    } finally {
+      setIndexStarting(false)
+    }
+  }
+
   // ── Init session ──
 
   const prevMeetingIdRef = useRef(meetingId)
@@ -479,10 +558,10 @@ export function MeetingQuickChat({
     // the brief transition when the meeting object is still loading.
     if (!meetingId || !meetingTitle || hasInitializedRef.current) return
     hasInitializedRef.current = true
-    const sid = `${MEETING_SESSION_PREFIX}${meetingId}`
+    const sid = `${sessionKind === "group" ? "group_" : MEETING_SESSION_PREFIX}${meetingId}`
     setSessionId(sid)
     initSession(sid)
-  }, [meetingId, meetingTitle])
+  }, [meetingId, meetingTitle, sessionKind])
 
   const initSession = async (sid: string) => {
     setLoadingHistory(true)
@@ -490,22 +569,32 @@ export function MeetingQuickChat({
       const detail = await getSession(sid).catch(() => null)
       if (detail?.messages?.length) {
         // Dialogue only (skip system transcript / tool placeholders)
-        const msgs: QAMessage[] = detail.messages
-          .filter((m) => {
-            if (m.role === "user") return true
-            if (m.role === "assistant") {
-              const meta = (m.metadata ?? {}) as Record<string, unknown>
-              if (!m.content && meta.tool_calls) return false
-              return !!(m.content || "").trim()
-            }
-            return false
-          })
-          .map((m) => ({
-            id: m.id,
-            role: m.role as "user" | "assistant",
-            content: m.content,
-            sources: m.sources ?? undefined,
-          }))
+        const msgs: QAMessage[] = []
+        let pendingCites: GroupCite[] = []
+        for (const m of detail.messages) {
+          const meta = (m.metadata ?? {}) as Record<string, unknown>
+          if (m.role === "user") {
+            pendingCites = []
+            msgs.push({ id: m.id, role: "user", content: m.content })
+            continue
+          }
+          if (String(m.role) === "tool" || (m.role === "assistant" && !m.content && meta.tool_calls)) {
+            pendingCites = mergeGroupCites(pendingCites, parseCitesFromToolBody(m.content))
+            pendingCites = mergeGroupCites(pendingCites, groupCitesFromToolTrace(meta))
+            continue
+          }
+          if (m.role === "assistant") {
+            if (!(m.content || "").trim()) continue
+            msgs.push({
+              id: m.id,
+              role: "assistant",
+              content: m.content,
+              sources: m.sources ?? undefined,
+              groupCites: mergeGroupCites(groupCitesFromToolTrace(meta), pendingCites),
+            })
+            pendingCites = []
+          }
+        }
         setMessages(msgs)
         setMsgCount(countTurns(msgs))
       } else {
@@ -614,6 +703,7 @@ export function MeetingQuickChat({
   const send = useCallback(async () => {
     const text = input.trim()
     if (!text || streaming || !sessionId) return
+    if (sessionKind !== "group" && indexStatus !== "ready") return
 
     setInput("")
     if (textareaRef.current) {
@@ -678,7 +768,7 @@ export function MeetingQuickChat({
       setStreaming(false)
       abortRef.current = null
     }
-  }, [input, streaming, sessionId, meetingId, pinToBottom])
+  }, [input, streaming, sessionId, meetingId, pinToBottom, indexStatus, sessionKind])
 
   const handleSSEEvent = (
     assistantId: string, type: string,
@@ -694,16 +784,35 @@ export function MeetingQuickChat({
           m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + `\n🔍 Searching: ${data.query || ""}...` } : m
         ));
         break
-      case "tool_call_start":
+      case "tool_call_start": {
+        const tool = String(data.tool || "tool")
+        const q = data.raw_query || data.query
+        const line = q
+          ? `\n📡 ${tool}: ${String(q).slice(0, 120)}`
+          : `\n📡 ${tool}`
         setMessages((prev) => prev.map((m) =>
-          m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + `\n📡 Calling ${data.tool || "tool"}...` } : m
+          m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + line } : m
         ));
         break
-      case "tool_result":
+      }
+      case "tool_result": {
+        const n = data.sources_count
+        const line = typeof n === "number"
+          ? `\n✅ ${tr("meeting.txLookupHits", { n })}`
+          : `\n✅ ${t("common.done")}`
         setMessages((prev) => prev.map((m) =>
-          m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + `\n✅ Found ${data.sources_count || 0} sources` } : m
+          m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + line } : m
         ));
+        const extra = parseGroupCites(data.cites)
+        if (extra.length > 0) {
+          setMessages((prev) => prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, groupCites: mergeGroupCites(m.groupCites, extra) }
+              : m,
+          ))
+        }
         break
+      }
       case "done":
         console.log("[QuickChat] DONE event received — sources:", data.sources, "type:", typeof data.sources, "isArray:", Array.isArray(data.sources))
         if (data.sources) {
@@ -764,7 +873,7 @@ export function MeetingQuickChat({
   const panelContent = (
     <div
       className={cn(
-        "pm-qc-panel",
+        "pm-qc-panel relative",
         layout === "dock" && "pm-meeting-qc-dock-inner",
       )}
       style={layout === "rail" ? { width: SIDEBAR_W } : undefined}
@@ -834,6 +943,38 @@ export function MeetingQuickChat({
         </div>
       </header>
 
+      {sessionKind !== "group" && indexStatus !== "ready" ? (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-7">
+          <div className="pm-qc-empty">
+          {indexStatus === "building" ? (
+            <>
+              <span className="pm-qc-empty-icon" aria-hidden>
+                <Loader2 className="size-5 animate-spin" strokeWidth={1.75} />
+              </span>
+              <p className="pm-qc-empty-title">{t("meeting.txIndexNeedTitle")}</p>
+              <p className="pm-qc-empty-sub">{t("meeting.txIndexBuilding")}</p>
+            </>
+          ) : (
+            <>
+              <p className="pm-qc-empty-title">{t("meeting.txIndexNeedTitle")}</p>
+              <p className="pm-qc-empty-sub">{t("meeting.txIndexNeedBuild")}</p>
+              {indexStatus === "failed" && (
+                <p className="pm-qc-empty-sub text-[var(--pm-danger)]">{indexError || t("meeting.txIndexFailed")}</p>
+              )}
+              <button
+                type="button"
+                className="pm-meeting-pill is-compact mt-1"
+                onClick={() => void buildIndex()}
+                disabled={indexStarting}
+              >
+                {indexStarting ? t("meeting.txIndexBuilding") : t("meeting.txIndexBuild")}
+              </button>
+            </>
+          )}
+          </div>
+        </div>
+      ) : (
+      <>
       <div className="pm-panel-scroll-shell pm-qc-thread-shell">
       <div
         ref={messagesScrollRef}
@@ -898,7 +1039,14 @@ export function MeetingQuickChat({
                     )}
                     {msg.content ? (
                       <div className="pm-qc-answer break-words">
-                        <TimeContent content={msg.content} onRefClick={onRefClick} />
+                        <TimeContent
+                          content={msg.content}
+                          onRefClick={onRefClick}
+                          onGroupCite={onGroupCite
+                            ? (n, occurrence, refN) => handleGroupCite(n, occurrence, msg.groupCites, refN)
+                            : undefined}
+                          groupCites={enrichGroupCites(msg.groupCites || [], citeMeetings)}
+                        />
                       </div>
                     ) : msg.isStreaming ? (
                       <div className="pm-qc-typing">
@@ -910,8 +1058,17 @@ export function MeetingQuickChat({
                     )}
                     {msg.role === "assistant" &&
                       !msg.isStreaming &&
-                      msg.sources &&
-                      msg.sources.length > 0 && (
+                      (() => {
+                        const groupShown = onGroupCite
+                          ? displayedGroupCites(
+                              msg.content,
+                              enrichGroupCites(msg.groupCites || [], citeMeetings),
+                            )
+                          : []
+                        const ragSources = msg.sources && msg.sources.length > 0 ? msg.sources : []
+                        if (groupShown.length === 0 && ragSources.length === 0) return null
+                        const sourceCount = groupShown.length || ragSources.length
+                        return (
                         <div className="pm-qc-sources">
                           <button
                             type="button"
@@ -924,7 +1081,7 @@ export function MeetingQuickChat({
                             }
                             className="pm-qc-sources-toggle"
                           >
-                            <span>{t("library.sourcesN", { n: msg.sources.length })}</span>
+                            <span>{t("library.sourcesN", { n: sourceCount })}</span>
                             <svg
                               className={cn(
                                 "size-3 transition-transform duration-300",
@@ -948,7 +1105,40 @@ export function MeetingQuickChat({
                           >
                             <div className="overflow-hidden">
                               <div className="pm-qc-sources-list">
-                                {msg.sources.slice(0, 8).map((s, i) => {
+                                {groupShown.length > 0
+                                  ? groupShown.map((s) => (
+                                      <button
+                                        type="button"
+                                        key={`${s.displayIndex}-${s.meeting_id}-${s.sentence_id}`}
+                                        className="pm-qc-source-item"
+                                        onClick={() =>
+                                          handleGroupCite(
+                                            s.n,
+                                            s.occurrence,
+                                            msg.groupCites,
+                                            s.tokenRefN ?? s.ref_n,
+                                          )
+                                        }
+                                      >
+                                        <div className="flex items-center gap-1.5 min-w-0">
+                                          <span className="pm-qc-source-idx">{s.displayIndex}</span>
+                                          <span className="truncate font-medium">
+                                            {s.title || s.meeting_id || ""}
+                                          </span>
+                                        </div>
+                                        <div className="pm-qc-source-meta">
+                                          {[
+                                            formatGroupCiteDate(s.date),
+                                            s.sentence_id
+                                              ? t("meeting.citeSentenceId", { id: s.sentence_id })
+                                              : "",
+                                          ]
+                                            .filter(Boolean)
+                                            .join(" · ")}
+                                        </div>
+                                      </button>
+                                    ))
+                                  : ragSources.slice(0, 8).map((s, i) => {
                                   const src = (s.metadata?.source || s.metadata?.filename) as
                                     | string
                                     | undefined
@@ -976,7 +1166,8 @@ export function MeetingQuickChat({
                             </div>
                           </div>
                         </div>
-                      )}
+                        )
+                      })()}
                   </div>
                 </div>
               ),
@@ -1027,6 +1218,8 @@ export function MeetingQuickChat({
           />
         </div>
       </div>
+      </>
+      )}
     </div>
   )
 
@@ -1127,12 +1320,63 @@ export function MeetingQuickChat({
 // ── Sentence-ref aware inline renderer ──
 // Clickable [ref:N] chips; ranges expand via parseMeetingRefGroups.
 
-function renderInlineWithRefs(text: string, onRefClick?: (sentenceId: string) => void): ReactNode[] {
+function nextDisplayedCite(
+  displayed: DisplayedGroupCite[] | undefined,
+  cursor: { i: number } | undefined,
+): DisplayedGroupCite | undefined {
+  if (!displayed || !cursor) return undefined
+  const shown = displayed[cursor.i]
+  if (shown) cursor.i += 1
+  return shown
+}
+
+function GroupCiteChip({
+  displayIndex,
+  meetingTitle,
+  onClick,
+}: {
+  displayIndex: number
+  meetingTitle?: string
+  onClick: () => void
+}) {
+  const btn = (
+    <button
+      type="button"
+      className="pm-meeting-ref-chip"
+      onClick={(e) => {
+        e.stopPropagation()
+        onClick()
+      }}
+    >
+      {String(displayIndex)}
+    </button>
+  )
+  if (!meetingTitle) return btn
+  return (
+    <Tooltip>
+      <TooltipTrigger render={btn} />
+      <TooltipContent>{meetingTitle}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+function renderInlineWithRefs(
+  text: string,
+  onRefClick?: (sentenceId: string) => void,
+  onGroupCite?: (n: number, occurrence?: number, refN?: number) => void,
+  occ?: Map<number, number>,
+  groupCites?: GroupCite[],
+  displayed?: DisplayedGroupCite[],
+  cursor?: { i: number },
+): ReactNode[] {
+  const citeOcc = occ ?? new Map<number, number>()
+  const cites = groupCites || []
   const parts: ReactNode[] = []
   // [ref:67] / [ref:1-5] / [ref:47, 78-86] and 【ref:…】 variants.
-  // Bare [67] is ordinary text — do not chip it.
+  // Group: [n] / [n:k] / ([n]) — chip shows sequential 1,2,3.
   const regex = new RegExp(
-    `(\\*\\*(.+?)\\*\\*)|(\\*(.+?)\\*)|(\`(.+?)\`)|(${MEETING_CITE_RE_SOURCE})|((?:\\[|【)\\s*priority:\\s*(high|medium|low)\\s*(?:\\]|】))`,
+    `(\\*\\*(.+?)\\*\\*)|(\\*(.+?)\\*)|(\`(.+?)\`)|(${MEETING_CITE_RE_SOURCE})|((?:\\[|【)\\s*priority:\\s*(high|medium|low)\\s*(?:\\]|】))` +
+      (onGroupCite ? `|(${GROUP_CITE_RE_SOURCE})` : ""),
     "gi",
   )
   let lastIdx = 0
@@ -1143,24 +1387,63 @@ function renderInlineWithRefs(text: string, onRefClick?: (sentenceId: string) =>
       parts.push(<span key={`t${lastIdx}`}>{text.slice(lastIdx, match.index)}</span>)
     }
     if (match[1]) {
-      parts.push(<strong key={`b${lastIdx}`}>{renderInlineWithRefs(match[2], onRefClick)}</strong>)
+      parts.push(<strong key={`b${lastIdx}`}>{renderInlineWithRefs(match[2], onRefClick, onGroupCite, citeOcc, groupCites, displayed, cursor)}</strong>)
     } else if (match[3]) {
-      parts.push(<em key={`i${lastIdx}`}>{renderInlineWithRefs(match[4], onRefClick)}</em>)
+      parts.push(<em key={`i${lastIdx}`}>{renderInlineWithRefs(match[4], onRefClick, onGroupCite, citeOcc, groupCites, displayed, cursor)}</em>)
     } else if (match[5]) {
       parts.push(<code key={`c${lastIdx}`} className="bg-muted px-1 rounded text-xs t-mono-family">{match[6]}</code>)
     } else if (match[8]) {
       const groups = parseMeetingRefGroups(match[8])
       for (const [gi, g] of groups.entries()) {
+        const refN = /^\d+$/.test(g.label.trim())
+          ? parseInt(g.label.trim(), 10)
+          : NaN
+        const mapped = onGroupCite && Number.isFinite(refN)
+          ? resolveGroupCiteByRefN(cites, refN)
+          : undefined
+        if (onGroupCite) {
+          if (!mapped?.sentence_id || mapped.n == null) continue
+          const n = mapped.n
+          const shown = nextDisplayedCite(displayed, cursor)
+          parts.push(
+            <GroupCiteChip
+              key={`r${lastIdx}${gi}`}
+              displayIndex={shown?.displayIndex ?? n}
+              meetingTitle={shown?.title || mapped.title}
+              onClick={() => onGroupCite(n, 0, mapped.ref_n ?? refN)}
+            />,
+          )
+          continue
+        }
         parts.push(
           <button
             type="button"
             key={`r${lastIdx}${gi}`}
             className="pm-meeting-ref-chip"
-            onClick={(e) => { e.stopPropagation(); if (g.ids[0]) onRefClick?.(g.ids[0]) }}
+            onClick={(e) => {
+              e.stopPropagation()
+              if (g.ids[0]) onRefClick?.(g.ids[0])
+            }}
             title={tr("meeting.sourcesIds", { ids: g.ids.join(", ") })}
           >
             {g.label}
           </button>,
+        )
+      }
+    } else if (match[12] && onGroupCite) {
+      const n = parseInt(match[12], 10)
+      const refN = match[13] ? parseInt(match[13], 10) : undefined
+      const occurrence = refN ? 0 : nextGroupCiteOccurrence(citeOcc, n)
+      const liveCite = resolveGroupCite(cites, n, { refN, occurrence })
+      if (liveCite?.sentence_id) {
+        const shown = nextDisplayedCite(displayed, cursor)
+        parts.push(
+          <GroupCiteChip
+            key={`g${lastIdx}`}
+            displayIndex={shown?.displayIndex ?? n}
+            meetingTitle={shown?.title || liveCite.title}
+            onClick={() => onGroupCite(n, occurrence, refN)}
+          />,
         )
       }
     } else if (match[10]) {
@@ -1189,32 +1472,42 @@ function renderInlineWithRefs(text: string, onRefClick?: (sentenceId: string) =>
   return parts
 }
 
-function TimeContent({ content, onRefClick }: {
+function TimeContent({ content, onRefClick, onGroupCite, groupCites }: {
   content: string
   onRefClick?: (sentenceId: string) => void
+  onGroupCite?: (n: number, occurrence?: number, refN?: number) => void
+  groupCites?: GroupCite[]
 }) {
-  return (
-    <>
-      {content.split("\n").map((line, i) => {
+  const occ = new Map<number, number>()
+  const displayed = onGroupCite ? displayedGroupCites(content, groupCites || []) : undefined
+  const cursor = { i: 0 }
+  const refs = (
+    line: string,
+  ) => renderInlineWithRefs(line, onRefClick, onGroupCite, occ, groupCites, displayed, cursor)
+  const body = content.split("\n").map((line, i) => {
         if (line.startsWith("### ")) {
-          return <h3 key={i} className="text-sm font-semibold mt-3 mb-1">{renderInlineWithRefs(line.slice(4), onRefClick)}</h3>
+          return <h3 key={i} className="text-sm font-semibold mt-3 mb-1">{refs(line.slice(4))}</h3>
         }
         if (line.startsWith("## ")) {
-          return <h2 key={i} className="text-base font-semibold mt-3 mb-1">{renderInlineWithRefs(line.slice(3), onRefClick)}</h2>
+          return <h2 key={i} className="text-base font-semibold mt-3 mb-1">{refs(line.slice(3))}</h2>
         }
         if (line.startsWith("# ")) {
-          return <h1 key={i} className="text-lg font-bold mt-3 mb-1">{renderInlineWithRefs(line.slice(2), onRefClick)}</h1>
+          return <h1 key={i} className="text-lg font-bold mt-3 mb-1">{refs(line.slice(2))}</h1>
         }
         if (!line.trim()) return <div key={i} className="h-2" />
         if (/^\s*[-*+]\s/.test(line)) {
-          return <li key={i} className="text-sm leading-relaxed ml-4">{renderInlineWithRefs(line.replace(/^\s*[-*+]\s/, ""), onRefClick)}</li>
+          return <li key={i} className="text-sm leading-relaxed ml-4">{refs(line.replace(/^\s*[-*+]\s/, ""))}</li>
         }
         if (/^>\s/.test(line)) {
-          return <blockquote key={i} className="border-l-2 border-muted-foreground/30 pl-3 italic text-muted-foreground text-xs leading-relaxed mb-1">{renderInlineWithRefs(line.replace(/^>\s*/, ""), onRefClick)}</blockquote>
+          return <blockquote key={i} className="border-l-2 border-muted-foreground/30 pl-3 italic text-muted-foreground text-xs leading-relaxed mb-1">{refs(line.replace(/^>\s*/, ""))}</blockquote>
         }
-        return <p key={i} className="text-sm leading-relaxed mb-1">{renderInlineWithRefs(line, onRefClick)}</p>
-      })}
-    </>
+        return <p key={i} className="text-sm leading-relaxed mb-1">{refs(line)}</p>
+      })
+  if (!onGroupCite) return <>{body}</>
+  return (
+    <TooltipProvider delay={GROUP_CITE_HOVER_DELAY_MS} closeDelay={80}>
+      <>{body}</>
+    </TooltipProvider>
   )
 }
 

@@ -100,6 +100,127 @@ def _active_transcription_supports_hot_words() -> bool:
         return False
 
 
+def _serialize_group(group) -> dict:
+    return group.model_dump(mode="json")
+
+
+def _ensure_transcript_index(meeting_id: str) -> None:
+    """Start transcript index if the meeting has speech and is not already indexed."""
+    meeting = store.get_meeting(meeting_id)
+    if meeting is None:
+        return
+    if (meeting.transcript_index_status or "") in ("ready", "building"):
+        return
+    sentences = store.get_sentences(meeting_id)
+    transcript = store.get_transcript(meeting_id)
+    if not sentences and not transcript:
+        return
+    store.update_meeting(
+        meeting_id, transcript_index_status="building", transcript_index_error=""
+    )
+    task_manager.create_task(
+        filename=f"tx-index:{meeting_id}",
+        task_type="meeting_transcript_index",
+        meeting_id=meeting_id,
+    )
+
+
+def _delete_group_session(group_id: str) -> None:
+    try:
+        from src.services import services
+
+        store = getattr(services, "session_store", None)
+        if store is not None:
+            store.delete_session(f"group_{group_id}")
+    except Exception:
+        logger.debug("group session delete skipped %s", group_id, exc_info=True)
+
+
+@router.get("/meeting-groups")
+async def list_meeting_groups():
+    from src.meeting.group_store import list_groups
+
+    return [_serialize_group(g) for g in list_groups()]
+
+
+@router.post("/meeting-groups")
+async def create_meeting_group(body: dict = Body()):
+    from src.meeting.group_store import create_group
+
+    meeting_id = (body.get("meeting_id") or "").strip()
+    meeting = store.get_meeting(meeting_id)
+    if meeting is None:
+        raise HTTPException(404, "Meeting not found")
+    group = create_group(
+        title=(body.get("title") or "").strip(),
+        meeting_id=meeting_id,
+        meeting_title=meeting.title or "",
+    )
+    _ensure_transcript_index(meeting_id)
+    return _serialize_group(group)
+
+
+@router.get("/meeting-groups/{group_id}")
+async def get_meeting_group(group_id: str):
+    from src.meeting.group_store import get_group
+
+    group = get_group(group_id)
+    if group is None:
+        raise HTTPException(404, "Group not found")
+    return _serialize_group(group)
+
+
+@router.delete("/meeting-groups/{group_id}")
+async def delete_meeting_group(group_id: str):
+    from src.meeting.group_store import delete_group, get_group
+
+    if get_group(group_id) is None:
+        raise HTTPException(404, "Group not found")
+    _delete_group_session(group_id)
+    delete_group(group_id)
+    return {"message": "Group deleted"}
+
+
+@router.post("/meeting-groups/{group_id}/members")
+async def add_meeting_group_member(group_id: str, body: dict = Body()):
+    from src.meeting.group_store import add_member, get_group
+
+    if get_group(group_id) is None:
+        raise HTTPException(404, "Group not found")
+    meeting_id = (body.get("meeting_id") or "").strip()
+    meeting = store.get_meeting(meeting_id)
+    if meeting is None:
+        raise HTTPException(404, "Meeting not found")
+    try:
+        group = add_member(group_id, meeting_id)
+    except FileNotFoundError:
+        raise HTTPException(404, "Group not found")
+    _ensure_transcript_index(meeting_id)
+    return _serialize_group(group)
+
+
+@router.delete("/meeting-groups/{group_id}/members/{meeting_id}")
+async def remove_meeting_group_member(group_id: str, meeting_id: str):
+    from src.meeting.group_store import get_group, remove_member
+
+    if get_group(group_id) is None:
+        raise HTTPException(404, "Group not found")
+    try:
+        group = remove_member(group_id, meeting_id)
+    except FileNotFoundError:
+        raise HTTPException(404, "Group not found")
+    return _serialize_group(group)
+
+
+@router.get("/meetings/{meeting_id}/groups")
+async def list_groups_for_meeting(meeting_id: str):
+    from src.meeting.group_store import groups_for_meeting
+
+    if store.get_meeting(meeting_id) is None:
+        raise HTTPException(404, "Meeting not found")
+    return [_serialize_group(g) for g in groups_for_meeting(meeting_id)]
+
+
 @router.post("/meetings")
 async def create_meeting(body: dict = Body()):
     title = body.get("title") or datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -864,6 +985,30 @@ async def generate_summary(meeting_id: str):
         meeting_id=meeting_id,
     )
     logger.info("[SUMMARY] Task created for meeting %s: task_id=%s", meeting_id, task.id)
+    updated = store.get_meeting(meeting_id)
+    if not updated:
+        raise HTTPException(404, "Meeting not found")
+    return _serialize_meeting(updated)
+
+
+@router.post("/meetings/{meeting_id}/transcript-index")
+async def start_transcript_index(meeting_id: str):
+    """Build or rebuild the verbatim transcript vector index."""
+    meeting = store.get_meeting(meeting_id)
+    if not meeting:
+        raise HTTPException(404, "Meeting not found")
+    if (meeting.transcript_index_status or "") == "building":
+        return _serialize_meeting(meeting)
+    sentences = store.get_sentences(meeting_id)
+    transcript = store.get_transcript(meeting_id)
+    if not sentences and not transcript:
+        raise HTTPException(400, "No transcript available")
+    store.update_meeting(meeting_id, transcript_index_status="building", transcript_index_error="")
+    task_manager.create_task(
+        filename=f"tx-index:{meeting_id}",
+        task_type="meeting_transcript_index",
+        meeting_id=meeting_id,
+    )
     updated = store.get_meeting(meeting_id)
     if not updated:
         raise HTTPException(404, "Meeting not found")

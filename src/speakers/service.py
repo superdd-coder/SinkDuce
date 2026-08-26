@@ -342,32 +342,23 @@ def _slot_vector_from_segments(
     return build_slot_vector(segs, embs)
 
 
-def _label_map(people: Sequence[Person]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for person in people:
-        key = (person.display_name or "").strip().lower()
-        counts[key] = counts.get(key, 0) + 1
-    return counts
-
-
 def rebuild_speaker_names(
     speaker_people: dict[str, str] | None,
     people: Sequence[Person] | None = None,
     *,
     keep: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    from src.speakers.store import get_person as _get, list_people, person_label
+    from src.speakers.store import get_person as _get, list_people, speaker_display_name
 
     people_list = list(people) if people is not None else list_people()
     by_id = {p.id: p for p in people_list}
-    counts = _label_map(people_list)
     names: dict[str, str] = {}
     bound = speaker_people or {}
     for spk, pid in bound.items():
         person = by_id.get(pid) or _get(pid)
         if person is None:
             continue
-        names[spk] = person_label(person, name_counts=counts)
+        names[spk] = speaker_display_name(person)
     for spk, label in (keep or {}).items():
         if spk in bound:
             continue
@@ -697,7 +688,7 @@ def attach_after_transcription(
 ):
     """Score this meeting's speaker slots against the People gallery."""
     from src.meeting.store import get_meeting, get_transcript
-    from src.speakers.store import list_people, person_label
+    from src.speakers.store import list_people, speaker_display_name
 
     meeting = get_meeting(meeting_id)
     if meeting is None:
@@ -712,7 +703,6 @@ def attach_after_transcription(
         )
 
     people = list_people()
-    counts = _label_map(people)
     speaker_people: dict[str, str] = {}
     speaker_names: dict[str, str] = {}
     speaker_matches: dict[str, SpeakerMatch] = {}
@@ -757,7 +747,7 @@ def attach_after_transcription(
             speaker_people[spk] = result.selected_id
             person = next((p for p in people if p.id == result.selected_id), None)
             if person is not None:
-                speaker_names[spk] = person_label(person, name_counts=counts)
+                speaker_names[spk] = speaker_display_name(person)
 
     return _write_speaker_state(
         meeting_id,

@@ -3,9 +3,10 @@ import { Trash2, Mic } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useT } from "@/i18n/use-t"
 import { Button } from "@/components/ui/button"
+import { Tabs, TabsIndicator, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
 import { CreateMeetingButton } from "./create-meeting-dialog"
-import type { Meeting } from "@/api/client"
+import type { Meeting, MeetingGroup } from "@/api/client"
 
 interface MeetingListProps {
   meetings: Meeting[]
@@ -20,6 +21,12 @@ interface MeetingListProps {
    * from the meeting being recorded (avoids “overwriting” the live session in UI).
    */
   keepFocusOnCreate?: boolean
+  railTab?: "meetings" | "groups"
+  onRailTab?: (tab: "meetings" | "groups") => void
+  groups?: MeetingGroup[]
+  activeGroup?: string | null
+  onSelectGroup?: (id: string) => void
+  onDeleteGroup?: (id: string) => void
 }
 
 export function MeetingList({
@@ -30,6 +37,12 @@ export function MeetingList({
   onCreated,
   onDelete,
   keepFocusOnCreate = false,
+  railTab = "meetings",
+  onRailTab,
+  groups = [],
+  activeGroup = null,
+  onSelectGroup,
+  onDeleteGroup,
 }: MeetingListProps) {
   const t = useT()
   /* Sliding mint indicator — Collections / Sessions language */
@@ -37,21 +50,23 @@ export function MeetingList({
   const itemRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const [indicator, setIndicator] = useState({ top: 0, height: 0 })
   const [indicatorReady, setIndicatorReady] = useState(false)
+  const [listShown, setListShown] = useState(railTab)
+  const [listOpaque, setListOpaque] = useState(true)
 
+  const indicatorId = listShown === "groups" ? activeGroup : activeMeeting
   useEffect(() => {
-    if (!activeMeeting) {
+    if (!indicatorId) {
       setIndicatorReady(false)
       return
     }
-    const activeEl = itemRefs.current.get(activeMeeting)
+    const activeEl = itemRefs.current.get(indicatorId)
     if (!activeEl) return
-    /* offsetTop is stable inside the scroll container (unlike getBoundingClientRect) */
     setIndicator({
       top: activeEl.offsetTop,
       height: activeEl.offsetHeight,
     })
     requestAnimationFrame(() => setIndicatorReady(true))
-  }, [activeMeeting, meetings])
+  }, [indicatorId, meetings, groups, listShown])
 
   const formatTime = (iso?: string) => {
     if (!iso) return ""
@@ -80,7 +95,27 @@ export function MeetingList({
     return t("meeting.draft")
   }
 
-  const edgeFade = useScrollEdgeFade(listRef, meetings.length)
+  const edgeFade = useScrollEdgeFade(
+    listRef,
+    listShown === "groups" ? groups.length : meetings.length,
+  )
+  useEffect(() => {
+    if (listShown === railTab) return
+    setListOpaque(false)
+    const id = window.setTimeout(() => setListShown(railTab), 220)
+    return () => window.clearTimeout(id)
+  }, [railTab, listShown])
+  useEffect(() => {
+    if (listShown !== railTab || listOpaque) return
+    let inner = 0
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => setListOpaque(true))
+    })
+    return () => {
+      cancelAnimationFrame(outer)
+      cancelAnimationFrame(inner)
+    }
+  }, [listShown, railTab, listOpaque])
 
   return (
     <aside className="pm-meeting-rail" aria-label={t("meeting.meetings")}>
@@ -97,10 +132,30 @@ export function MeetingList({
             }
           />
         </div>
+        {onRailTab && (
+          <div className="px-3 pb-2">
+            <Tabs
+              value={railTab}
+              onValueChange={(v) => {
+                if (v === "meetings" || v === "groups") onRailTab(v)
+              }}
+              className="pm-meeting-rail-tabs gap-0"
+            >
+              <TabsList className="w-full" aria-label={t("meeting.meetings")}>
+                <TabsIndicator className="pm-tabs-indicator" renderBeforeHydration />
+                <TabsTrigger value="meetings">{t("meeting.meetingsTab")}</TabsTrigger>
+                <TabsTrigger value="groups">{t("meeting.groupsTab")}</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
+        )}
 
         <div className="pm-rail-list-shell">
-          <div ref={listRef} className="pm-meeting-rail-list">
-            {activeMeeting && (
+          <div
+            ref={listRef}
+            className={cn("pm-meeting-rail-list is-tab-fade", !listOpaque && "is-dim")}
+          >
+            {((listShown === "groups" && activeGroup) || (listShown !== "groups" && activeMeeting)) && (
               <div
                 className={cn(
                   "pm-chat-sess-indicator",
@@ -114,14 +169,69 @@ export function MeetingList({
               />
             )}
 
-            {meetings.length === 0 && (
+            {listShown === "groups" && groups.length === 0 && (
+              <div className="pm-chat-sess-empty">
+                <p className="pm-meta">{t("meeting.noGroups")}</p>
+              </div>
+            )}
+
+            {listShown === "groups" && groups.map((g) => {
+              const isActive = activeGroup === g.id
+              return (
+                <div
+                  key={g.id}
+                  ref={(el) => {
+                    if (el) itemRefs.current.set(g.id, el)
+                    else itemRefs.current.delete(g.id)
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSelectGroup?.(g.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault()
+                      onSelectGroup?.(g.id)
+                    }
+                  }}
+                  className={cn("pm-chat-sess-row", isActive && "is-active")}
+                >
+                  <div className="pm-chat-sess-name" title={g.title}>{g.title}</div>
+                  <div className="pm-chat-sess-meta">
+                    <span className="pm-chat-sess-meta-snip">
+                      {t("meeting.groupCount", { n: g.members.length })}
+                    </span>
+                    <span className="pm-chat-sess-meta-time">
+                      {formatTime(g.last_chat_at || g.updated_at)}
+                    </span>
+                  </div>
+                  {onDeleteGroup && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      className="pm-chat-sess-del"
+                      title={t("meeting.deleteGroup")}
+                      aria-label={t("meeting.deleteGroup")}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onDeleteGroup(g.id)
+                      }}
+                    >
+                      <Trash2 className="size-3" />
+                    </Button>
+                  )}
+                </div>
+              )
+            })}
+
+            {listShown !== "groups" && meetings.length === 0 && (
               <div className="pm-chat-sess-empty">
                 <Mic className="size-5 pm-chat-sess-empty-icon" />
                 <p className="pm-meta">{t("meeting.noMeetings")}</p>
               </div>
             )}
 
-            {meetings.map((m) => {
+            {listShown !== "groups" && meetings.map((m) => {
               const isActive = activeMeeting === m.id
               const isCapturing =
                 recordingMeetingId === m.id || m.status === "recording"
@@ -178,7 +288,7 @@ export function MeetingList({
                       {statusLabel(m)}
                     </span>
                     <span className="pm-chat-sess-meta-time">
-                      {formatTime(m.updated_at || m.created_at)}
+                      {formatTime(m.created_at || m.updated_at)}
                     </span>
                   </div>
                   <Button

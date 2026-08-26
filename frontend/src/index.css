@@ -8864,6 +8864,313 @@ button.pm-rail-new:hover:not(:disabled) {
   font: var(--pm-t-body);
   color: var(--pm-muted);
   line-height: 1.5;
+  min-width: 0;
+}
+
+/* Group transcript overlay — silk open/collapse over the member card. */
+.pm-meeting-tx-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 20px;
+  background: var(--pm-float, #fdfbf7);
+  box-shadow: var(--pm-shadow);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translate3d(14px, 0, 0);
+  transition:
+    opacity 280ms cubic-bezier(0.32, 0.72, 0, 1),
+    transform 280ms cubic-bezier(0.32, 0.72, 0, 1),
+    visibility 0s linear 280ms;
+}
+.pm-meeting-tx-overlay.is-open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translate3d(0, 0, 0);
+  transition:
+    opacity 320ms cubic-bezier(0.32, 0.72, 0, 1),
+    transform 320ms cubic-bezier(0.32, 0.72, 0, 1),
+    visibility 0s linear 0s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-meeting-tx-overlay,
+  .pm-meeting-tx-overlay.is-open {
+    transition: none;
+    transform: none;
+  }
+}
+
+.pm-meeting-tx-overlay-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-shrink: 0;
+  /* 12px = player card mx-3, so title lines up with the white player */
+  padding: 16px 12px 10px;
+}
+.pm-meeting-tx-overlay-title {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-size: 15px;
+  font-weight: 300;
+  font-variation-settings: "wght" 300;
+  letter-spacing: -0.02em;
+  line-height: 1.35;
+  color: var(--pm-ink, #121410);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+.pm-meeting-tx-overlay-head .pm-meeting-side-collapse {
+  margin-top: 1px;
+}
+/* Transcript list fades must match the cream overlay, not a white wash. */
+.pm-meeting-tx-overlay .pm-panel-scroll-shell,
+.pm-meeting-tx-overlay .pm-panel-scroll-shell > .pm-rail-edge-fade {
+  --pm-edge-fade-color: var(--pm-float, #fdfbf7);
+}
+
+.pm-meeting-join-dialog.pm-dialog[data-slot="dialog-content"] {
+  box-sizing: border-box !important;
+  width: min(480px, calc(100vw - 2rem)) !important;
+  max-width: min(480px, calc(100vw - 2rem)) !important;
+  min-width: 0 !important;
+  overflow: hidden;
+}
+.pm-meeting-join-dialog .pm-dialog-body {
+  min-width: 0;
+}
+.pm-meeting-join-dialog .pm-meeting-pick-list {
+  height: auto;
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: var(--pm-shadow-sm);
+  padding: 8px 10px 6px;
+  max-height: 28rem;
+}
+.pm-meeting-join-dialog .pm-meeting-pick-scroll {
+  flex: 1 1 auto;
+  max-height: 22rem;
+}
+
+/* Catalog index — month kickers, hairlines, date column. No nested chips. */
+.pm-meeting-pick-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+}
+.pm-meeting-pick-filter {
+  position: relative;
+  display: block;
+  flex-shrink: 0;
+  margin: 0 2px 4px;
+}
+.pm-meeting-pick-filter-icon {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 13px;
+  height: 13px;
+  transform: translateY(-50%);
+  color: var(--pm-faint, #969c96);
+  pointer-events: none;
+}
+.pm-meeting-pick-filter input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 7px 0 8px 20px;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 8%, transparent);
+  background: transparent;
+  outline: none;
+  font: var(--pm-t-meta, 300 12.5px/1.4 var(--pm-ff, system-ui, sans-serif));
+  letter-spacing: 0;
+  color: var(--pm-ink, #121410);
+}
+.pm-meeting-pick-filter input::placeholder {
+  color: var(--pm-faint, #969c96);
+  font-style: italic;
+}
+.pm-meeting-pick-scroll {
+  min-height: 0;
+  flex: 1 1 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.pm-meeting-pick-section + .pm-meeting-pick-section {
+  margin-top: 2px;
+}
+.pm-meeting-pick-kicker {
+  margin: 0;
+  padding: 12px 6px 4px;
+  font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff, system-ui, sans-serif));
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--pm-green, #1a5e3d);
+}
+.pm-meeting-pick-section:first-child .pm-meeting-pick-kicker {
+  padding-top: 4px;
+}
+.pm-meeting-pick-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 4.5rem;
+  column-gap: 10px;
+  align-items: start;
+  width: 100%;
+  margin: 0;
+  padding: 10px 6px 11px;
+  border: 0;
+  border-radius: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 7%, transparent);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-meeting-pick-row:not(:has(.pm-meeting-pick-idx)) {
+  grid-template-columns: minmax(0, 1fr) 4.5rem;
+}
+.pm-meeting-pick-section .pm-meeting-pick-row:last-child {
+  border-bottom: none;
+}
+.pm-meeting-pick-row:hover,
+.pm-meeting-pick-row:focus-visible {
+  background: color-mix(in srgb, var(--pm-ink, #121410) 3.5%, transparent);
+  outline: none;
+}
+.pm-meeting-pick-idx {
+  min-width: 1.15rem;
+  padding-top: 2px;
+  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif));
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: var(--pm-faint, #969c96);
+}
+.pm-meeting-pick-name {
+  min-width: 0;
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-size: 14.5px;
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  line-height: 1.35;
+  color: var(--pm-ink, #121410);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+.pm-meeting-pick-aside {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  padding-top: 2px;
+}
+.pm-meeting-pick-time,
+.pm-meeting-pick-status {
+  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif));
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  color: var(--pm-muted, #6a706a);
+}
+.pm-meeting-pick-status {
+  text-transform: none;
+  color: var(--pm-faint, #969c96);
+}
+.pm-meeting-pick-remove {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--pm-faint, #969c96);
+  opacity: 0;
+  pointer-events: none;
+  cursor: pointer;
+  transition:
+    opacity 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-meeting-pick-row:hover .pm-meeting-pick-remove,
+.pm-meeting-pick-row:focus-within .pm-meeting-pick-remove {
+  opacity: 1;
+  pointer-events: auto;
+}
+.pm-meeting-pick-row:hover .pm-meeting-pick-aside,
+.pm-meeting-pick-row:focus-within .pm-meeting-pick-aside {
+  opacity: 0;
+}
+.pm-meeting-pick-remove:hover {
+  color: var(--pm-danger, #b42318);
+}
+.pm-meeting-pick-empty {
+  margin: 0;
+  padding: 28px 8px;
+  text-align: center;
+  font: var(--pm-t-meta, 300 12px/1.45 var(--pm-ff, system-ui, sans-serif));
+  color: var(--pm-faint, #969c96);
+}
+
+.pm-meeting-group-actions {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent);
+}
+.pm-meeting-group-action {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 28px;
+  margin: 0;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--pm-muted, #6a706a);
+  font: var(--pm-t-label, 400 11px/1.2 var(--pm-ff, system-ui, sans-serif));
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  transition:
+    color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-meeting-group-action:hover {
+  color: var(--pm-ink, #121410);
+  background: #ffffff;
 }
 /*
  * Compact danger / confirm dialogs (Delete note, Delete session, rollback, …)
@@ -18167,6 +18474,20 @@ button.pm-ws-path-row {
   opacity: 0.55;
   margin-top: 1px;
 }
+.pm-qc-source-idx {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.15rem;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-family: var(--pm-ff-mono, ui-monospace, monospace);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--pm-green, #1a5e3d);
+  background: var(--pm-green-soft);
+}
 /* Empty */
 .pm-qc-empty {
   display: flex;
@@ -20433,8 +20754,8 @@ button.pm-ws-path-row {
   /* Must define on host — do NOT rely on .pm-chat-only vars */
   --pm-meeting-rail-w: var(--pm-view-rail-w, 228px);
   --pm-chat-sessions-w: var(--pm-view-rail-w, 228px); /* if reusing chat session classes */
-  /* Stage right = Collection Quick Chat rail width */
-  --pm-meeting-stage-right-w: var(--pm-collection-rail-w, clamp(272px, 30vw, 360px));
+  /* Stage right (player + side tabs) — a bit wider than Collection QC for 4 pills */
+  --pm-meeting-stage-right-w: clamp(300px, 33vw, 400px);
   /* Top row: title + player share one chrome height (balanced pair).
    * Title allows up to 3 lines — chrome-h must fit that + card pad + gutters. */
   --pm-meeting-title-size: clamp(20px, 2.1vw, 26px);
@@ -20497,6 +20818,45 @@ button.pm-ws-path-row {
   border: none;
 }
 
+/* Meetings | Groups — same white tray + mint pill as Summary / side tabs */
+.pm-meeting-rail-tabs {
+  min-width: 0;
+  width: 100%;
+}
+.pm-meeting-rail-tabs [data-slot="tabs-list"],
+.pm-meeting-rail-tabs [data-slot="tabs-list"][data-variant="pill"],
+.pm-meeting-rail-tabs .pm-tabs[role="tablist"] {
+  width: 100%;
+  max-width: 100%;
+  justify-content: stretch;
+  padding: 3px 4px !important;
+  border-radius: 999px !important;
+  background: #ffffff !important;
+  box-shadow: var(--pm-shadow-sm) !important;
+  gap: 1px !important;
+  overflow: hidden;
+}
+.pm-meeting-rail-tabs [data-slot="tabs-trigger"],
+.pm-meeting-rail-tabs [role="tab"] {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 6px 8px !important;
+  font-size: 11px !important;
+  letter-spacing: 0.04em !important;
+  text-transform: none !important;
+}
+.pm-meeting-rail-list.is-tab-fade {
+  transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.pm-meeting-rail-list.is-tab-fade.is-dim {
+  opacity: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-meeting-rail-list.is-tab-fade {
+    transition: none;
+  }
+}
+
 /* head/title/new → shared .pm-rail-* above (do not redeclare padding/type here) */
 
 .pm-meeting-rail-list {
@@ -20525,6 +20885,30 @@ button.pm-ws-path-row {
   background: transparent;
   box-shadow: none; /* shadow lives on surface so radius + cream match Collection */
   border: none;
+}
+
+/* Studio ↔ group: fade out, swap, fade in (no hard cut) */
+.pm-meeting-stage-kind {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 1;
+  transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.pm-meeting-stage-kind.is-exiting {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-meeting-stage-kind,
+  .pm-meeting-stage-kind.is-exiting {
+    transition: none;
+  }
 }
 
 /*
@@ -22984,9 +23368,9 @@ button.pm-ws-path-row {
 .pm-meeting-side-tabs [role="tab"] {
   flex: 1 1 0;
   min-width: 0;
-  padding: 6px 6px !important;
+  padding: 6px 3px !important;
   font-size: 10px !important;
-  letter-spacing: 0.03em !important;
+  letter-spacing: 0.02em !important;
 }
 /* Legacy class names kept for tests / optional use */
 .pm-meeting-side-pills {
@@ -25207,7 +25591,7 @@ button.pm-ws-path-row {
   background: color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, transparent);
   box-shadow: inset 2.5px 0 0 0 var(--pm-green, #1a5e3d);
 }
-.pm-meeting-seg.is-playing:not(.is-focused) {
+.pm-meeting-seg.is-playing {
   background: color-mix(in srgb, var(--pm-green, #1a5e3d) 9%, transparent);
   box-shadow: inset 2.5px 0 0 0 var(--pm-green, #1a5e3d);
 }

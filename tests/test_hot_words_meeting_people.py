@@ -162,3 +162,42 @@ class TestPinsAndConcat:
         fetched = get_meeting(meeting.id)
         assert fetched.hot_words_library_ids == [MEETING_PEOPLE_ID, jargon.id]
         assert fetched.hot_words_library_id == MEETING_PEOPLE_ID
+
+
+class TestSummaryPromptExcludesPeopleNames:
+    def test_prompt_drops_people_keeps_jargon_asr_still_has_people(self, hw_dirs):
+        from src.hot_words.models import HotWordItem
+        from src.hot_words.store import (
+            MEETING_PEOPLE_ID,
+            collect_meeting_hot_words,
+            create_library,
+            hot_words_prompt_text,
+        )
+        from src.meeting.store import create_meeting, get_meeting, update_meeting
+        from src.speakers.store import create_person
+
+        person = create_person("Herman")
+        m1 = create_meeting("A")
+        m2 = create_meeting("B")
+        _bind(m1, person.id)
+        _bind(m2, person.id)
+
+        jargon = create_library(
+            "Jargon",
+            words=[HotWordItem(text="OPEX", weight=5)],
+        )
+        meeting = create_meeting("Now")
+        update_meeting(
+            meeting.id,
+            hot_words_library_ids=[MEETING_PEOPLE_ID, jargon.id],
+            hot_words_library_id=MEETING_PEOPLE_ID,
+        )
+        fetched = get_meeting(meeting.id)
+
+        prompt = hot_words_prompt_text(fetched)
+        assert "OPEX" in prompt
+        assert "Herman" not in prompt
+
+        asr = [w["text"] for w in collect_meeting_hot_words(fetched)]
+        assert "Herman" in asr
+        assert "OPEX" in asr

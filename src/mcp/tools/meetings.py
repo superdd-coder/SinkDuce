@@ -536,6 +536,44 @@ async def upload_meeting_audio_from_staging(
     return to_json(await run_sync(_run))
 
 
+async def lookup_meeting_transcript(
+    meeting_id: str,
+    query: str,
+    speaker_scope: str = "auto",
+) -> str:
+    """Search a meeting's verbatim transcript packs (not allocated summaries).
+
+    Quick Chat locks ``meeting_id`` to the open meeting. Use this from MCP with
+    an explicit meeting id. ``speaker_scope=auto`` filters packs that contain
+    speakers named in ``query`` when a mapping exists. ``all`` searches the
+    whole meeting. Empty named-speaker hits may include ``preview_unfiltered``.
+
+    Args:
+        meeting_id: Target meeting.
+        query: Natural-language search (topics, facts, wording).
+        speaker_scope: ``auto`` (default) or ``all``.
+    """
+    def _run() -> dict[str, Any]:
+        from src.meeting.transcript_index import execute_lookup_json
+        import json
+
+        raw = execute_lookup_json(
+            meeting_id,
+            query,
+            speaker_scope=speaker_scope,
+            user_question=query,
+        )
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return err(raw)
+        if not isinstance(data, dict):
+            return err("lookup failed")
+        return ok(**data)
+
+    return to_json(await run_sync(_run))
+
+
 __all__ = [
     "list_meetings",
     "get_meeting",
@@ -546,4 +584,5 @@ __all__ = [
     "delete_meeting",
     "start_meeting_summary",
     "upload_meeting_audio_from_staging",
+    "lookup_meeting_transcript",
 ]

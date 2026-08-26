@@ -55,6 +55,8 @@ interface MediaBarProps {
   onTimeUpdate?: (time: number) => void
   recorderError?: string | null
   onDiscard?: () => void
+  /** Progress + play + time only (group transcript overlay). */
+  playbackOnly?: boolean
 }
 
 export interface MediaBarHandle {
@@ -98,6 +100,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
   onTimeUpdate,
   recorderError,
   onDiscard,
+  playbackOnly = false,
 }, ref) {
   const t = useT()
   const inputRef = useRef<HTMLInputElement>(null)
@@ -112,6 +115,9 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
   const [scrubbing, setScrubbing] = useState(false)
   const [scrubRatio, setScrubRatio] = useState(0)
   const scrubbingRef = useRef(false)
+  const pendingSeekRef = useRef<{ time: number; play: boolean } | null>(null)
+  const onTimeUpdateRef = useRef(onTimeUpdate)
+  onTimeUpdateRef.current = onTimeUpdate
 
   // Pause + reset local player chrome when meeting changes (no parent remount)
   useEffect(() => {
@@ -141,7 +147,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
     const onTime = () => {
       const t = el.currentTime
       if (!scrubbing) setCurrentTime(t)
-      onTimeUpdate?.(t)
+      onTimeUpdateRef.current?.(t)
       const stopAt = segmentEndRef.current
       if (stopAt != null && t >= stopAt - 0.02) {
         segmentEndRef.current = null
@@ -149,10 +155,25 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
         if (el.currentTime > stopAt) {
           el.currentTime = stopAt
           setCurrentTime(stopAt)
+          onTimeUpdateRef.current?.(stopAt)
         }
       }
     }
-    const onMeta = () => setAudioDuration(el.duration || 0)
+    const onMeta = () => {
+      setAudioDuration(el.duration || 0)
+      const pending = pendingSeekRef.current
+      if (!pending) return
+      if (Math.abs((el.currentTime || 0) - pending.time) > 0.15) {
+        try {
+          el.currentTime = pending.time
+        } catch {
+          return
+        }
+        setCurrentTime(pending.time)
+        onTimeUpdateRef.current?.(pending.time)
+      }
+      if (pending.play && el.paused) el.play().catch(() => {})
+    }
     const onPlay = () => setIsPlaying(true)
     const onPause = () => setIsPlaying(false)
     const onEnded = () => {
@@ -173,7 +194,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
       el.removeEventListener("pause", onPause)
       el.removeEventListener("ended", onEnded)
     }
-  }, [onTimeUpdate, audioUrl, scrubbing])
+  }, [audioUrl, scrubbing])
 
   // Reset transport when audio source changes
   useEffect(() => {
@@ -186,13 +207,19 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
 
   useImperativeHandle(ref, () => ({
     seekTo(time: number, end?: number) {
-      const el = audioRef.current
-      if (!el) return
       const t = Math.max(0, time)
       segmentEndRef.current =
         end != null && Number.isFinite(end) && end > t ? end : null
-      el.currentTime = t
+      pendingSeekRef.current = { time: t, play: true }
+      const el = audioRef.current
+      if (!el) return
+      try {
+        el.currentTime = t
+      } catch {
+        return
+      }
       setCurrentTime(t)
+      onTimeUpdateRef.current?.(t)
       el.play().catch(() => {})  // AbortError when interrupted by pause/unmount
     },
   }))
@@ -208,9 +235,10 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
     const dur = el.duration || audioDuration || 0
     if (dur > 0 && Number.isFinite(dur)) {
       const t = ratio * dur
+      pendingSeekRef.current = { time: t, play: !el.paused }
       el.currentTime = t
       setCurrentTime(t)
-      onTimeUpdate?.(t)
+      onTimeUpdateRef.current?.(t)
     }
   }
 
@@ -408,19 +436,23 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                   const t = Math.min(dur, (el.currentTime || 0) + step)
                   el.currentTime = t
                   setCurrentTime(t)
+                  onTimeUpdateRef.current?.(t)
                 } else if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
                   e.preventDefault()
                   const t = Math.max(0, (el.currentTime || 0) - step)
                   el.currentTime = t
                   setCurrentTime(t)
+                  onTimeUpdateRef.current?.(t)
                 } else if (e.key === "Home") {
                   e.preventDefault()
                   el.currentTime = 0
                   setCurrentTime(0)
+                  onTimeUpdateRef.current?.(0)
                 } else if (e.key === "End") {
                   e.preventDefault()
                   el.currentTime = dur
                   setCurrentTime(dur)
+                  onTimeUpdateRef.current?.(dur)
                 }
               }}
             >
@@ -538,19 +570,23 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                   const t = Math.min(dur, (el.currentTime || 0) + step)
                   el.currentTime = t
                   setCurrentTime(t)
+                  onTimeUpdateRef.current?.(t)
                 } else if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
                   e.preventDefault()
                   const t = Math.max(0, (el.currentTime || 0) - step)
                   el.currentTime = t
                   setCurrentTime(t)
+                  onTimeUpdateRef.current?.(t)
                 } else if (e.key === "Home") {
                   e.preventDefault()
                   el.currentTime = 0
                   setCurrentTime(0)
+                  onTimeUpdateRef.current?.(0)
                 } else if (e.key === "End") {
                   e.preventDefault()
                   el.currentTime = dur
                   setCurrentTime(dur)
+                  onTimeUpdateRef.current?.(dur)
                 }
               }}
             >
@@ -592,6 +628,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
         </div>
 
         {/* Row 3: tool buttons — hug content, centered */}
+        {!playbackOnly && (
         <div className="pm-meeting-player-tools">
           {audioUrl && (
             <Tooltip>
@@ -692,7 +729,8 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
               <TooltipContent side="top">{t("meeting.reTranscribe")}</TooltipContent>
             </Tooltip>
           )}
-        </div>{/* /.pm-meeting-player-tools */}
+        </div>
+        )}
       </div>
     )
   }

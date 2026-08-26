@@ -24,6 +24,12 @@ import {
   type SectionRailModel,
 } from "./meeting-tabs"
 import { MeetingList } from "./meeting-list"
+import { MeetingGroupStage } from "./meeting-group-stage"
+import {
+  listMeetingGroups,
+  deleteMeetingGroup as apiDeleteMeetingGroup,
+  type MeetingGroup,
+} from "@/api/meeting"
 import type { MediaBarHandle } from "./media-bar"
 
 import {
@@ -72,6 +78,9 @@ export function MeetingView({ active = true }: { active?: boolean }) {
 
   // Data
   const [meetings, setMeetings] = useState<Meeting[]>([])
+  const [railTab, setRailTab] = useState<"meetings" | "groups">("meetings")
+  const [groups, setGroups] = useState<MeetingGroup[]>([])
+  const [activeGroup, setActiveGroup] = useState<string | null>(null)
   const [meeting, setMeeting] = useState<Meeting | null>(null)
   const applyMeeting = useCallback((m: Meeting) => {
     setMeeting((prev) => mergeMeetingUpdate(prev, m))
@@ -92,6 +101,12 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   const [meetingSoftFaded, setMeetingSoftFaded] = useState(false)
   const meetingSoftSkipRef = useRef(true)
   const meetingSoftGenRef = useRef(0)
+  /** Studio ↔ group stage — sequential opacity, same clock as meeting-mode fade */
+  const [kindOpaque, setKindOpaque] = useState(true)
+  const [paintGroupStage, setPaintGroupStage] = useState(false)
+  const [paintGroupId, setPaintGroupId] = useState<string | null>(null)
+  const kindGenRef = useRef(0)
+  const KIND_OUT_MS = 180
 
   // UI state
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
@@ -126,17 +141,18 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   const [titleDraft, setTitleDraft] = useState("")
   const [audioVersion, setAudioVersion] = useState(0)
   const [retranscribeConfirmOpen, setRetranscribeConfirmOpen] = useState(false)
+  const [deleteGroupTarget, setDeleteGroupTarget] = useState<string | null>(null)
   const [focusRef, setFocusRef] = useState<{ id: string; ts: number; fromChat?: boolean } | null>(null)
   const [activeSectionTag, setActiveSectionTag] = useState("")
   const discardingRef = useRef(false)
-  const [playbackTime, setPlaybackTime] = useState(0)
+  const [playbackTime, setPlaybackTime] = useState<number | null>(null)
   const [quickChatOpen, setQuickChatOpen] = useState(false)
   const [transcriptJumpCounter, setTranscriptJumpCounter] = useState(0)
   /** Summary section selection (synced with MeetingTabs + side Sections tab) */
   const [selectedSummaryId, setSelectedSummaryId] = useState("tab_general")
   const [, setMainTab] = useState("summary")
-  /** Right analysis rail: Sections | Transcript | Speaker */
-  const [sideTab, setSideTab] = useState<"sections" | "transcript" | "speaker">("sections")
+  /** Right analysis rail: Sections | Transcript | Speaker | Group */
+  const [sideTab, setSideTab] = useState<"sections" | "transcript" | "speaker" | "groups">("sections")
   const [sideRailOpen, setSideRailOpen] = useState(true)
   /**
    * Only user-driven collapse/expand should silk-slide the main pad + side.
@@ -186,7 +202,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   const bindSectionRailActions = useCallback((actions: SectionRailActions) => {
     sectionRailActionsRef.current = actions
   }, [])
-  const requestSideTab = useCallback((tab: "sections" | "transcript" | "speaker") => {
+  const requestSideTab = useCallback((tab: "sections" | "transcript" | "speaker" | "groups") => {
     setSideRailOpenWithMotion(true)
     setSideTab(tab)
   }, [setSideRailOpenWithMotion])
@@ -568,10 +584,17 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     } catch { /* ignore */ }
   }, [])
 
+  const fetchGroups = useCallback(async () => {
+    try {
+      setGroups(await listMeetingGroups())
+    } catch { /* ignore */ }
+  }, [])
+
   // Load collections for ID -> name mapping
   useEffect(() => {
     fetchCollections()
-  }, [fetchCollections])
+    void fetchGroups()
+  }, [fetchCollections, fetchGroups])
 
   // Fetch single meeting detail
   const fetchMeeting = useCallback(async (id: string) => {
@@ -651,11 +674,16 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       setMeetingSoftFaded(false)
       return
     }
+    // Group ↔ studio is owned by the kind fade — don't double-fade.
+    if (paintGroupStage) {
+      setMeetingSoftFaded(false)
+      return
+    }
     meetingSoftGenRef.current += 1
     setMeetingSoftFaded(true)
     setEditingTitle(false)
-    setPlaybackTime(0)
-  }, [activeMeeting])
+    setPlaybackTime(null)
+  }, [activeMeeting, paintGroupStage])
 
   useEffect(() => {
     if (!meetingSoftFaded) return
@@ -679,6 +707,34 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     }, 2500)
     return () => window.clearTimeout(failSafe)
   }, [meetingSoftFaded, meeting?.id, activeMeeting])
+
+  const wantGroupStage = !!(activeGroup && railTab === "groups" && !activeMeeting)
+  useEffect(() => {
+    const targetId = wantGroupStage ? activeGroup : null
+    const paintedId = paintGroupStage ? paintGroupId : null
+    if (wantGroupStage === paintGroupStage && targetId === paintedId) return
+    setKindOpaque(false)
+    const gen = ++kindGenRef.current
+    const t = window.setTimeout(() => {
+      if (kindGenRef.current !== gen) return
+      setPaintGroupStage(wantGroupStage)
+      setPaintGroupId(wantGroupStage ? activeGroup : paintedId)
+    }, KIND_OUT_MS)
+    return () => window.clearTimeout(t)
+  }, [wantGroupStage, activeGroup, paintGroupStage, paintGroupId])
+  useEffect(() => {
+    const targetId = wantGroupStage ? activeGroup : null
+    const paintedId = paintGroupStage ? paintGroupId : null
+    if (wantGroupStage !== paintGroupStage || targetId !== paintedId || kindOpaque) return
+    let inner = 0
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => setKindOpaque(true))
+    })
+    return () => {
+      cancelAnimationFrame(outer)
+      cancelAnimationFrame(inner)
+    }
+  }, [wantGroupStage, activeGroup, paintGroupStage, paintGroupId, kindOpaque])
 
   // Poll while Meeting sidebar is open and work is in progress
   useEffect(() => {
@@ -1182,6 +1238,20 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     }
   }
 
+  const confirmDeleteGroup = async () => {
+    if (!deleteGroupTarget) return
+    const id = deleteGroupTarget
+    try {
+      await apiDeleteMeetingGroup(id)
+      if (activeGroup === id) setActiveGroup(null)
+      setDeleteGroupTarget(null)
+      await fetchGroups()
+      toast.success(t("meeting.groupDeleted"))
+    } catch (err) {
+      toast.error(t("common.failedWithError", { error: formatApiError(err, t) }))
+    }
+  }
+
   /**
    * Transcript click: pass only start → continuous play.
    * Speaker sample click: pass start+end → stop at sentence end.
@@ -1550,24 +1620,58 @@ export function MeetingView({ active = true }: { active?: boolean }) {
           activeMeeting={activeMeeting}
           recordingMeetingId={recordingMeetingId}
           keepFocusOnCreate={!!(recorder.isRecording || recorder.isPaused)}
-          onSelect={handleSelectMeeting}
+          onSelect={(id: string) => {
+            setActiveGroup(null)
+            setRailTab("meetings")
+            handleSelectMeeting(id)
+          }}
           onCreated={(id: string, opts?: { stayOnCurrent?: boolean }) => {
             void fetchMeetings()
+            setRailTab("meetings")
             // While capturing, never switch the stage onto the new meeting —
             // that looked like the live session was “overwritten”.
             if (opts?.stayOnCurrent || recorder.isRecording || recorder.isPaused) {
               return
             }
+            setActiveGroup(null)
             setActiveMeeting(id)
           }}
           onDelete={handleDelete}
+          railTab={railTab}
+          onRailTab={(tab) => {
+            setRailTab(tab)
+            if (tab === "groups") void fetchGroups()
+          }}
+          groups={groups}
+          activeGroup={activeGroup}
+          onSelectGroup={(id) => {
+            setRailTab("groups")
+            setActiveGroup(id)
+            setActiveMeeting(null)
+          }}
+          onDeleteGroup={(id) => {
+            setDeleteGroupTarget(id)
+          }}
         />
 
         <div className="pm-meeting-stage">
+          <div className={cn("pm-meeting-stage-kind", !kindOpaque && "is-exiting")}>
+          {paintGroupStage && paintGroupId ? (
+            <div className="h-full min-h-0 flex-1">
+            <MeetingGroupStage
+              groupId={paintGroupId}
+              meetings={meetings}
+              onOpenMeeting={handleSelectMeeting}
+              onGroupChanged={() => { void fetchGroups() }}
+              onMeetingsChanged={fetchMeetings}
+            />
+            </div>
+          ) : (
+          <>
           {/*
             Steady stage:
               Left: title chrome + Summary/Notes content card
-              Right: player card + side pills (Sections | Transcript | Speaker) / QC
+              Right: player card + side pills (Sections | Transcript | Speaker | Group) / QC
             No key=activeMeeting — remount caused blank flash + player layout thrash.
           */}
           <div
@@ -1710,6 +1814,12 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                 sideSurfaceExiting={sideSurfaceExiting}
                 sideTab={sideTab}
                 setSideTab={setSideTab}
+                onOpenGroup={(id) => {
+                  setRailTab("groups")
+                  setActiveGroup(id)
+                  setActiveMeeting(null)
+                }}
+                onGroupsChanged={() => void fetchGroups()}
                 setSideRailOpenWithMotion={setSideRailOpenWithMotion}
                 setSideRailOpen={setSideRailOpen}
                 handleRefClick={handleRefClick}
@@ -1736,6 +1846,9 @@ export function MeetingView({ active = true }: { active?: boolean }) {
               </div>
             )}
           </div>
+          </>
+          )}
+          </div>
         </div>
       </div>
 
@@ -1743,6 +1856,9 @@ export function MeetingView({ active = true }: { active?: boolean }) {
         deleteTarget={deleteTarget}
         setDeleteTarget={setDeleteTarget}
         confirmDelete={confirmDelete}
+        deleteGroupTarget={deleteGroupTarget}
+        setDeleteGroupTarget={setDeleteGroupTarget}
+        confirmDeleteGroup={confirmDeleteGroup}
         retranscribeConfirmOpen={retranscribeConfirmOpen}
         setRetranscribeConfirmOpen={setRetranscribeConfirmOpen}
         handleTranscribe={handleTranscribe}

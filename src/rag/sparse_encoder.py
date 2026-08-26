@@ -131,14 +131,25 @@ class SparseEncoder:
         except Exception:
             logger.warning("[Sparse] failed to save vocab to Qdrant for %s", collection, exc_info=True)
 
+    def _reset_vocab(self) -> None:
+        self.term_to_id = {}
+        self.doc_freqs = {}
+        self.avg_dl = 0.0
+        self._doc_count = 0
+
     def load(self, db, collection: str) -> None:
-        """Restore vocabulary state from Qdrant collection config."""
+        """Restore vocabulary state from Qdrant collection config.
+
+        Missing vocab clears any previously loaded collection so a shared
+        encoder cannot encode queries against the wrong term ids.
+        """
         try:
             config = db.get_collection_config(collection)
             data = config.get("sparse_vocab")
         except Exception:
             data = None
         if not data:
+            self._reset_vocab()
             logger.info("[Sparse] no vocab found in Qdrant for collection=%s", collection)
             return
         self.term_to_id = data["term_to_id"]

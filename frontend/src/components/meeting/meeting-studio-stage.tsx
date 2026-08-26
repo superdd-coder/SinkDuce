@@ -16,10 +16,11 @@ import {
   type MeetingQcSpinPhase,
 } from "./meeting-quick-chat"
 import { type Meeting, type TranscriptSegment, type LanguageHintOption } from "@/api/client"
+import { MeetingGroupsPanel } from "./meeting-groups-meta"
 import type { SidebarView } from "@/stores/app-store"
 import { useT } from "@/i18n/use-t"
 
-export type MeetingStudioSideTab = "sections" | "transcript" | "speaker"
+export type MeetingStudioSideTab = "sections" | "transcript" | "speaker" | "groups"
 export type MeetingStudioSideSurface = "tools" | "chat"
 
 export type MeetingStudioFocusRef = { id: string; ts: number; fromChat?: boolean }
@@ -62,7 +63,7 @@ export interface MeetingStudioStageProps {
   focusRef: MeetingStudioFocusRef | null
   activeSectionTag: string
   transcriptJumpCounter: number
-  playbackTime: number
+  playbackTime: number | null
   selectedSummaryId: string
   setSelectedSummaryId: Dispatch<SetStateAction<string>>
   setSectionRailModel: Dispatch<SetStateAction<SectionRailModel | null>>
@@ -93,13 +94,15 @@ export interface MeetingStudioStageProps {
   supportedLanguageHints: LanguageHintOption[]
   updateLanguageHints: (next: string[]) => void
   maxLanguageHints: number
-  setPlaybackTime: (t: number) => void
+  setPlaybackTime: (t: number | null) => void
   handleDiscard: () => void | Promise<void>
   sideRailOpen: boolean
   sideSurfaceDisplay: MeetingStudioSideSurface
   sideSurfaceExiting: boolean
   sideTab: MeetingStudioSideTab
   setSideTab: Dispatch<SetStateAction<MeetingStudioSideTab>>
+  onOpenGroup?: (groupId: string) => void
+  onGroupsChanged?: () => void
   setSideRailOpenWithMotion: (open: boolean) => void
   setSideRailOpen: Dispatch<SetStateAction<boolean>>
   handleRefClick: (sentenceId: string) => void
@@ -468,7 +471,7 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                             <Tabs
                               value={sideTab}
                               onValueChange={(v) => {
-                                if (v === "sections" || v === "transcript" || v === "speaker") {
+                                if (v === "sections" || v === "transcript" || v === "speaker" || v === "groups") {
                                   setSideTab(v)
                                 }
                               }}
@@ -478,6 +481,9 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                                 <TabsIndicator className="pm-tabs-indicator" renderBeforeHydration />
                                 <TabsTrigger value="sections" disabled={sideSurfaceExiting}>
                                   {t("meeting.sections")}
+                                </TabsTrigger>
+                                <TabsTrigger value="groups" disabled={sideSurfaceExiting}>
+                                  {t("meeting.groupTab")}
                                 </TabsTrigger>
                                 <TabsTrigger value="transcript" disabled={sideSurfaceExiting}>
                                   {t("common.transcript")}
@@ -516,6 +522,7 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                         <MeetingQuickChat
                           meetingId={meeting.id}
                           meetingTitle={meeting.title ?? ""}
+                          indexStatus={meeting.transcript_index_status}
                           open
                           onOpen={() => {
                             if (!sideRailOpen) setSideRailOpenWithMotion(true)
@@ -786,6 +793,20 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                                   )}
                                 </div>
                               </div>
+                            </div>
+
+                            <div
+                              className={cn(
+                                "pm-meeting-side-panel",
+                                sideTab === "groups" && "is-active",
+                              )}
+                              aria-hidden={sideTab !== "groups"}
+                            >
+                              <MeetingGroupsPanel
+                                meetingId={meeting.id}
+                                onOpenGroup={p.onOpenGroup}
+                                onGroupsChanged={p.onGroupsChanged}
+                              />
                             </div>
 
                             <div

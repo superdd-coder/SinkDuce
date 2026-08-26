@@ -51,29 +51,112 @@ class ChatResponse:
 # ═══════════════════════════════════════════════════════════════════
 
 def _build_speaker_mapping(meeting_id: str) -> str:
-    """Build speaker mapping string for meeting chat.
+    """Speaker mapping for meeting chat (tests / callers)."""
+    from src.chatbox.meeting_context import format_speaker_mapping
 
-    Reads speaker_names from the meeting store and formats as:
-        Current speaker mapping:
-        - speaker1: John
-        - speaker2: Sarah
+    return format_speaker_mapping(meeting_id)
 
-    Injected as ephemeral context before each user message.
+
+def _ui_turn_count(store, session_id: str, fallback: int | None = None) -> int:
+    """Q&A rounds for the QC counter: 1 user message = 1 turn.
+
+    Group sessions persist tool rows, so raw ``count_messages`` inflates the
+    badge (2 questions looked like 24). Use dialogue turns for quick / meeting /
+    group; keep raw rows for main Chat.
     """
+    if (
+        session_id.startswith("quick_")
+        or session_id.startswith("meeting_")
+        or session_id.startswith("group_")
+    ):
+        count_fn = getattr(store, "count_dialogue_turns", None)
+        if callable(count_fn):
+            try:
+                return int(count_fn(session_id))
+            except Exception:
+                pass
+        if fallback is not None:
+            return int(fallback)
     try:
-        from src.meeting.store import get_meeting
-        meeting = get_meeting(meeting_id)
+        return int(store.count_messages(session_id, exclude_system=True))
     except Exception:
-        return "No speaker names configured for this meeting."
-    if meeting is None or meeting.speaker_names is None:
-        return "No speaker names configured for this meeting."
-    lines = ["Current speaker mapping:"]
-    for spk_id, name in meeting.speaker_names.items():
-        display_name = name if name else "(unnamed)"
-        lines.append(f"- {spk_id}: {display_name}")
-    if not meeting.speaker_names:
-        return "No speaker names configured for this meeting."
-    return "\n".join(lines)
+        return int(fallback or 0)
+
+
+def _group_stream_tool_choice(
+    session_id: str,
+    *,
+    transcript_lookup_done: bool,
+    force_transcript_lookup: bool,
+):
+    """Group answers need spoken hits. After a summary-only or no-tool turn, force lookup."""
+    if not session_id.startswith("group_"):
+        return "auto"
+    if transcript_lookup_done:
+        return "auto"
+    if force_transcript_lookup:
+        return {
+            "type": "function",
+            "function": {"name": "lookup_group_transcript"},
+        }
+    return "auto"
+
+
+def _thinking_on_for_tool_round(thinking: bool, tool_choice) -> bool:
+    """DashScope/Qwen thinking rejects a forced function tool_choice."""
+    if not thinking:
+        return False
+    if isinstance(tool_choice, dict):
+        return False
+    return True
+
+
+def _retry_llm_kwargs_after_error(kwargs: dict, error: BaseException) -> dict | None:
+    """One compatible retry. Thinking + forced tool_choice is a 400 on Qwen."""
+    msg = str(error).lower()
+    out = dict(kwargs)
+    extra = dict(out.get("extra_body") or {})
+    thinking_rejects_choice = "thinking" in msg and "tool_choice" in msg
+    if thinking_rejects_choice:
+        already_off = extra.get("enable_thinking") is False or (
+            isinstance(extra.get("thinking"), dict)
+            and extra["thinking"].get("type") == "disabled"
+        )
+        forced = isinstance(out.get("tool_choice"), dict)
+        if forced and not already_off:
+            extra["enable_thinking"] = False
+            if "thinking" in extra:
+                extra["thinking"] = {"type": "disabled"}
+            out["extra_body"] = extra
+            return out
+        out["tool_choice"] = "auto"
+        extra["enable_thinking"] = False
+        if extra.get("thinking"):
+            extra["thinking"] = {"type": "disabled"}
+        out["extra_body"] = extra
+        return out
+    if out.get("extra_body") is not None:
+        out.pop("extra_body", None)
+        return out
+    return None
+
+
+def _touch_group_session(session_id: str) -> None:
+    """Bump Group last_chat_at when a Group Chat turn starts."""
+    if not session_id.startswith("group_"):
+        return
+    try:
+        from src.meeting.group_store import touch_chat
+
+        touch_chat(session_id[len("group_"):])
+    except Exception:
+        logger.debug("touch group chat skipped %s", session_id, exc_info=True)
+
+
+def _build_meeting_ephemeral_context(meeting_id: str) -> str:
+    from src.chatbox.meeting_context import build_meeting_ephemeral_context
+
+    return build_meeting_ephemeral_context(meeting_id)
 
 
 def _format_current_time() -> str:
@@ -155,10 +238,20 @@ class ChatboxAgent:
     ):
         """Return (tools, system_prompt, catalog_text) for the given mode."""
         is_meeting = session_id.startswith("meeting_")
+        is_group = session_id.startswith("group_")
+        if is_group:
+            from src.prompts import MEETING_GROUP_CHAT_SYSTEM_PROMPT
+            tools = tools_for_mode(
+                "direct", is_group=True, web_search_enabled=web_search_enabled,
+            )
+            return tools, MEETING_GROUP_CHAT_SYSTEM_PROMPT, ""
         if mode == "direct":
             if is_meeting:
                 from src.prompts import MEETING_CHAT_SYSTEM_PROMPT
-                return [], MEETING_CHAT_SYSTEM_PROMPT, ""
+                tools = tools_for_mode(
+                    "direct", is_meeting=True, web_search_enabled=web_search_enabled,
+                )
+                return tools, MEETING_CHAT_SYSTEM_PROMPT, ""
             tools = tools_for_mode(
                 "direct", is_meeting=False, web_search_enabled=web_search_enabled,
             )
@@ -188,8 +281,12 @@ class ChatboxAgent:
         web_search_enabled: bool = False,
     ) -> bool:
         is_meeting = session_id.startswith("meeting_")
+        is_group = session_id.startswith("group_")
         return tool_name in allowed_tool_names(
-            mode, is_meeting=is_meeting, web_search_enabled=web_search_enabled,
+            mode,
+            is_meeting=is_meeting,
+            is_group=is_group,
+            web_search_enabled=web_search_enabled,
         )
 
     def _check_session_truncation(self, session_id: str) -> int | None:
@@ -199,14 +296,14 @@ class ChatboxAgent:
         increase the turn counter.
 
         For quick_ sessions: trim at _QUICK_MAX_MESSAGES turns, keep _QUICK_TRIM_KEEP.
-        For meeting_ sessions: trim at _MEETING_MAX_MESSAGES turns, keep _MEETING_TRIM_KEEP.
+        For meeting_ / group_ sessions: trim at _MEETING_MAX_MESSAGES turns, keep _MEETING_TRIM_KEEP.
 
         Returns the current turn count BEFORE any truncation, or None if not a
-        quick/meeting session.
+        quick/meeting/group session.
         """
         if session_id.startswith("quick_"):
             max_turns, trim_keep = _QUICK_MAX_MESSAGES, _QUICK_TRIM_KEEP
-        elif session_id.startswith("meeting_"):
+        elif session_id.startswith("meeting_") or session_id.startswith("group_"):
             max_turns, trim_keep = _MEETING_MAX_MESSAGES, _MEETING_TRIM_KEEP
         else:
             return None
@@ -279,6 +376,8 @@ class ChatboxAgent:
         """Max user+final-assistant dialogue units for LLM history by session type."""
         if session_id.startswith("meeting_"):
             return _MAX_HISTORY_DIALOGUE_MEETING
+        if session_id.startswith("group_"):
+            return _MAX_HISTORY_DIALOGUE_MAIN
         if session_id.startswith("quick_"):
             return _MAX_HISTORY_DIALOGUE_QUICK
         return _MAX_HISTORY_DIALOGUE_MAIN
@@ -353,6 +452,7 @@ class ChatboxAgent:
         """
         is_meeting = session_id.startswith("meeting_")
         is_quick = session_id.startswith("quick_")
+        is_group = session_id.startswith("group_")
 
         messages: list[dict] = []
 
@@ -360,20 +460,7 @@ class ChatboxAgent:
         sp = system_prompt if system_prompt is not None else self._system_prompt
         messages.append({"role": "system", "content": sp})
 
-        # ── Meeting: live transcript (or explicit unavailable) after fixed system ──
-        # Always inject one message so the model never assumes a hidden transcript.
-        if is_meeting:
-            meeting_id = session_id[len("meeting_"):]
-            try:
-                from src.chatbox.meeting_context import meeting_transcript_context_message
-                live_tx = meeting_transcript_context_message(meeting_id)
-            except Exception:
-                logger.exception(
-                    "Failed to load live transcript for session %s", session_id
-                )
-                from src.chatbox.meeting_context import MEETING_TRANSCRIPT_UNAVAILABLE
-                live_tx = MEETING_TRANSCRIPT_UNAVAILABLE
-            messages.append({"role": "system", "content": live_tx})
+        # Meeting transcript is retrieved via lookup_meeting_transcript, not dumped here.
 
         # ── History: last N dialogue turns ──
         # Declined web searches stay in history so the model knows what was refused.
@@ -386,6 +473,7 @@ class ChatboxAgent:
             hist = self._store.get_messages(session_id, limit=max_dialogue)
 
         # Meeting: ignore any legacy system rows (old transcript appends).
+        # Group: Chat-style history (keep tool rows); no stored transcript dump.
         # Non-meeting: keep system_hist for rare stored system context.
         system_hist = [] if is_meeting else [m for m in hist if m.role == "system"]
         dialogue_hist = [m for m in hist if m.role != "system"]
@@ -393,8 +481,21 @@ class ChatboxAgent:
         for m in system_hist:
             messages.append(self._store_message_to_llm_dict(m))
 
-        for m in dialogue_hist:
-            messages.append(self._store_message_to_llm_dict(m))
+        last_hist_i = len(dialogue_hist) - 1
+        stamp_clock = session_id.startswith("meeting_") or session_id.startswith("group_")
+        for i, m in enumerate(dialogue_hist):
+            d = self._store_message_to_llm_dict(m)
+            if (
+                stamp_clock
+                and i == last_hist_i
+                and m.role == "user"
+                and (m.content or "") == user_message
+                and user_message
+            ):
+                d["content"] = (
+                    f"[Current time: {_format_current_time()}]\n\n{user_message}"
+                )
+            messages.append(d)
 
         # ── Catalog (main Chat only; ephemeral; after history; never DB) ──
         if not is_meeting and not is_quick:
@@ -449,27 +550,36 @@ class ChatboxAgent:
         self._check_session_truncation(session_id)
 
         collections = self._get_collections(session_id)
-        # Speaker mapping for meeting sessions (ephemeral, per-message)
-        meeting_speaker_mapping = None
+        meeting_ephemeral_ctx = None
+        seen_tx_packs: set[str] = set()
         if session_id.startswith("meeting_"):
             meeting_id = session_id[len("meeting_"):]
-            meeting_speaker_mapping = _build_speaker_mapping(meeting_id)
+            meeting_ephemeral_ctx = _build_meeting_ephemeral_context(meeting_id)
+        elif session_id.startswith("group_"):
+            from src.chatbox.meeting_context import build_group_ephemeral_context
+
+            meeting_ephemeral_ctx = build_group_ephemeral_context(
+                session_id[len("group_"):]
+            )
         total_tool_calls = 0
         agentic_search_calls = 0  # search_knowledge_base only
 
         # Save user message
         self._store.add_message(session_id, "user", user_message)
+        _touch_group_session(session_id)
 
         extra_messages: list[dict] = []
         final_answer = ""
         all_sources: list[dict] = []
+        group_tx_called = False
+        group_force_lookup = False
 
         for _round in range(_MAX_TOOL_ROUNDS):
             messages = self._build_messages(
                 session_id, user_message, extra_messages=extra_messages,
                 collections=collections,
                 system_prompt=_sys_prompt, catalog_text=_cat_text,
-                pre_message_context=meeting_speaker_mapping,
+                pre_message_context=meeting_ephemeral_ctx,
             )
 
             # CHECKPOINT: log multimodal messages
@@ -484,7 +594,15 @@ class ChatboxAgent:
 
             # Call LLM with tools — use underlying OpenAI client directly
             # (avoids modifying the LLMProvider ABC)
-            response = self._call_llm_with_tools(messages, tools=_tools)
+            response = self._call_llm_with_tools(
+                messages,
+                tools=_tools,
+                tool_choice=_group_stream_tool_choice(
+                    session_id,
+                    transcript_lookup_done=group_tx_called,
+                    force_transcript_lookup=group_force_lookup,
+                ),
+            )
 
             if response.get("tool_calls"):
                 # ── LLM wants to use tools ──
@@ -520,6 +638,53 @@ class ChatboxAgent:
                                 "Web search requires the streaming Chat UI for user "
                                 f"confirmation (query was: {wq!r}). No internet search was run."
                             )
+                        total_tool_calls += 1
+                    elif tool_name == "lookup_meeting_transcript":
+                        from src.meeting.transcript_index import lookup_json_and_keys
+                        mid = (
+                            session_id[len("meeting_"):]
+                            if session_id.startswith("meeting_")
+                            else ""
+                        )
+                        tool_content, found_keys = lookup_json_and_keys(
+                            mid,
+                            str(args.get("query") or user_message),
+                            speaker_scope=str(args.get("speaker_scope") or "auto"),
+                            user_question=user_message,
+                            seen_pack_keys=seen_tx_packs,
+                        )
+                        seen_tx_packs |= found_keys
+                        total_tool_calls += 1
+                    elif tool_name == "lookup_group_transcript":
+                        from src.meeting.transcript_index import execute_group_lookup_json
+
+                        gid = (
+                            session_id[len("group_"):]
+                            if session_id.startswith("group_")
+                            else ""
+                        )
+                        raw_ids = args.get("meeting_ids")
+                        mids = raw_ids if isinstance(raw_ids, list) else None
+                        tool_content = execute_group_lookup_json(
+                            gid,
+                            str(args.get("query") or user_message),
+                            meeting_ids=mids,
+                            speaker_scope=str(args.get("speaker_scope") or "auto"),
+                            user_question=user_message,
+                        )
+                        total_tool_calls += 1
+                        group_tx_called = True
+                    elif tool_name == "read_meeting_summary":
+                        from src.chatbox.meeting_context import read_group_meeting_summary
+
+                        gid = (
+                            session_id[len("group_"):]
+                            if session_id.startswith("group_")
+                            else ""
+                        )
+                        tool_content = read_group_meeting_summary(
+                            gid, str(args.get("meeting_id") or "")
+                        )
                         total_tool_calls += 1
                     elif tool_name in STRUCTURE_TOOL_NAMES:
                         tool_content = execute_structure_tool(
@@ -648,8 +813,13 @@ class ChatboxAgent:
                         "tool_call_id": tool_call_id,
                         "content": tool_content,
                     })
+                if session_id.startswith("group_") and not group_tx_called:
+                    group_force_lookup = True
             else:
                 # ── LLM returned text — final answer ──
+                if session_id.startswith("group_") and not group_tx_called:
+                    group_force_lookup = True
+                    continue
                 final_answer = response.get("content", "") or ""
                 break
 
@@ -664,7 +834,7 @@ class ChatboxAgent:
                 session_id, user_message, extra_messages=extra_messages,
                 collections=collections,
                 system_prompt=_sys_prompt, catalog_text=_cat_text,
-                pre_message_context=meeting_speaker_mapping,
+                pre_message_context=meeting_ephemeral_ctx,
             )
             final_answer = _force_generate_answer(self._llm, messages)
 
@@ -774,11 +944,17 @@ class ChatboxAgent:
         # Quick-chat truncation check
         msg_count = self._check_session_truncation(session_id)
 
-        # Speaker mapping for meeting sessions (ephemeral, per-message)
-        meeting_speaker_mapping = None
+        meeting_ephemeral_ctx = None
+        seen_tx_packs: set[str] = set()
         if session_id.startswith("meeting_"):
             meeting_id = session_id[len("meeting_"):]
-            meeting_speaker_mapping = _build_speaker_mapping(meeting_id)
+            meeting_ephemeral_ctx = _build_meeting_ephemeral_context(meeting_id)
+        elif session_id.startswith("group_"):
+            from src.chatbox.meeting_context import build_group_ephemeral_context
+
+            meeting_ephemeral_ctx = build_group_ephemeral_context(
+                session_id[len("group_"):]
+            )
 
         _quick_warn = (
             msg_count is not None
@@ -799,9 +975,12 @@ class ChatboxAgent:
 
         # Save user message
         self._store.add_message(session_id, "user", user_message)
+        _touch_group_session(session_id)
 
         extra_messages: list[dict] = []
         all_sources: list[dict] = []
+        group_tx_called = False
+        group_force_lookup = False
         # Engineering control (not prompt-only): web HITL once per user-message stream.
         # approved → later request_web_search runs without dialog
         # declined → web tool removed for rest of this stream; no more confirms
@@ -840,7 +1019,7 @@ class ChatboxAgent:
                 session_id, user_message, extra_messages=extra_messages,
                 collections=collections,
                 system_prompt=_sys_prompt, catalog_text=_cat_text,
-                pre_message_context=meeting_speaker_mapping,
+                pre_message_context=meeting_ephemeral_ctx,
             )
             tools_round = _tools_this_round()
 
@@ -871,21 +1050,30 @@ class ChatboxAgent:
                 # Engineering: omit web tool after decline; force answer if no tools left
                 if tools_round:
                     stream_kwargs["tools"] = tools_round
-                    stream_kwargs["tool_choice"] = "auto"
+                    stream_kwargs["tool_choice"] = _group_stream_tool_choice(
+                        session_id,
+                        transcript_lookup_done=group_tx_called,
+                        force_transcript_lookup=group_force_lookup,
+                    )
                 else:
                     stream_kwargs["tool_choice"] = "none"
                 # Think toggle: must set enabled/disabled for DeepSeek-class models.
                 # If we omit extra_body when Think is OFF, some models still fill
                 # reasoning_content first and only emit content at the end → no
                 # token-by-token answer stream (one big dump).
+                # Forced function tool_choice cannot ride along with thinking
+                # (Qwen: "Thinking mode does not support this tool_choice").
+                think_round = _thinking_on_for_tool_round(
+                    bool(thinking), stream_kwargs.get("tool_choice"),
+                )
                 model_lower = (model or "").lower()
                 base_url = str(getattr(self._llm, "_base_url", "") or "").lower()
                 is_dashscope = "dashscope" in base_url or "aliyuncs" in base_url
                 is_deepseek = "deepseek" in model_lower or "deepseek" in base_url
                 build_extra = getattr(self._llm, "_build_thinking_extra", None)
                 if callable(build_extra):
-                    stream_kwargs["extra_body"] = build_extra(bool(thinking))
-                elif thinking:
+                    stream_kwargs["extra_body"] = build_extra(think_round)
+                elif think_round:
                     if is_dashscope:
                         stream_kwargs["extra_body"] = {"enable_thinking": True}
                     elif "minimax" in model_lower:
@@ -912,14 +1100,13 @@ class ChatboxAgent:
                 try:
                     stream = client.chat.completions.create(**stream_kwargs)
                 except Exception as e:
-                    # Retry once without thinking extra_body if provider rejects it
                     logger.warning("LLM streaming call failed: %s", e)
-                    if stream_kwargs.get("extra_body") is not None:
+                    retry_kwargs = _retry_llm_kwargs_after_error(stream_kwargs, e)
+                    if retry_kwargs is not None:
                         try:
-                            stream_kwargs.pop("extra_body", None)
-                            stream = client.chat.completions.create(**stream_kwargs)
+                            stream = client.chat.completions.create(**retry_kwargs)
                             logger.warning(
-                                "Retried stream without thinking extra_body after error: %s", e
+                                "Retried stream after thinking/tool_choice error: %s", e
                             )
                         except Exception as e2:
                             logger.exception("LLM streaming retry failed")
@@ -939,6 +1126,18 @@ class ChatboxAgent:
                 in_think = False    # inside <think>...</think>
                 all_thinking = ""
                 streamed_answer_chars = 0  # content tokens already pushed to UI
+                suppress_answer = (
+                    session_id.startswith("group_") and not group_tx_called
+                )
+
+                def _put_token(text: str) -> None:
+                    nonlocal streamed_answer_chars
+                    if not text:
+                        return
+                    if suppress_answer:
+                        return
+                    token_queue.put(("token", text))
+                    streamed_answer_chars += len(text)
 
                 for chunk in stream:
                     if not chunk.choices:
@@ -963,21 +1162,18 @@ class ChatboxAgent:
                                         emit = text[:partial]
                                         if emit:
                                             content += emit
-                                            token_queue.put(("token", emit))
-                                            streamed_answer_chars += len(emit)
+                                            _put_token(emit)
                                         break
                                     content += text
                                     if text:
-                                        token_queue.put(("token", text))
-                                        streamed_answer_chars += len(text)
+                                        _put_token(text)
                                     break
                                 else:
                                     # Emit text before <think>
                                     before = text[:idx]
                                     if before:
                                         content += before
-                                        token_queue.put(("token", before))
-                                        streamed_answer_chars += len(before)
+                                        _put_token(before)
                                     text = text[idx + len("<think>"):]
                                     in_think = True
                                     think_buf = ""
@@ -1044,7 +1240,7 @@ class ChatboxAgent:
                         # Chunk large fallback so the UI still paints progressively
                         step = 24
                         for i in range(0, len(final_text), step):
-                            token_queue.put(("token", final_text[i : i + step]))
+                            _put_token(final_text[i : i + step])
                     result["content"] = final_text or content
                 if reasoning:
                     result["reasoning_content"] = reasoning
@@ -1291,6 +1487,71 @@ class ChatboxAgent:
                                 _ui_source_type = "web"
                         total_tool_calls += 1
 
+                    elif not _skip_exec and tool_name == "lookup_meeting_transcript":
+                        from src.meeting.transcript_index import (
+                            hit_count_from_lookup_json,
+                            lookup_json_and_keys,
+                        )
+                        mid = (
+                            session_id[len("meeting_"):]
+                            if session_id.startswith("meeting_")
+                            else ""
+                        )
+                        tool_content, found_keys = lookup_json_and_keys(
+                            mid,
+                            str(args.get("query") or user_message),
+                            speaker_scope=str(args.get("speaker_scope") or "auto"),
+                            user_question=user_message,
+                            seen_pack_keys=seen_tx_packs,
+                        )
+                        seen_tx_packs |= found_keys
+                        _sources_this_call = hit_count_from_lookup_json(
+                            tool_content if isinstance(tool_content, str) else ""
+                        )
+                        _ui_source_type = "meeting"
+                        total_tool_calls += 1
+
+                    elif not _skip_exec and tool_name == "lookup_group_transcript":
+                        from src.meeting.transcript_index import (
+                            execute_group_lookup_json,
+                            hit_count_from_lookup_json,
+                        )
+
+                        gid = (
+                            session_id[len("group_"):]
+                            if session_id.startswith("group_")
+                            else ""
+                        )
+                        raw_ids = args.get("meeting_ids")
+                        mids = raw_ids if isinstance(raw_ids, list) else None
+                        tool_content = execute_group_lookup_json(
+                            gid,
+                            str(args.get("query") or user_message),
+                            meeting_ids=mids,
+                            speaker_scope=str(args.get("speaker_scope") or "auto"),
+                            user_question=user_message,
+                        )
+                        _sources_this_call = hit_count_from_lookup_json(
+                            tool_content if isinstance(tool_content, str) else ""
+                        )
+                        _ui_source_type = "meeting"
+                        total_tool_calls += 1
+                        group_tx_called = True
+
+                    elif not _skip_exec and tool_name == "read_meeting_summary":
+                        from src.chatbox.meeting_context import read_group_meeting_summary
+
+                        gid = (
+                            session_id[len("group_"):]
+                            if session_id.startswith("group_")
+                            else ""
+                        )
+                        tool_content = read_group_meeting_summary(
+                            gid, str(args.get("meeting_id") or "")
+                        )
+                        _sources_this_call = None
+                        total_tool_calls += 1
+
                     # ── Structure / summary / full-text ──
                     elif not _skip_exec and tool_name in STRUCTURE_TOOL_NAMES:
                         tool_content = await execute_structure_tool_async(
@@ -1535,6 +1796,13 @@ class ChatboxAgent:
                         "source_type": _ui_source_type,
                         "tool_call_id": tc.get("id", ""),
                     }
+                    if tool_name == "lookup_group_transcript" and isinstance(tool_content, str):
+                        try:
+                            _cited = json.loads(tool_content).get("cites")
+                        except (TypeError, json.JSONDecodeError):
+                            _cited = None
+                        if isinstance(_cited, list):
+                            _tr["cites"] = _cited
                     # Only search/web tools report sources_count (avoid "0 sources" on list_library_tree)
                     if _sources_this_call is not None:
                         _tr["sources_count"] = _sources_this_call
@@ -1559,6 +1827,8 @@ class ChatboxAgent:
                             "task_count": thinking_summary.get("task_count", 0),
                             "tasks": list(thinking_summary.get("tasks") or []),
                         }
+                    if _tr.get("cites"):
+                        _trace_entry["cites"] = _tr["cites"]
                     tool_trace.append(_trace_entry)
 
                     # Inject assistant tool_call + tool result for next LLM round
@@ -1584,9 +1854,17 @@ class ChatboxAgent:
                         "tool_call_id": tool_call_id,
                         "content": tool_content,
                     })
+                if session_id.startswith("group_") and not group_tx_called:
+                    group_force_lookup = True
 
             else:
                 # ── Text response — tokens already streamed, just finalize ──
+                if session_id.startswith("group_") and not group_tx_called:
+                    group_force_lookup = True
+                    logger.info(
+                        "Group chat deferred answer until lookup_group_transcript"
+                    )
+                    continue
                 final_content = response.get("content", "") or ""
 
                 # Save assistant message
@@ -1620,22 +1898,10 @@ class ChatboxAgent:
                             i, s.get("text", "")[:60], s.get("score", 0),
                             list((s.get("metadata") or {}).keys())[:6],
                         )
-                # message_count: Q&A turns for quick/meeting UI; raw rows for main Chat sidebar
-                _done_count = msg_count if msg_count is not None else 0
-                if session_id.startswith("quick_") or session_id.startswith("meeting_"):
-                    _ct = getattr(self._store, "count_dialogue_turns", None)
-                    if callable(_ct):
-                        try:
-                            _done_count = int(_ct(session_id))
-                        except Exception:
-                            pass
-                else:
-                    try:
-                        _done_count = int(
-                            self._store.count_messages(session_id, exclude_system=True)
-                        )
-                    except Exception:
-                        pass
+                # message_count: Q&A turns for QC; raw rows for main Chat sidebar
+                _done_count = _ui_turn_count(
+                    self._store, session_id, fallback=msg_count,
+                )
                 yield {
                     "type": "done",
                     "sources": all_sources,
@@ -1676,21 +1942,7 @@ class ChatboxAgent:
                 "[Chatbox] Force generate returned empty — total_tool_calls=%d sources=%d",
                 total_tool_calls, len(all_sources),
             )
-        _done_count = msg_count if msg_count is not None else 0
-        if session_id.startswith("quick_") or session_id.startswith("meeting_"):
-            _ct = getattr(self._store, "count_dialogue_turns", None)
-            if callable(_ct):
-                try:
-                    _done_count = int(_ct(session_id))
-                except Exception:
-                    pass
-        else:
-            try:
-                _done_count = int(
-                    self._store.count_messages(session_id, exclude_system=True)
-                )
-            except Exception:
-                pass
+        _done_count = _ui_turn_count(self._store, session_id, fallback=msg_count)
         yield {
             "type": "done",
             "sources": all_sources,
@@ -1701,7 +1953,7 @@ class ChatboxAgent:
 
     # ── LLM call with tools ──────────────────────────────────────────
 
-    def _call_llm_with_tools(self, messages: list[dict], tools=None) -> dict:
+    def _call_llm_with_tools(self, messages: list[dict], tools=None, tool_choice="auto") -> dict:
         """Call the Chat LLM with tools enabled.
 
         Uses the underlying OpenAI-compatible client directly for function
@@ -1731,7 +1983,7 @@ class ChatboxAgent:
             messages=messages,
             temperature=0.1,
             tools=_tools,
-            tool_choice="auto",
+            tool_choice=tool_choice,
         )
         # Apply max_tokens if available (guard against mock objects)
         try:
@@ -1744,8 +1996,17 @@ class ChatboxAgent:
         try:
             resp = client.chat.completions.create(**kwargs)
         except Exception as e:
-            logger.exception("LLM tool call failed: %s", e)
-            return {"content": f"Request failed: {e}"}
+            retry_kwargs = _retry_llm_kwargs_after_error(kwargs, e)
+            if retry_kwargs is not None:
+                try:
+                    resp = client.chat.completions.create(**retry_kwargs)
+                    logger.warning("Retried tool call after thinking/tool_choice error: %s", e)
+                except Exception as e2:
+                    logger.exception("LLM tool call retry failed: %s", e2)
+                    return {"content": f"Request failed: {e2}"}
+            else:
+                logger.exception("LLM tool call failed: %s", e)
+                return {"content": f"Request failed: {e}"}
 
         if not resp.choices:
             return {"content": ""}

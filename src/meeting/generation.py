@@ -263,6 +263,8 @@ class MeetingGenerationMixin:
             meeting_id,
             processing_state=ProcessingState.summarizing.value,
             summary_gen_state=GenerationState.prefilling.value,
+            transcript_index_status="building",
+            transcript_index_error="",
         )
 
         # ── Helper: parse blueprint LLM response ──────────────
@@ -380,9 +382,7 @@ class MeetingGenerationMixin:
 
                 logger.info("[STREAM-THREAD] Call 1 done: %d chars", len(accumulated))
                 general_md = accumulated.strip()
-                general_md = _clean_refs(
-                    _normalize_refs(_normalize_brackets(general_md)), all_sids,
-                )
+                general_md = _finalize_summary_markdown(general_md, all_sids)
 
                 # Persist Call 1 result (content lives in tab_general.md, not meta.json)
                 general_tab_path = store.save_section_md(meeting_id, "tab_general", general_md)
@@ -392,6 +392,22 @@ class MeetingGenerationMixin:
                 )
                 event_queue.put(("summary_done", {"general_md": general_md}))
                 event_queue.put(("state", {"summary": "idle"}))
+
+                # Transcript index locators start only after Summary stream ends
+                # so they hit the system+<transcript> prefix cache.
+                def _index_tx():
+                    try:
+                        from src.meeting.transcript_index import index_from_store
+                        index_from_store(meeting_id)
+                    except Exception:
+                        logger.exception(
+                            "[STREAM-THREAD] transcript index failed meeting=%s",
+                            meeting_id,
+                        )
+
+                threading.Thread(
+                    target=_index_tx, daemon=True, name=f"tx-index-{meeting_id[:8]}"
+                ).start()
 
                 # ── Call 2 result ───────────────────────────
                 if not _bp_emitted:
@@ -669,6 +685,21 @@ class MeetingGenerationMixin:
             parsed_title = ""  # title comes from Call 2
             logger.info("[SUMMARY] general_md=%d chars", len(general_md))
 
+            import threading
+
+            def _index_tx_sync():
+                try:
+                    from src.meeting.transcript_index import index_from_store
+                    index_from_store(meeting_id)
+                except Exception:
+                    logger.exception(
+                        "[BLUEPRINT] transcript index failed meeting=%s", meeting_id
+                    )
+
+            threading.Thread(
+                target=_index_tx_sync, daemon=True, name=f"tx-index-{meeting_id[:8]}"
+            ).start()
+
             # ── Call 2: Blueprint Decomposition (with catalog) ────
             # Focused purely on classification — no Summary task
             # competing for attention.  Shares transcript prefix with
@@ -707,7 +738,7 @@ class MeetingGenerationMixin:
 
             # ── Validate sentence refs ────────────────────────────
             all_sids = [s.get("sentence_id", "") for s in (sentences_data or [])]
-            general_md = _clean_refs(_normalize_refs(_normalize_brackets(general_md)), all_sids)
+            general_md = _finalize_summary_markdown(general_md, all_sids)
 
             # ── Build blueprint entries (v3: blueprint_id = bp_XX) ──
             # Sort by tab_name for deterministic bp_XX assignment
@@ -1078,9 +1109,8 @@ class MeetingGenerationMixin:
                 )
 
                 # ── Validate & persist ────────────────────────────
-                validated = _clean_refs(
-                    _normalize_refs(_normalize_brackets(accumulated.strip())),
-                    list(payload_ids),
+                validated = _finalize_summary_markdown(
+                    accumulated.strip(), list(payload_ids)
                 )
                 md_path = store.save_section_md(meeting_id, tab_id, validated)
 

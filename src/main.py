@@ -61,6 +61,7 @@ async def lifespan(app: FastAPI):
         doc_summary_handler,
         meeting_extract_handler,
         meeting_summary_handler,
+        meeting_transcript_index_handler,
         sparse_recalc_handler,
         upload_handler,
     )
@@ -70,6 +71,7 @@ async def lifespan(app: FastAPI):
     task_manager.register_handler("sparse_recalc", sparse_recalc_handler)
     task_manager.register_handler("meeting_summary", meeting_summary_handler)
     task_manager.register_handler("meeting_extract", meeting_extract_handler)
+    task_manager.register_handler("meeting_transcript_index", meeting_transcript_index_handler)
 
     from src.meeting.transcription.onnx.threads import configure_host_math_threads
 

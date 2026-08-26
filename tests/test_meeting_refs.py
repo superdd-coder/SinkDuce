@@ -47,6 +47,39 @@ def test_parse_tagger_numeric_ids():
     assert out["sentence_ids"] == ["stt_0001", "stt_0002"]
 
 
+def test_strip_speaker_name_glosses():
+    from src.meeting.refs import strip_speaker_name_glosses
+
+    md = (
+        "[spk:2] (Jethro) reported high OPEX. "
+        "[spk:3]（Ray）explained feed pressure. "
+        "[spk:4] (Herman) confirmed 1.2 kWh. "
+        "The offer is RM2.30+ (excluding VAT)."
+    )
+    out = strip_speaker_name_glosses(md)
+    assert "[spk:2] reported high OPEX" in out
+    assert "[spk:3]explained feed pressure" in out or "[spk:3] explained" in out
+    assert "[spk:4] confirmed 1.2 kWh" in out
+    assert "(Jethro)" not in out
+    assert "（Ray）" not in out
+    assert "(Herman)" not in out
+    assert "(excluding VAT)" in out
+    assert "[spk:2]" in out
+    assert "[spk:3]" in out
+    assert "[spk:4]" in out
+
+
+def test_prompts_forbid_parenthetical_speaker_names():
+    import src.prompts as prompts
+
+    for text in (
+        prompts.MEETING_GENERAL_SUMMARY_PROMPT,
+        prompts.MEETING_SUMMARIZER_V3_PROMPT,
+        prompts.MEETING_BLUEPRINT_SYSTEM,
+    ):
+        assert "[spk:0] (Alex)" in text
+
+
 def test_prompts_teach_ref_prefix_not_bare_n():
     import src.prompts as prompts
 
@@ -68,6 +101,12 @@ def test_frontend_view_and_chat_chip_ref_prefix():
     ).read_text(encoding="utf-8")
     assert "parseMeetingRefGroups" in marks
     assert r"[ref:" in marks
+    strip_at = marks.find(r"[\(（]")
+    if strip_at < 0:
+        strip_at = marks.find("[（(]")
+    name_at = marks.find("s.replace(/\\[spk:(\\d+)\\]/g")
+    assert strip_at >= 0
+    assert 0 <= strip_at < name_at
     assert "MEETING_CITE_RE_SOURCE" in chat
     assert "Bare [67] is ordinary text" in chat
 

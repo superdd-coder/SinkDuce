@@ -74,9 +74,66 @@ class TestLoadMeetingTranscriptText:
             assert load_meeting_transcript_text("mid3") is None
 
 
+class TestMeetingEphemeralContext:
+    def test_load_general_summary_text_reads_tab_general(self):
+        from src.chatbox.meeting_context import load_general_summary_text
+
+        with patch(
+            "src.meeting.store.get_section_md",
+            return_value="## Summary\nTalked about pricing.\n## Todo\n- Send quote",
+        ) as get_md:
+            text = load_general_summary_text("mid1")
+        get_md.assert_called_once_with("mid1", "tab_general")
+        assert "Send quote" in text
+        assert "## Summary" in text
+
+    def test_load_general_summary_text_empty_when_missing(self):
+        from src.chatbox.meeting_context import load_general_summary_text
+
+        with patch("src.meeting.store.get_section_md", return_value=None):
+            assert load_general_summary_text("mid1") == ""
+
+    def test_build_ephemeral_context_includes_speakers_and_outline(self):
+        from src.chatbox.meeting_context import build_meeting_ephemeral_context
+
+        meeting = MagicMock()
+        meeting.speaker_names = {"0": "Alice"}
+        meeting.speaker_people = {}
+        with patch("src.meeting.store.get_meeting", return_value=meeting), patch(
+            "src.meeting.store.get_section_md",
+            return_value="## Todo\n- Follow up on price",
+        ), patch(
+            "src.speakers.service.rebuild_speaker_names",
+            return_value={"0": "Alice"},
+        ):
+            ctx = build_meeting_ephemeral_context("mid1")
+        assert "Alice" in ctx
+        assert "Follow up on price" in ctx
+        assert "outline" in ctx.lower() or "general summary" in ctx.lower()
+
+    def test_injected_outline_replaces_spk_tags_with_display_names(self):
+        from src.chatbox.meeting_context import build_meeting_ephemeral_context
+
+        meeting = MagicMock()
+        meeting.speaker_names = {"1": "David", "3": "Xu"}
+        meeting.speaker_people = {}
+        with patch("src.meeting.store.get_meeting", return_value=meeting), patch(
+            "src.meeting.store.get_section_md",
+            return_value="## Todo\n- [spk:3] email [spk:1] the monthly dose",
+        ), patch(
+            "src.speakers.service.rebuild_speaker_names",
+            return_value={"1": "David", "3": "Xu"},
+        ):
+            ctx = build_meeting_ephemeral_context("mid1")
+        assert "[spk:3]" not in ctx
+        assert "[spk:1]" not in ctx
+        assert "Xu" in ctx
+        assert "David" in ctx
+
+
 class TestEphemeralBuildContext:
-    def test_injects_live_transcript_without_db_system_row(self, store):
-        """Session has only dialogue; build still gets live transcript."""
+    def test_meeting_chat_has_no_full_transcript_system_slot(self, store):
+        """Transcript comes from lookup_meeting_transcript, not a system dump."""
         from src.chatbox.agent import ChatboxAgent
 
         mid = "live_tx"
@@ -87,57 +144,27 @@ class TestEphemeralBuildContext:
         store.add_message(sid, "user", "more?")
 
         agent = ChatboxAgent(store, MagicMock(), None)
-        with patch(
-            "src.chatbox.meeting_context.meeting_transcript_context_message",
-            return_value="[1] 0: LIVE_TRANSCRIPT_BODY",
-        ):
-            msgs = agent._build_messages(
-                sid,
-                "more?",
-                system_prompt="MEETING_SYSTEM",
-                pre_message_context="Speaker mapping: S1=Alice",
-            )
+        msgs = agent._build_messages(
+            sid,
+            "more?",
+            system_prompt="MEETING_SYSTEM",
+            pre_message_context="Speaker mapping: S1=Alice",
+        )
 
         assert msgs[0]["content"] == "MEETING_SYSTEM"
-        assert msgs[1]["role"] == "system"
-        assert msgs[1]["content"] == "[1] 0: LIVE_TRANSCRIPT_BODY"
-        # Not written to session
+        flat = "\n".join(str(m.get("content") or "") for m in msgs)
+        assert "LIVE_TRANSCRIPT_BODY" not in flat
         systems_in_db = [
             m for m in store.get_messages(sid, limit=None) if m.role == "system"
         ]
         assert systems_in_db == []
-
-        # Order: fixed system, live transcript, dialogue, speaker, ...
         contents = [m.get("content") for m in msgs]
         assert "what was said?" in contents
         speaker_idxs = [
             i for i, m in enumerate(msgs)
             if m["role"] == "system" and "Speaker mapping" in (m.get("content") or "")
         ]
-        assert speaker_idxs and speaker_idxs[0] > 1
-
-    def test_injects_unavailable_notice_when_no_transcript(self, store):
-        """No body → explicit unavailable notice (never silent omission)."""
-        from src.chatbox.agent import ChatboxAgent
-        from src.chatbox.meeting_context import MEETING_TRANSCRIPT_UNAVAILABLE
-
-        mid = "empty_tx"
-        sid = f"meeting_{mid}"
-        store.create_session(session_id=sid)
-        store.add_message(sid, "user", "What was the meeting about?")
-
-        agent = ChatboxAgent(store, MagicMock(), None)
-        with (
-            patch("src.chatbox.meeting_context.get_sentences", return_value=None),
-            patch("src.chatbox.meeting_context.get_transcript", return_value=None),
-        ):
-            msgs = agent._build_messages(
-                sid, "What was the meeting about?", system_prompt="MEETING_SYSTEM",
-            )
-
-        assert msgs[1]["role"] == "system"
-        assert msgs[1]["content"] == MEETING_TRANSCRIPT_UNAVAILABLE
-        assert "unavailable" in msgs[1]["content"].lower()
+        assert speaker_idxs and speaker_idxs[0] > 0
 
     def test_ignores_stale_db_system_transcript_rows(self, store):
         """Old persisted system rows must not be mixed into context."""
@@ -151,24 +178,18 @@ class TestEphemeralBuildContext:
         store.add_message(sid, "user", "q1")
 
         agent = ChatboxAgent(store, MagicMock(), None)
-        with patch(
-            "src.chatbox.meeting_context.meeting_transcript_context_message",
-            return_value="[1] 0: FRESH_TRANSCRIPT",
-        ):
-            msgs = agent._build_messages(
-                sid, "q1", system_prompt="MEETING_SYSTEM",
-            )
+        msgs = agent._build_messages(
+            sid, "q1", system_prompt="MEETING_SYSTEM",
+        )
 
         flat = "\n".join(str(m.get("content") or "") for m in msgs)
-        assert "FRESH_TRANSCRIPT" in flat
         assert "STALE_OLD_TRANSCRIPT" not in flat
         assert "STALE_DUP" not in flat
-        # Only one transcript system after fixed prompt
         system_bodies = [
             m["content"] for m in msgs
             if m["role"] == "system" and m["content"] != "MEETING_SYSTEM"
         ]
-        assert system_bodies == ["[1] 0: FRESH_TRANSCRIPT"]
+        assert all("STALE" not in (b or "") for b in system_bodies)
 
     def test_create_session_does_not_persist_transcript(self, store):
         from src.api.routes.sessions import SessionCreateRequest, create_session
@@ -194,22 +215,18 @@ class TestEphemeralBuildContext:
         ]
         assert systems == []
 
-    def test_chat_uses_live_transcript_not_session_system(self, store):
+    def test_chat_does_not_inject_full_transcript_into_llm(self, store):
         from src.chatbox.agent import ChatboxAgent
 
         mid = "agent_live"
         sid = f"meeting_{mid}"
         store.create_session(session_id=sid)
-        # Prior failed turns left only dialogue — no system row
         store.add_message(sid, "user", "q1")
         store.add_message(sid, "assistant", "no transcript before")
 
         mock_llm = MagicMock()
         mock_llm._model = "test-model"
         mock_llm._client = MagicMock()
-        mock_llm._client.chat.completions.create.return_value = _fake_completion(
-            "answer from live context"
-        )
         agent = ChatboxAgent(
             session_store=store,
             chat_llm=mock_llm,
@@ -220,25 +237,59 @@ class TestEphemeralBuildContext:
 
         def capture_create(**kwargs):
             captured.append(kwargs.get("messages") or [])
-            return _fake_completion("answer from live context")
+            return _fake_completion("answer from tools")
 
         mock_llm._client.chat.completions.create.side_effect = capture_create
 
-        with patch(
-            "src.chatbox.meeting_context.meeting_transcript_context_message",
-            return_value="[1] 0: Company X performed strongly overall",
-        ):
-            resp = agent.chat(
-                sid, "How was Company X evaluated?", mode="direct",
-            )
+        resp = agent.chat(
+            sid, "How was Company X evaluated?", mode="direct",
+        )
 
         assert resp.answer
         assert captured
         flat = "\n".join(
             str(m.get("content") or "") for m in captured[0]
         )
-        assert "Company X performed strongly overall" in flat
-        # Still no system rows persisted
+        assert "Company X performed strongly overall" not in flat
+        assert not any(
+            m.role == "system"
+            for m in store.get_messages(sid, limit=None)
+        )
+
+    def test_chat_injects_general_summary_not_persisted(self, store):
+        from src.chatbox.agent import ChatboxAgent
+
+        mid = "with_outline"
+        sid = f"meeting_{mid}"
+        store.create_session(session_id=sid)
+
+        mock_llm = MagicMock()
+        mock_llm._model = "test-model"
+        mock_llm._client = MagicMock()
+        agent = ChatboxAgent(
+            session_store=store,
+            chat_llm=mock_llm,
+            agentic_service=None,
+        )
+        captured: list[list] = []
+
+        def capture_create(**kwargs):
+            captured.append(kwargs.get("messages") or [])
+            return _fake_completion("next is send the quote")
+
+        mock_llm._client.chat.completions.create.side_effect = capture_create
+        meeting = MagicMock()
+        meeting.speaker_names = {"0": "Alice"}
+        with patch("src.meeting.store.get_meeting", return_value=meeting), patch(
+            "src.meeting.store.get_section_md",
+            return_value="## Todo\n- Send the quote",
+        ):
+            agent.chat(sid, "接下来要做什么", mode="direct")
+
+        assert captured
+        flat = "\n".join(str(m.get("content") or "") for m in captured[0])
+        assert "Send the quote" in flat
+        assert "Alice" in flat
         assert not any(
             m.role == "system"
             for m in store.get_messages(sid, limit=None)

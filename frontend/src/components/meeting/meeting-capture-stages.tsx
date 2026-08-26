@@ -44,8 +44,8 @@ export interface MeetingCaptureStagesProps {
   handleSpeakerSampleClick: (start: number, end?: number) => void
   onPersonAssigned: (meeting: Meeting) => void
   capturePlayerRef: RefObject<CaptureMiniPlayerHandle | null>
-  setPlaybackTime: (t: number) => void
-  playbackTime: number
+  setPlaybackTime: (t: number | null) => void
+  playbackTime: number | null
   handleHotWordsDraftChange: (draft: string[] | undefined) => void
   handleEnterStudio: () => void
   recorderLevels: number[]

@@ -70,3 +70,18 @@ class TestRebuildFromTexts:
     def test_avg_dl_empty(self):
         encoder, _ = SparseEncoder.rebuild_from_texts([])
         assert encoder.avg_dl == 0.0
+
+
+class TestSparseEncoderLoad:
+    def test_missing_vocab_clears_previous_collection(self):
+        encoder = SparseEncoder()
+        encoder.build_vocab(["alpha beta from another collection"])
+        assert encoder.term_to_id
+
+        db = type("DB", (), {})()
+        db.get_collection_config = lambda collection: {}  # noqa: ARG005
+        encoder.load(db, "__sinkduce_meeting_transcripts__")
+        assert encoder.term_to_id == {}
+        assert encoder.doc_freqs == {}
+        assert encoder._doc_count == 0
+        assert encoder.encode_query("alpha") == {}

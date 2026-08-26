@@ -23,18 +23,24 @@ export interface MeetingViewOverlaysProps {
   deleteTarget: string | null
   setDeleteTarget: (id: string | null) => void
   confirmDelete: () => void
+  deleteGroupTarget: string | null
+  setDeleteGroupTarget: (id: string | null) => void
+  confirmDeleteGroup: () => void
   retranscribeConfirmOpen: boolean
   setRetranscribeConfirmOpen: (open: boolean) => void
   handleTranscribe: () => void
   sectionTip: MeetingSectionTip | null
   sideRailOpen: boolean
-  sideTab: "sections" | "transcript" | "speaker"
+  sideTab: "sections" | "transcript" | "speaker" | "groups"
 }
 
 export function MeetingViewOverlays({
   deleteTarget,
   setDeleteTarget,
   confirmDelete,
+  deleteGroupTarget,
+  setDeleteGroupTarget,
+  confirmDeleteGroup,
   retranscribeConfirmOpen,
   setRetranscribeConfirmOpen,
   handleTranscribe,
@@ -65,6 +71,30 @@ export function MeetingViewOverlays({
               {t("common.cancel")}
             </Button>
             <Button type="button" variant="destructive-solid" size="sm" onClick={confirmDelete}>
+              {t("common.delete")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!deleteGroupTarget} onOpenChange={(v) => !v && setDeleteGroupTarget(null)}>
+        <DialogContent
+          className="pm-dialog pm-dialog--silk sm:max-w-[280px]"
+          showCloseButton={false}
+          overlayClassName="pm-dialog-overlay--silk"
+        >
+          <DialogHeader>
+            <DialogKicker>{t("meeting.groupsTab")}</DialogKicker>
+            <DialogTitle>{t("meeting.deleteGroupQ")}</DialogTitle>
+            <DialogDescription>
+              {t("meeting.deleteGroupBody")}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="ghost" size="sm" onClick={() => setDeleteGroupTarget(null)}>
+              {t("common.cancel")}
+            </Button>
+            <Button type="button" variant="destructive-solid" size="sm" onClick={confirmDeleteGroup}>
               {t("common.delete")}
             </Button>
           </DialogFooter>

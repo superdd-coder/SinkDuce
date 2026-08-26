@@ -1917,6 +1917,17 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
 # Meeting Summary handler
 # ---------------------------------------------------------------------------
 
+async def meeting_transcript_index_handler(task: Task, meeting_id: str, **kwargs) -> dict:
+    """Build / rebuild the verbatim transcript Qdrant index for a meeting."""
+    from src.meeting.transcript_index import index_from_store
+
+    logger.info("[TX_INDEX] task start meeting=%s task=%s", meeting_id, task.id)
+    loop = asyncio.get_running_loop()
+    n = await loop.run_in_executor(None, index_from_store, meeting_id)
+    logger.info("[TX_INDEX] task done meeting=%s packs=%d", meeting_id, n)
+    return {"message": "Transcript index ready", "meeting_id": meeting_id, "packs": n}
+
+
 async def meeting_summary_handler(task: Task, meeting_id: str, **kwargs) -> dict:
     """Generate meeting blueprint summary (Node 0.3)."""
     from src.meeting import store

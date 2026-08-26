@@ -123,6 +123,102 @@ SEARCH_KNOWLEDGE_BASE_TOOL = _fn(
     required=["raw_query"],
 )
 
+LOOKUP_MEETING_TRANSCRIPT_TOOL = _fn(
+    "lookup_meeting_transcript",
+    (
+        "PRIMARY search over this meeting's spoken transcript (not the written summary). "
+        "Each call is an independent search: there is no offset, continuation, or "
+        "cursor. [ref:N] in the result is a sentence id, not a read position. "
+        "The server locks the search to the current meeting. "
+        "If a named speaker filter returns nothing, tell the user; a short preview "
+        "may show who actually said it. Ask before searching the whole meeting "
+        "(speaker_scope=all). A name outside the mapping is a mention: put it in "
+        "query and search; do not treat them as absent and do not use "
+        "speaker_scope=all. Cite only [ref:N] ids that appear in the tool result."
+    ),
+    {
+        "query": {
+            "type": "string",
+            "description": (
+                "WHAT information you need — not a position in the meeting, "
+                "and not the user question verbatim when it is broad. "
+                "Natural phrase naming people, actions, numbers, or topics."
+            ),
+        },
+        "speaker_scope": {
+            "type": "string",
+            "enum": ["auto", "all"],
+            "description": (
+                "auto (default): server may filter to speakers named in the user "
+                "question. all: search the whole meeting (only after the user agrees)."
+            ),
+        },
+    },
+    required=["query"],
+)
+
+LOOKUP_GROUP_TRANSCRIPT_TOOL = _fn(
+    "lookup_group_transcript",
+    (
+        "PRIMARY evidence: search spoken transcripts for meetings in this Group. "
+        "Required before the user-facing answer. Written summaries are only a "
+        "map of the series — use them to pick meeting_ids and the information "
+        "need, then search here. The server locks the search to this Group. "
+        "Pass meeting_ids from the roster (ids, not group numbers) to search a "
+        "subset; omit to search every indexed member. One call is one retrieve "
+        "— not a page. A name in the roster speaker maps is filtered per "
+        "meeting with that meeting's speaker id. A name outside the mapping is "
+        "a mention: put it in query; do not treat them as absent. Cite as "
+        "[n:k] (n = meeting header, k = [ref:k] in excerpts). The user sees "
+        "only n. Do not paste excerpt lines."
+    ),
+    {
+        "query": {
+            "type": "string",
+            "description": (
+                "WHAT information you need — not a tape position. "
+                "Natural phrase naming people, actions, numbers, or topics."
+            ),
+        },
+        "meeting_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Optional roster meeting_id values to search. "
+                "Empty or omitted searches all indexed members of this Group."
+            ),
+        },
+        "speaker_scope": {
+            "type": "string",
+            "enum": ["auto", "all"],
+            "description": (
+                "auto (default): per-meeting speaker filter when the user names "
+                "a mapped speaker. all: no speaker filter (only after the user "
+                "agrees a mapped-speaker filter was wrong)."
+            ),
+        },
+    },
+    required=["query"],
+)
+
+READ_MEETING_SUMMARY_TOOL = _fn(
+    "read_meeting_summary",
+    (
+        "Read the written General summary for one meeting in this Group. "
+        "Orientation / itinerary only: which meeting, who, what the series is "
+        "about. Do not treat it as spoken evidence and do not answer from it "
+        "alone. After reading, search spoken lines with "
+        "lookup_group_transcript. meeting_id must be a roster id for this Group."
+    ),
+    {
+        "meeting_id": {
+            "type": "string",
+            "description": "Roster meeting_id (not the group number n).",
+        },
+    },
+    required=["meeting_id"],
+)
+
 LOOKUP_COLLECTION_TOOL = _fn(
     "lookup_collection",
     (
@@ -514,7 +610,11 @@ QUICK_STRUCTURE_NAMES: tuple[str, ...] = tuple(
     n for n in AGENT_STRUCTURE_NAMES if n != "list_collections"
 )
 
-SEARCH_TOOL_NAMES = frozenset({"search_knowledge_base", "lookup_collection"})
+SEARCH_TOOL_NAMES = frozenset({
+    "search_knowledge_base",
+    "lookup_collection",
+    "lookup_meeting_transcript",
+})
 STRUCTURE_TOOL_NAMES = frozenset(STRUCTURE_TOOL_SCHEMAS.keys())
 
 
@@ -539,11 +639,14 @@ def tools_for_mode(
     mode: str,
     *,
     is_meeting: bool = False,
+    is_group: bool = False,
     web_search_enabled: bool = False,
 ) -> list[dict[str, Any]]:
-    """Return OpenAI tools array for agentic / direct / meeting."""
+    """Return OpenAI tools array for agentic / direct / meeting / group."""
+    if is_group:
+        return [LOOKUP_GROUP_TRANSCRIPT_TOOL, READ_MEETING_SUMMARY_TOOL]
     if is_meeting:
-        return []
+        return [LOOKUP_MEETING_TRANSCRIPT_TOOL]
     if mode == "direct":
         tools = [LOOKUP_COLLECTION_TOOL]
         for name in QUICK_STRUCTURE_NAMES:
@@ -562,10 +665,13 @@ def allowed_tool_names(
     mode: str,
     *,
     is_meeting: bool = False,
+    is_group: bool = False,
     web_search_enabled: bool = False,
 ) -> frozenset[str]:
+    if is_group:
+        return frozenset({"lookup_group_transcript", "read_meeting_summary"})
     if is_meeting:
-        return frozenset()
+        return frozenset({"lookup_meeting_transcript"})
     names: set[str]
     if mode == "direct":
         names = {"lookup_collection", *QUICK_STRUCTURE_NAMES}

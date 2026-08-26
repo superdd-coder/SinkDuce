@@ -102,7 +102,7 @@ interface Props {
   tabBarOffset?: number
   floatingPanelOpen?: boolean
   canShift?: boolean
-  playbackTime?: number
+  playbackTime?: number | null
   className?: string
   /** Controlled Summary section id (e.g. tab_general / section tab). */
   selectedSummaryId?: string
@@ -123,7 +123,7 @@ interface Props {
    * When a sentence-ref needs Transcript focus, parent opens the side panel
    * Transcript tab (main area no longer hosts Transcript / Speaker).
    */
-  onRequestSideTab?: (tab: "sections" | "transcript" | "speaker") => void
+  onRequestSideTab?: (tab: "sections" | "transcript" | "speaker" | "groups") => void
   /** Hide transcript/speaker panels here — parent hosts them in the side rail. */
   hostTranscriptInParent?: boolean
 }
@@ -1777,7 +1777,7 @@ export function MeetingTabs({
   tabBarOffset = 0,
   floatingPanelOpen,
   canShift = true,
-  playbackTime = 0,
+  playbackTime,
   className,
   selectedSummaryId: selectedSummaryIdProp,
   onSelectedSummaryIdChange,

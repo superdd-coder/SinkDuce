@@ -179,8 +179,14 @@ def delete_person(person_id: str) -> bool:
     return True
 
 
+def speaker_display_name(person: Person) -> str:
+    """Name shown on a bound speaker / in Summary. Note is picker-only."""
+    return (person.display_name or "").strip() or "Unnamed"
+
+
 def person_label(person: Person, *, name_counts: dict[str, int] | None = None) -> str:
-    name = (person.display_name or "").strip() or "Unnamed"
+    """Picker / People-library label. May include the note to tell homonyms apart."""
+    name = speaker_display_name(person)
     extra = (person.disambiguator or "").strip()
     if extra:
         return f"{name} · {extra}"

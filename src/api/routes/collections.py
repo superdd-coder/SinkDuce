@@ -22,7 +22,9 @@ router = APIRouter()
 def list_collections():
     """List all collections with their metadata."""
     # Get existing Qdrant collections
-    qdrant_names = [c for c in services.db.list_collections() if c != "__summaries__"]
+    from src.meeting.transcript_index import INTERNAL_QDRANT_COLLECTIONS
+
+    qdrant_names = [c for c in services.db.list_collections() if c not in INTERNAL_QDRANT_COLLECTIONS]
 
     # Get or create metadata for each
     result = []
@@ -150,7 +152,9 @@ def delete_collection(collection_id: str):
     if not services.db.collection_exists(collection_id):
         return {"error": f"Collection '{meta['name']}' does not exist in database"}
 
-    collections = [c for c in services.db.list_collections() if c != "__summaries__"]
+    from src.meeting.transcript_index import INTERNAL_QDRANT_COLLECTIONS
+
+    collections = [c for c in services.db.list_collections() if c not in INTERNAL_QDRANT_COLLECTIONS]
     if len(collections) <= 1:
         return {"error": "Cannot delete the only remaining collection"}
 

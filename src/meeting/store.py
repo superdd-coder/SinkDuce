@@ -189,6 +189,18 @@ def delete_meeting(meeting_id: str) -> bool:
     directory = _meeting_dir(meeting_id)
     if not directory.exists():
         return False
+    try:
+        from src.meeting.transcript_index import purge_meeting_transcripts
+
+        purge_meeting_transcripts(meeting_id)
+    except Exception:
+        logger.warning("transcript index purge skipped for %s", meeting_id, exc_info=True)
+    try:
+        from src.meeting.group_store import drop_meeting_from_all_groups
+
+        drop_meeting_from_all_groups(meeting_id)
+    except Exception:
+        logger.warning("group membership drop skipped for %s", meeting_id, exc_info=True)
     shutil.rmtree(directory)
     return True
 
@@ -470,6 +482,12 @@ def delete_pipeline_data(meeting_id: str) -> None:
                 md = section_md_path(meeting_id, tid)
                 if md.exists():
                     md.unlink()
+    try:
+        from src.meeting.transcript_index import purge_meeting_transcripts
+
+        purge_meeting_transcripts(meeting_id)
+    except Exception:
+        logger.warning("transcript index purge skipped for %s", meeting_id, exc_info=True)
     logger.info("Deleted pipeline data for meeting %s", meeting_id)
 
 
@@ -540,6 +558,8 @@ def discard_recording(meeting_id: str) -> Meeting:
         speaker_slots=None,
         speaker_slots_status=None,
         speaker_slots_ms=None,
+        transcript_index_status="",
+        transcript_index_error="",
     )
     logger.info("[DISCARD] Meeting %s fully discarded, reset to 'created'", meeting_id)
     return updated
