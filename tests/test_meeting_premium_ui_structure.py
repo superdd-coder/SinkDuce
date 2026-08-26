@@ -244,11 +244,11 @@ def test_meeting_main_tabs_are_summary_and_notes_only():
 
 
 def test_live_capture_notes_upload_images():
-    capture = (
-        ROOT / "frontend" / "src" / "components" / "meeting" / "meeting-capture-stages.tsx"
-    ).read_text(encoding="utf-8")
-    assert "uploadMeetingImage" in capture
-    assert "onImageUpload=" in capture
+    card_path = ROOT / "frontend" / "src" / "components" / "meeting" / "meeting-notes-card.tsx"
+    assert card_path.exists()
+    card = card_path.read_text(encoding="utf-8")
+    assert "uploadMeetingImage" in card
+    assert "onImageUpload=" in card
 
 
 def test_meeting_stage_mode_sequential_fade():
@@ -714,3 +714,93 @@ def test_live_capture_control_card_not_danger_banner():
     assert "Live caption ·" in view
     assert "position: absolute" in css
     assert ".pm-meeting-e-realtime-chip" in css
+
+
+MEETING_CAPTURE = ROOT / "frontend" / "src" / "components" / "meeting" / "meeting-capture-stages.tsx"
+MEETING_NOTES_CARD = ROOT / "frontend" / "src" / "components" / "meeting" / "meeting-notes-card.tsx"
+MEETING_NOTES_HOOK = ROOT / "frontend" / "src" / "hooks" / "use-meeting-notes.ts"
+
+
+def test_prep_notes_rail_on_setup_audio_transcribing_not_speakers():
+    """Prep NOTES handle on setup / audio-ready / transcribing; speakers stay two-col."""
+    capture = MEETING_CAPTURE.read_text(encoding="utf-8")
+    assert "function PrepStage" in capture
+    assert "pm-meeting-notes-handle" in capture
+    assert "pm-meeting-notes-rail" in capture
+    assert "MeetingNotesCard" in capture
+    assert 'mode="empty"' in capture
+    assert 'mode="audio-ready"' in capture
+    assert 'mode="transcribing"' in capture
+    speakers_block = capture.split('data-meeting-mode="speakers"', 1)[1].split(
+        'data-meeting-mode="live"', 1
+    )[0]
+    assert "pm-meeting-notes-handle" not in speakers_block
+    assert "pm-meeting-notes-rail" not in speakers_block
+    assert "PrepStage" not in speakers_block
+
+
+def test_live_notes_use_shared_meeting_notes_card():
+    """Live right column is MeetingNotesCard, not a one-off MarkdownEditor."""
+    capture = MEETING_CAPTURE.read_text(encoding="utf-8")
+    live_block = capture.split('data-meeting-mode="live"', 1)[1]
+    assert "MeetingNotesCard" in live_block
+    assert "<MarkdownEditor" not in live_block
+    assert MEETING_NOTES_CARD.exists()
+    card = MEETING_NOTES_CARD.read_text(encoding="utf-8")
+    assert "export function MeetingNotesCard" in card
+    assert "MarkdownEditor" in card
+    assert "pm-meeting-f-notes" in card
+
+
+def test_meeting_notes_hook_is_single_autosave_path():
+    """One hook owns notes.md debounce + flush; Studio tab does not save notes itself."""
+    assert MEETING_NOTES_HOOK.exists()
+    hook = MEETING_NOTES_HOOK.read_text(encoding="utf-8")
+    view = MEETING_VIEW.read_text(encoding="utf-8")
+    tabs = MEETING_TABS.read_text(encoding="utf-8")
+    studio = MEETING_STUDIO.read_text(encoding="utf-8")
+    assert "export function useMeetingNotes" in hook
+    assert "unescapeMarkdownOverEscapes" in hook
+    assert "800" in hook
+    assert "updateMeeting" in hook
+    assert "flush" in hook
+    assert "useMeetingNotes" in view
+    start_idx = view.find("const handleStartRecording")
+    stop_idx = view.find("const handleStopRecording")
+    assert start_idx >= 0 and stop_idx >= 0
+    assert "flush" in view[start_idx:stop_idx]
+    assert "flush" in view[stop_idx : stop_idx + 1800]
+    assert "updateMeeting(meetingId, { notes:" not in tabs
+    assert "onNotesChange" in tabs
+    assert "onNotesChange" in studio
+
+
+def test_prep_notes_rail_css_slide_and_stage_radius():
+    """Handle + sliding rail; cream surface radius is not inherit-from-kind."""
+    css = INDEX_CSS.read_text(encoding="utf-8")
+    assert ".pm-meeting-notes-handle" in css
+    assert ".pm-meeting-notes-rail" in css
+    assert ".pm-meeting-notes-dock" in css
+    assert ".pm-meeting-mode-empty.is-notes-open" in css
+    handle = css.split(".pm-meeting-notes-handle {", 1)[1].split("}", 1)[0]
+    assert "align-self: center" in handle
+    rail = css.split(".pm-meeting-notes-rail {", 1)[1].split("}", 1)[0]
+    assert "position: absolute" in rail
+    assert "translateX" in rail
+    empty = css.split(".pm-meeting-mode-empty {", 1)[1].split("}", 1)[0]
+    assert "--pm-notes-handle-w" in empty
+    main = css.split(".pm-meeting-e-main {", 1)[1].split("}", 1)[0]
+    assert "padding-right" in main
+    assert "transition" in main
+    rail_open = css.split(
+        ".pm-meeting-mode-empty.is-notes-open .pm-meeting-notes-rail {", 1
+    )[1].split("}", 1)[0]
+    assert "translateX(0)" in rail_open
+    assert "drop-shadow" in css
+    surface = css.split(".pm-meeting-stage-surface {", 1)[1].split("}", 1)[0]
+    assert "border-radius: var(--pm-r-lg" in surface
+    assert "border-radius: inherit" not in surface
+    assert "overflow: visible" in surface
+    reduced = css.split("@media (prefers-reduced-motion: reduce)", 2)
+    joined = "\n".join(reduced[1:]) if len(reduced) > 1 else ""
+    assert "pm-meeting-notes-rail" in joined or "is-notes-open" in joined

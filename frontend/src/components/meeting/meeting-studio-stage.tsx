@@ -53,6 +53,8 @@ export interface MeetingStudioStageProps {
   metaSpeakers: string
   hasFileProvider: boolean
   handleMeetingUpdate: (m: Meeting) => void
+  notesContent: string
+  onNotesChange: (value: string) => void
   handleSegmentClick: (start: number, end?: number) => void
   requestSideTab: (tab: MeetingStudioSideTab) => void
   setQuickChatOpen: Dispatch<SetStateAction<boolean>>
@@ -146,6 +148,8 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
     metaSpeakers,
     hasFileProvider,
     handleMeetingUpdate,
+    notesContent,
+    onNotesChange,
     handleSegmentClick,
     requestSideTab,
     setQuickChatOpen,
@@ -330,7 +334,8 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                     <MeetingTabs
                       meetingId={meeting.id}
                       meeting={meeting}
-                      notesContent={meeting.notes_content ?? ""}
+                      notesContent={notesContent}
+                      onNotesChange={onNotesChange}
                       onMeetingUpdate={handleMeetingUpdate}
                       onSeekTo={handleSegmentClick}
                       onFocusSentence={(id) => {

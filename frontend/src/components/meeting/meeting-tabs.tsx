@@ -72,8 +72,6 @@ import {
   safeExportBasename,
 } from "@/lib/meeting-summary-export"
 
-const SAVE_DELAY = 800
-
 /** DatabaseView stays mounted — refresh Files / Timeline after ingest or cancel. */
 async function refreshKeepMountedLibrary(collectionId: string | null | undefined) {
   const colId = (collectionId || "").trim()
@@ -90,6 +88,7 @@ interface Props {
   meetingId: string
   meeting: Meeting
   notesContent: string
+  onNotesChange: (value: string) => void
   onMeetingUpdate: (m: Meeting) => void
   onSeekTo: (time: number) => void
   onFocusSentence?: (refId: string) => void
@@ -1768,7 +1767,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
 // ── Main component ────────────────────────────────────────────────
 
 export function MeetingTabs({
-  meetingId, meeting, notesContent,
+  meetingId, meeting, notesContent, onNotesChange,
   onMeetingUpdate, onSeekTo, onFocusSentence, onActiveTabChange, transcriptSegments,
   partialText,
   focusRef,
@@ -2259,24 +2258,6 @@ export function MeetingTabs({
   const [ingestingTabs, setIngestingTabs] = useState<Set<string>>(new Set())
 
   const [notesEditor, setNotesEditor] = useState<Editor | null>(null)
-  const [notesDraft, setNotesDraft] = useState(notesContent)
-  const notesBaselineRef = useRef(notesContent)
-  const notesSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const prevNotesContentRef = useRef(notesContent)
-
-  // Sync notes draft when parent content changes from external source.
-  // Empty/whitespace draft is not a real user edit — Tiptap's empty-doc
-  // onChange used to make draft !== baseline and block this until refresh.
-  if (prevNotesContentRef.current !== notesContent) {
-    const incoming = notesContent ?? ""
-    const draftEmpty = !notesDraft.trim()
-    const baselineEmpty = !notesBaselineRef.current.trim()
-    prevNotesContentRef.current = incoming
-    if (notesDraft === notesBaselineRef.current || (draftEmpty && baselineEmpty)) {
-      setNotesDraft(incoming)
-      notesBaselineRef.current = incoming
-    }
-  }
 
   // ── Load section markdown when tab is selected ─────────────
   const loadedTabsRef = useRef<Set<string>>(new Set())   // successfully loaded
@@ -2292,9 +2273,6 @@ export function MeetingTabs({
     setTranslations({})
     setAvailableLangs({})
     setIngestingTabs(new Set())
-    setNotesDraft(notesContent)
-    notesBaselineRef.current = notesContent
-    prevNotesContentRef.current = notesContent
   }, [meetingId]) // eslint-disable-line react-hooks/exhaustive-deps -- seed notes from first paint of this meeting
 
   const loadTabContent = useCallback(async (tabId: string) => {
@@ -2345,34 +2323,10 @@ export function MeetingTabs({
     }
   }, [tabs])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Notes auto-save ────────────────────────────────────────
-  const scheduleNotesSave = useCallback((content: string) => {
-    if (notesSaveTimerRef.current) clearTimeout(notesSaveTimerRef.current)
-    notesSaveTimerRef.current = setTimeout(async () => {
-      try {
-        // Tiptap md export escapes ~ _ [ ] — restore before disk write
-        const cleaned = unescapeMarkdownOverEscapes(content)
-        await updateMeeting(meetingId, { notes: cleaned })
-        notesBaselineRef.current = cleaned
-      } catch { /* ignore */ }
-    }, SAVE_DELAY)
-  }, [meetingId])
-
-  const handleNotesChange = (value: string) => {
-    setNotesDraft(value)
-    if (value !== notesBaselineRef.current) {
-      scheduleNotesSave(value)
-    }
-  }
-
   const handleNotesImageUpload = useCallback(async (file: File) => {
     const result = await uploadMeetingImage(meetingId, file)
     return result.url
   }, [meetingId])
-
-  useEffect(() => {
-    return () => { if (notesSaveTimerRef.current) clearTimeout(notesSaveTimerRef.current) }
-  }, [])
 
   // ── Actions ─────────────────────────────────────────────────
   const doExtract = async (receipts: ExtractReceipt[]) => {
@@ -3384,8 +3338,8 @@ export function MeetingTabs({
       )}>
         <div className="pm-meeting-notes-card">
           <MarkdownEditor
-            value={notesDraft}
-            onChange={handleNotesChange}
+            value={notesContent}
+            onChange={onNotesChange}
             minHeight="400px"
             showToolbar={false}
             placeholder={t("meeting.writeNotesPh")}
