@@ -15,6 +15,8 @@ import {
   getWebSearchConfirmAnchor,
   setWebSearchConfirmAnchor,
 } from "@/lib/web-search-confirm"
+import { refreshTodosAfterChatTool } from "@/lib/todo-refresh"
+import { qcFloatSlideMotion } from "@/lib/quick-chat-float"
 
 // ── Types ──
 
@@ -36,6 +38,20 @@ const ANIM_DURATION = 320
 const RAIL_ANCHOR_SEL = "[data-pm-rail-anchor]"
 /** Stable diamond park on stage — same top-right for all content tabs */
 const FAB_ANCHOR_SEL = "[data-pm-qc-fab-anchor]"
+const MIN_RAIL_W = 48
+
+function isUsableRailAnchor(el: HTMLElement | null): el is HTMLElement {
+  if (!el || !el.isConnected) return false
+  return el.getBoundingClientRect().width >= MIN_RAIL_W
+}
+
+/** Only the visible collection tab — never a keep-alive Overview/Files/Timeline sibling. */
+function findActiveRailAnchor(): HTMLElement | null {
+  const panel = document.querySelector(".pm-panel-fade.is-active")
+  if (!panel) return null
+  const el = panel.querySelector(RAIL_ANCHOR_SEL) as HTMLElement | null
+  return isUsableRailAnchor(el) ? el : null
+}
 
 /** Count Q&A turns: 1 user message = 1 round (request + reply). */
 function countTurns(msgs: { role: string; content: string }[]): number {
@@ -147,6 +163,7 @@ interface QuickChatProps {
   onOpen: () => void
   onClose: () => void
   onSourceClick?: (source: string, chunkIndex?: number) => void
+  onMeetingClick?: (meetingId: string) => void
   files?: { source: string; display_name?: string; file_id?: string }[]
   className?: string
   /**
@@ -173,6 +190,7 @@ export function QuickChat({
   onOpen,
   onClose,
   onSourceClick,
+  onMeetingClick,
   files,
   className,
   railActive = true,
@@ -182,14 +200,17 @@ export function QuickChat({
   const t = useT()
   const [messages, setMessages] = useState<QAMessage[]>([])
   const [input, setInput] = useState("")
-  const [streaming, setStreaming] = useState(false)
+  const [streamingBySid, setStreamingBySid] = useState<Record<string, boolean>>({})
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [msgCount, setMsgCount] = useState(0)
   const [loadingHistory, setLoadingHistory] = useState(true)
   const [expandedSources, setExpandedSources] = useState<Set<string>>(new Set())
   // Web toggle remembered per quick session (quick_<collectionId>); default OFF
   const [webSearch, setWebSearch] = useState(false)
-  const abortRef = useRef<AbortController | null>(null)
+  const abortBySidRef = useRef<Map<string, AbortController>>(new Map())
+  const sessionIdRef = useRef<string | null>(null)
+  const streamingBySidRef = useRef<Record<string, boolean>>({})
+  const messagesCacheRef = useRef<Map<string, QAMessage[]>>(new Map())
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesScrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -198,6 +219,16 @@ export function QuickChat({
   const imeGuardRef = useRef(createImeEnterGuard())
   /** Stable host for web-confirm portal — avoid inline ref callbacks (re-fire every render). */
   const webConfirmHostRef = useRef<HTMLDivElement | null>(null)
+  sessionIdRef.current = sessionId
+  const streaming = !!(sessionId && streamingBySid[sessionId])
+
+  const markStreaming = (sid: string, on: boolean) => {
+    const next = { ...streamingBySidRef.current }
+    if (on) next[sid] = true
+    else delete next[sid]
+    streamingBySidRef.current = next
+    setStreamingBySid(next)
+  }
   // ── Hint bubble state ──
   const [hintVisible, setHintVisible] = useState(false)
   const [hintExiting, setHintExiting] = useState(false)
@@ -214,6 +245,8 @@ export function QuickChat({
    * Prefer `.pm-panel-fade.is-active` so idle keep-alive rails are ignored.
    */
   const [railHost, setRailHost] = useState<HTMLElement | null>(null)
+  /** One frame at translateX(100%) after the host attaches so the slide-in can run. */
+  const [railDocked, setRailDocked] = useState(false)
   /**
    * FAB host = stage-level park — same coordinates on Overview / Files / Timeline.
    * Never use fixed viewport fallback for the diamond (Timeline/Config looked wrong).
@@ -240,34 +273,60 @@ export function QuickChat({
       return
     }
     /**
-     * Prefer active panel rail. Skip zero-width hosts (Files Messages collapsed
-     * — curtain clip track is 0px + pointer-events:none). FolderView expands
-     * the rail when QC opens; re-poll through the expand animation.
+     * Bind only the active tab's rail. Do not fall back to the first
+     * [data-pm-rail-anchor] in the document — keep-alive Overview/Files/Timeline
+     * all have one, and picking the wrong host teleports the card mid-animation.
+     * Skip zero-width Files Messages (collapsed curtain). Keep the last good
+     * host while the new rail is expanding so we never flash position:fixed.
      */
-    const find = () => {
-      const candidates = [
-        document.querySelector(
-          `.pm-panel-fade.is-active ${RAIL_ANCHOR_SEL}`
-        ) as HTMLElement | null,
-        document.querySelector(RAIL_ANCHOR_SEL) as HTMLElement | null,
-      ]
-      const usable = candidates.find((el) => {
-        if (!el) return false
-        const w = el.getBoundingClientRect().width
-        return w >= 48
+    let cancelled = false
+    const apply = () => {
+      if (cancelled) return
+      const next = findActiveRailAnchor()
+      setRailHost((prev) => {
+        if (next) return next
+        const panel = document.querySelector(".pm-panel-fade.is-active")
+        if (prev && panel?.contains(prev) && isUsableRailAnchor(prev)) return prev
+        return null
       })
-      setRailHost(usable ?? null)
     }
-    find()
-    // Cover Files rail expand (~420ms) so float attaches after track has width
+    apply()
     const delays = open
-      ? [0, 50, 120, 220, 360, 480, 600]
-      : [0, 50, 200]
-    const timers = delays.map((ms) => window.setTimeout(find, ms))
+      ? [16, 50, 120, 220, 360, 480, 600]
+      : [16, 80, 200]
+    const timers = delays.map((ms) => window.setTimeout(apply, ms))
+    const ro = new ResizeObserver(apply)
+    const panel = document.querySelector(".pm-panel-fade.is-active")
+    if (panel) ro.observe(panel)
+    const anchor = panel?.querySelector(RAIL_ANCHOR_SEL)
+    if (anchor) ro.observe(anchor)
     return () => {
+      cancelled = true
       timers.forEach((t) => window.clearTimeout(t))
+      ro.disconnect()
     }
   }, [railActive, railKey, collectionId, open])
+
+  useLayoutEffect(() => {
+    if (!open || !railHost) {
+      setRailDocked(false)
+      return
+    }
+    setRailDocked(false)
+    const id = requestAnimationFrame(() => setRailDocked(true))
+    return () => cancelAnimationFrame(id)
+  }, [open, railHost])
+
+  const showFloat = open && (!!railHost ? railDocked : !railActive)
+
+  // Keep a per-session message cache so switching collections does not
+  // clobber an in-flight stream (or lock the other collection's composer).
+  useEffect(() => {
+    if (!sessionId || loadingHistory) return
+    const expected = collectionId ? `${QUICK_SESSION_PREFIX}${collectionId}` : null
+    if (expected && sessionId !== expected) return
+    messagesCacheRef.current.set(sessionId, messages)
+  }, [sessionId, collectionId, messages, loadingHistory])
 
   // ── Init session ──
 
@@ -276,7 +335,16 @@ export function QuickChat({
     const sid = `${QUICK_SESSION_PREFIX}${collectionId}`
     setSessionId(sid)
     setWebSearch(loadWebSearchForSession(sid))
-    initSession(sid)
+    if (streamingBySidRef.current[sid]) {
+      const cached = messagesCacheRef.current.get(sid)
+      if (cached) {
+        setMessages(cached)
+        setMsgCount(countTurns(cached))
+        setLoadingHistory(false)
+        return
+      }
+    }
+    void initSession(sid)
   }, [collectionId])
 
   // Claim / release web-confirm anchor only when this Quick Chat is on screen
@@ -437,6 +505,38 @@ export function QuickChat({
     pinToBottom()
   }, [messages, pinToBottom, streaming])
 
+  // Opening the panel must land on the latest message (history is already
+  // loaded; the thread is just sliding in / rail is expanding).
+  useLayoutEffect(() => {
+    if (!open) return
+    stickToBottom.current = true
+    pinToBottom()
+    document.querySelector(".pm-stage")?.scrollTo?.(0, 0)
+    const delays = [0, 50, 120, 220, 360, ANIM_DURATION + 40]
+    const timers = delays.map((ms) =>
+      window.setTimeout(() => {
+        stickToBottom.current = true
+        const el = messagesScrollRef.current
+        if (el) {
+          ignoreScrollEvent.current = true
+          el.scrollTop = el.scrollHeight
+          requestAnimationFrame(() => {
+            ignoreScrollEvent.current = false
+          })
+        }
+        // Never scrollIntoView — it scrolls .pm-stage and clips the title/tabs.
+      }, ms),
+    )
+    return () => timers.forEach((t) => window.clearTimeout(t))
+  }, [open, loadingHistory])
+
+  useEffect(() => {
+    return () => {
+      abortBySidRef.current.forEach((c) => c.abort())
+      abortBySidRef.current.clear()
+    }
+  }, [])
+
   // ── Auto-resize textarea ──
 
   useEffect(() => {
@@ -483,7 +583,8 @@ export function QuickChat({
 
   const send = useCallback(async () => {
     const text = input.trim()
-    if (!text || streaming || !sessionId) return
+    const sid = sessionId
+    if (!text || !sid || streamingBySidRef.current[sid]) return
 
     setInput("")
     if (textareaRef.current) {
@@ -499,20 +600,34 @@ export function QuickChat({
     setMessages((prev) => [...prev, userMsg, assistantMsg])
     // Optimistic: one new turn when user sends (reply does not add another)
     setMsgCount((c) => c + 1)
-    setStreaming(true)
+    markStreaming(sid, true)
     requestAnimationFrame(() => pinToBottom())
 
     setTimeout(() => {
-      setMessages((prev) => prev.map((m) => ({ ...m, isNew: false })))
+      const clearNew = (prev: QAMessage[]) => prev.map((m) => ({ ...m, isNew: false }))
+      if (sessionIdRef.current === sid) setMessages(clearNew)
+      else {
+        const cached = messagesCacheRef.current.get(sid)
+        if (cached) messagesCacheRef.current.set(sid, clearNew(cached))
+      }
     }, 500)
 
     const controller = new AbortController()
-    abortRef.current = controller
+    abortBySidRef.current.get(sid)?.abort()
+    abortBySidRef.current.set(sid, controller)
+
+    const applySid = (updater: (prev: QAMessage[]) => QAMessage[]) => {
+      if (sessionIdRef.current === sid) setMessages(updater)
+      else {
+        const prev = messagesCacheRef.current.get(sid) ?? []
+        messagesCacheRef.current.set(sid, updater(prev))
+      }
+    }
 
     // Local helpers — always use assistantId + setMessages (no stale handleSSEEvent)
     const appendThinkingLocal = (token: string) => {
       if (!token) return
-      setMessages((prev) =>
+      applySid((prev) =>
         prev.map((m) =>
           m.id === assistantId
             ? { ...m, thinkingContent: (m.thinkingContent || "") + token }
@@ -524,14 +639,14 @@ export function QuickChat({
     // multiple setStates within one await-read tick → one paint per SSE chunk.
     const appendTokenLocal = (token: string) => {
       if (!token) return
-      setMessages((prev) =>
+      applySid((prev) =>
         prev.map((m) =>
           m.id === assistantId ? { ...m, content: m.content + token } : m,
         ),
       )
     }
     const finishLocal = (sources?: QAMessage["sources"]) => {
-      setMessages((prev) =>
+      applySid((prev) =>
         prev.map((m) => {
           if (m.id !== assistantId) return m
           return {
@@ -545,7 +660,7 @@ export function QuickChat({
 
     try {
       const resp = await postSessionMessage(
-        sessionId,
+        sid,
         {
           content: text,
           thinking: true,
@@ -558,7 +673,7 @@ export function QuickChat({
 
       if (!resp.ok) {
         const err = await resp.text()
-        setMessages((prev) =>
+        applySid((prev) =>
           prev.map((m) =>
             m.id === assistantId
               ? { ...m, content: `${t("common.error")}: ${resp.status} - ${err}`, isStreaming: false }
@@ -590,8 +705,29 @@ export function QuickChat({
                     console.error("[QuickChat] web-search-confirm failed:", err)
                   }
                 }
+              } else if (eventType === "todo_delete_confirm") {
+                const confirmId = String(data.confirm_id || "")
+                const title = String(data.title || "")
+                const collectionName = String(data.collection_name || "")
+                if (confirmId) {
+                  const { promptTodoDeleteConfirm } = await import("@/lib/todo-delete-confirm")
+                  const { confirmTodoDelete } = await import("@/api/client")
+                  const approved = await promptTodoDeleteConfirm(
+                    confirmId,
+                    title,
+                    sessionId,
+                    collectionName,
+                  )
+                  try {
+                    await confirmTodoDelete(confirmId, approved)
+                  } catch (err) {
+                    console.error("[QuickChat] todo-delete-confirm failed:", err)
+                  }
+                }
               } else if (eventType === "thinking") {
                 appendThinkingLocal(String(data.content ?? ""))
+              } else if (eventType === "planning") {
+                appendThinkingLocal(`\n${t("chat.nextStep")}`)
               } else if (eventType === "token") {
                 appendTokenLocal(String(data.content ?? ""))
               } else if (eventType === "tool_call_start") {
@@ -607,6 +743,11 @@ export function QuickChat({
               } else if (eventType === "tool_result") {
                 const st = String(data.status || "done")
                 const tool = String(data.tool || "")
+                refreshTodosAfterChatTool(tool, {
+                  collectionId,
+                  status: st,
+                  content: data.content,
+                })
                 const n = data.sources_count
                 const isSearchLike =
                   tool === "lookup_collection" ||
@@ -629,7 +770,7 @@ export function QuickChat({
                 }
                 if (typeof data.message_count === "number") {
                   gotDoneCount = data.message_count
-                  setMsgCount(data.message_count)
+                  if (sessionIdRef.current === sid) setMsgCount(data.message_count)
                 }
               } else if (eventType === "error") {
                 appendTokenLocal(`${t("common.error")}: ${data.content}`)
@@ -639,10 +780,10 @@ export function QuickChat({
 
       finishLocal(sources.length > 0 ? sources : undefined)
       // Server turn count preferred; do not +1 for assistant (already counted on send)
-      if (gotDoneCount != null) setMsgCount(gotDoneCount)
+      if (gotDoneCount != null && sessionIdRef.current === sid) setMsgCount(gotDoneCount)
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "AbortError") return
-      setMessages((prev) =>
+      applySid((prev) =>
         prev.map((m) =>
           m.id === assistantId
             ? { ...m, content: `${t("common.error")}: ${String(err)}`, isStreaming: false }
@@ -650,10 +791,10 @@ export function QuickChat({
         ),
       )
     } finally {
-      setStreaming(false)
-      abortRef.current = null
+      markStreaming(sid, false)
+      abortBySidRef.current.delete(sid)
     }
-  }, [input, streaming, sessionId, collectionId, webSearch, pinToBottom, t])
+  }, [input, sessionId, collectionId, webSearch, pinToBottom, t])
 
   const toggleWebSearch = () => {
     setWebSearch((prev) => {
@@ -672,8 +813,10 @@ export function QuickChat({
 
   const clearContext = async () => {
     if (!sessionId) return
-    abortRef.current?.abort()
-    setStreaming(false)
+    abortBySidRef.current.get(sessionId)?.abort()
+    abortBySidRef.current.delete(sessionId)
+    markStreaming(sessionId, false)
+    messagesCacheRef.current.delete(sessionId)
     try { await deleteSession(sessionId) } catch { /* ok */ }
     await createSession(collectionName, [collectionId], sessionId).catch(() => {})
     setMessages([])
@@ -885,6 +1028,11 @@ export function QuickChat({
                               <div className="overflow-hidden">
                                 <div className="pm-qc-sources-list">
                                   {msg.sources!.slice(0, 8).map((s, i) => {
+                                    const isMeeting =
+                                      s.metadata?.source_type === "meeting"
+                                    const meetingId = String(
+                                      s.metadata?.meeting_id || "",
+                                    ).trim()
                                     const isWeb =
                                       s.metadata?.source_type === "web"
                                     const url =
@@ -911,6 +1059,7 @@ export function QuickChat({
                                           "pm-qc-source-item",
                                           isWeb && "is-web",
                                           !((isWeb && url) ||
+                                            (isMeeting && meetingId && onMeetingClick) ||
                                             (src && onSourceClick)) &&
                                             "is-static"
                                         )}
@@ -921,6 +1070,10 @@ export function QuickChat({
                                               "_blank",
                                               "noopener,noreferrer"
                                             )
+                                            return
+                                          }
+                                          if (isMeeting && meetingId && onMeetingClick) {
+                                            onMeetingClick(meetingId)
                                             return
                                           }
                                           if (src && onSourceClick)
@@ -1008,26 +1161,33 @@ export function QuickChat({
   )
 
   const ease = "cubic-bezier(0.45, 0.05, 0.55, 0.95)"
-
+  const slideMotion = qcFloatSlideMotion(showFloat)
   const floatPanel = (
     <div
       className={cn(
         "pm-qc-float",
-        /* In-rail: fill host exactly. Fallback: fixed right column. */
+        /* In-rail: fill host exactly. Fallback only when this tab has no rail. */
         railHost ? "pm-qc-float--rail" : "pm-qc-float--fallback",
         className
       )}
       style={{
-        transform: open ? "translateX(0)" : "translateX(calc(100% + 20px))",
-        opacity: open ? 1 : 0,
-        pointerEvents: open ? "auto" : "none",
-        transition: open
-          ? `transform ${ANIM_DURATION}ms ${ease}, opacity ${ANIM_DURATION * 0.85}ms ${ease}`
-          : `transform ${ANIM_DURATION}ms ${ease}, opacity ${ANIM_DURATION * 0.7}ms ${ease}`,
+        pointerEvents: showFloat ? "auto" : "none",
       }}
       aria-hidden={!open}
     >
-      {panelContent}
+      {/* Clip translate here so drop-shadow on .pm-qc-float can follow the card. */}
+      <div className="pm-qc-float-clip">
+        <div
+          className="pm-qc-float-slide"
+          style={{
+            transform: slideMotion.transform,
+            opacity: slideMotion.opacity,
+            transition: `transform ${ANIM_DURATION}ms ${ease}`,
+          }}
+        >
+          {panelContent}
+        </div>
+      </div>
     </div>
   )
 
@@ -1086,13 +1246,15 @@ export function QuickChat({
   return (
     <>
       {/*
-        Float: portal into right rail when Overview/Files (covers To-do/Messages).
-        Fallback: fixed column when no rail (Timeline).
+        Float: portal into the active tab's right rail (Overview / Files / Timeline).
+        Fallback: fixed column only when this tab has no rail.
         FAB: always stage park — same top-right for all content tabs.
       */}
       {railHost
         ? createPortal(floatPanel, railHost)
-        : floatPanel}
+        : !railActive
+          ? floatPanel
+          : null}
       {fabVisible &&
         (fabHost ? createPortal(fabBlock, fabHost) : null)}
     </>

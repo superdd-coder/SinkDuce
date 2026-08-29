@@ -1,6 +1,7 @@
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { AppLayout } from "@/components/layout/app-layout"
 import { WebSearchConfirmDialog } from "@/components/chat/web-search-confirm-dialog"
+import { TodoDeleteConfirmDialog } from "@/components/chat/todo-delete-confirm-dialog"
 import { useDesktopExternalLinks } from "@/hooks/use-desktop-external-links"
 import { Toaster } from "sonner"
 
@@ -11,6 +12,7 @@ export default function App() {
       <AppLayout />
       {/* Global HITL bar (portaled to body) — must stay mounted for SSE confirm */}
       <WebSearchConfirmDialog />
+      <TodoDeleteConfirmDialog />
       <Toaster
         position="top-right"
         offset={18}

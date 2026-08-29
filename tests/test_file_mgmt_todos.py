@@ -277,3 +277,76 @@ def test_empty_title_rejected():
         json={"title": "   "},
     )
     assert resp.status_code in (400, 422)
+
+
+def test_update_todo_title_body_ddl():
+    coll = "todo-patch-content-1"
+    _setup_collection(coll)
+    client = _client()
+    tid = client.post(
+        f"/api/file-mgmt/{coll}/todos",
+        json={"title": "Old title", "body": "old body", "ddl": "2026-09-01"},
+    ).json()["todo_id"]
+
+    resp = client.patch(
+        f"/api/file-mgmt/{coll}/todos/{tid}",
+        json={
+            "title": "New title",
+            "body": "new description",
+            "ddl": "2026-09-08",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["title"] == "New title"
+    assert body["body"] == "new description"
+    assert body["ddl"] == "2026-09-08"
+
+    resp = client.patch(
+        f"/api/file-mgmt/{coll}/todos/{tid}",
+        json={"clear_body": True, "clear_ddl": True},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["body"] is None
+    assert body["ddl"] is None
+
+
+def test_update_todo_assignee_and_clear():
+    coll = "todo-patch-assignee-1"
+    _setup_collection(coll)
+    client = _client()
+    tid = client.post(
+        f"/api/file-mgmt/{coll}/todos",
+        json={"title": "Assign me"},
+    ).json()["todo_id"]
+
+    resp = client.patch(
+        f"/api/file-mgmt/{coll}/todos/{tid}",
+        json={"assignee_person_id": "person_abc"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["assignee_person_id"] == "person_abc"
+
+    resp = client.patch(
+        f"/api/file-mgmt/{coll}/todos/{tid}",
+        json={"clear_assignee": True},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["assignee_person_id"] is None
+
+
+def test_completed_todo_cannot_edit_assignee():
+    coll = "todo-ro-assignee-1"
+    _setup_collection(coll)
+    client = _client()
+    tid = client.post(
+        f"/api/file-mgmt/{coll}/todos",
+        json={"title": "Locked"},
+    ).json()["todo_id"]
+    client.patch(f"/api/file-mgmt/{coll}/todos/{tid}", json={"done": True})
+    resp = client.patch(
+        f"/api/file-mgmt/{coll}/todos/{tid}",
+        json={"assignee_person_id": "person_x"},
+    )
+    assert resp.status_code == 400

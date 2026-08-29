@@ -14,6 +14,7 @@ export interface Folder {
   icon_type?: string | null
   icon_value?: string | null
   icon_color?: string | null
+  archived?: boolean
 }
 
 export interface FolderTreeNode extends Folder {

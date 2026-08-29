@@ -29,6 +29,8 @@ export function ChatView() {
     sessions,
     isStreaming,
     loadSessionMessages,
+    setSidebarView,
+    setActiveMeeting,
   } = useAppStore(
     useShallow((s) => ({
       messages: s.messages,
@@ -43,6 +45,8 @@ export function ChatView() {
       sessions: s.sessions,
       isStreaming: s.isStreaming,
       loadSessionMessages: s.loadSessionMessages,
+      setSidebarView: s.setSidebarView,
+      setActiveMeeting: s.setActiveMeeting,
     }))
   )
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -303,6 +307,15 @@ export function ChatView() {
   }, [displayMessages, sessionId, updateEdgeFade])
 
   const handleSelectSource = (source: Source) => {
+    const meta = source.metadata || {}
+    if (meta.source_type === "meeting") {
+      const mid = String(meta.meeting_id || "").trim()
+      if (mid) {
+        setActiveMeeting(mid)
+        setSidebarView("meeting")
+      }
+      return
+    }
     setSelectedSource(source)
   }
 

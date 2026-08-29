@@ -11,9 +11,10 @@ Documents (6) — legacy file-index / Qdrant-oriented:
     delete_document, get_file_chunks, get_document_text,
     set_document_definitive
 
-File Management L1 (13) — library tree + timeline + folder/file/version + upload:
+File Management L1 (17) — library tree + timeline + folder/file/version + upload + todos:
     list_library_tree, get_timeline, list_folders, list_files, get_file,
     list_file_versions, list_chains, get_chain, get_node, list_groups,
+    list_todos, create_todo, update_todo, delete_todo,
     upload_file_from_staging, upload_file_version_from_staging,
     set_file_definitive
 
@@ -29,16 +30,16 @@ Summaries (4):
 Notes (6):
     list_notes, get_note, create_note, update_note, delete_note, trigger_propagation
 
-Meetings (10):
-    list_meetings, get_meeting, get_section, get_meeting_transcript,
+Meetings (11):
+    list_meetings, list_meeting_catalog, get_meeting, get_section, get_meeting_transcript,
     create_meeting, update_meeting, delete_meeting,
-    start_meeting_summary, upload_meeting_audio_from_staging
+    start_meeting_summary, upload_meeting_audio_from_staging, lookup_meeting_transcript
 
 Hot Words (5):
     list_hot_words_libraries, get_hot_words_library, create_hot_words_library,
     update_hot_words_library, delete_hot_words_library
 
-Total: 5 + 6 + 13 + 3 + 5 + 4 + 6 + 10 + 5 = 57 tools.
+Total: 5 + 6 + 17 + 3 + 5 + 4 + 6 + 11 + 5 = 62 tools.
 
 Architecture
 ------------
@@ -73,6 +74,9 @@ SinkDuce MCP — use **collection IDs** (from list_collections), never display n
 | Flat unique file list + mounts | **list_files**(scope=all) | list_documents; list_library_tree when you only need a flat list |
 | Timeline / events / node graph | **get_timeline** | list_library_tree; list_chains + N× get_chain |
 | One node attachments/messages | **get_node** | — |
+| Collection to-dos (open/mine/all) | **list_todos** | list_library_tree; get_timeline |
+| Create / edit / complete a to-do | **create_todo** / **update_todo** | — |
+| Delete a to-do (destructive) | **delete_todo** | confirm with the user first |
 | Known file full text | **get_document_text**(file_id=…) | inventing text; browsing tree first |
 | What was indexed for a file | **get_file_chunks**(file_id=…) | — |
 | Version history / blob_available | **list_file_versions** | get_document_text on every version blindly |
@@ -141,6 +145,10 @@ from src.mcp.tools.file_mgmt import (
     get_chain,
     get_node,
     list_groups,
+    list_todos,
+    create_todo,
+    update_todo,
+    delete_todo,
     upload_file_from_staging,
     upload_file_version_from_staging,
     set_file_definitive,
@@ -158,6 +166,10 @@ for _t in (
     get_chain,
     get_node,
     list_groups,
+    list_todos,
+    create_todo,
+    update_todo,
+    delete_todo,
     upload_file_from_staging,
     upload_file_version_from_staging,
     set_file_definitive,
@@ -212,6 +224,7 @@ for _t in (list_notes, get_note, create_note, update_note, delete_note, trigger_
 # ── Meetings ─────────────────────────────────────────────────
 from src.mcp.tools.meetings import (
     list_meetings,
+    list_meeting_catalog,
     get_meeting,
     get_section,
     get_meeting_transcript,
@@ -222,7 +235,7 @@ from src.mcp.tools.meetings import (
     upload_meeting_audio_from_staging,
     lookup_meeting_transcript,
 )
-for _t in (list_meetings, get_meeting, get_section, get_meeting_transcript, create_meeting, update_meeting, delete_meeting, start_meeting_summary, upload_meeting_audio_from_staging, lookup_meeting_transcript):
+for _t in (list_meetings, list_meeting_catalog, get_meeting, get_section, get_meeting_transcript, create_meeting, update_meeting, delete_meeting, start_meeting_summary, upload_meeting_audio_from_staging, lookup_meeting_transcript):
     desc = _t.__doc__
     if desc and "{base_url}" in desc:
         desc = desc.replace("{base_url}", _base_url)

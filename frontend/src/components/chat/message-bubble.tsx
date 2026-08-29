@@ -1,11 +1,12 @@
 import { memo, useEffect, useState } from "react"
-import { ChevronRight, Globe, Wrench } from "lucide-react"
+import { ChevronRight, Globe, Loader2, Wrench } from "lucide-react"
 import { SourcesCard } from "./sources-card"
 import { ThinkingSteps } from "./thinking-steps"
 import { StreamingAnswerBody } from "./streaming-answer-body"
 import type { Message, Source, TimelineBlock, ThinkingSummary } from "@/stores/app-store"
 import { cn } from "@/lib/utils"
 import { useT } from "@/i18n/use-t"
+import { isToolBlockRunning, isWaitingForNextStep } from "@/lib/chat-next-step"
 
 function ThinkingContent({ text, isStreaming }: { text: string; isStreaming: boolean }) {
   const t = useT()
@@ -161,11 +162,7 @@ function TimelineBlockView({
   }
   if (block.type === "tool") {
     if (isRetrievalTool(block)) {
-      const running =
-        messageStreaming &&
-        (block.isStreaming ||
-          block.toolStatus === "running" ||
-          block.toolStatus === "awaiting_confirm")
+      const running = messageStreaming && isToolBlockRunning(block)
       return (
         <ThinkingSteps
           steps={[]}
@@ -197,15 +194,8 @@ function ProcessTrail({
   const t = useT()
   const [open, setOpen] = useState(true)
   useEffect(() => {
-    if (!isStreaming) {
-      setOpen(false)
-      return
-    }
-    if (answerStarted) {
-      setOpen(false)
-      return
-    }
-    setOpen(true)
+    const next = isStreaming && !answerStarted
+    setOpen((prev) => (prev === next ? prev : next))
   }, [isStreaming, answerStarted])
 
   const parts: string[] = []
@@ -273,6 +263,7 @@ const AssistantProcessTrail = memo(function AssistantProcessTrail({
   isStreaming: boolean
   answerStarted: boolean
 }) {
+  const t = useT()
   const hasTimeline = !!(timeline && timeline.length > 0)
   const hasLegacyTrail =
     !hasTimeline &&
@@ -303,14 +294,22 @@ const AssistantProcessTrail = memo(function AssistantProcessTrail({
       thinkingCount={thinkingCount}
     >
       {hasTimeline ? (
-        timeline!.map((block, i) => (
-          <TimelineBlockView
-            key={i}
-            block={block}
-            metaInfo={metaInfo}
-            messageStreaming={isStreaming}
-          />
-        ))
+        <>
+          {timeline!.map((block, i) => (
+            <TimelineBlockView
+              key={i}
+              block={block}
+              metaInfo={metaInfo}
+              messageStreaming={isStreaming}
+            />
+          ))}
+          {isWaitingForNextStep(timeline, isStreaming, answerStarted) && (
+            <div className="flex items-center gap-2 py-1 pm-meta italic">
+              <Loader2 className="size-3 animate-spin text-[var(--pm-faint)]" />
+              {t("chat.nextStep")}
+            </div>
+          )}
+        </>
       ) : (
         <>
           {thinkingContent && (

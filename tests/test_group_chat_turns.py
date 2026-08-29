@@ -1,4 +1,4 @@
-"""Group chat: UI rounds are dialogue turns; transcript lookup is required evidence."""
+"""Group chat: UI rounds are dialogue turns; content answers need spoken evidence."""
 
 from __future__ import annotations
 
@@ -30,27 +30,55 @@ def test_ui_turn_count_main_chat_still_uses_raw_rows():
     assert _ui_turn_count(Store(), "sess_main", fallback=0) == 24
 
 
-def test_group_tool_choice_forces_transcript_after_summary_only():
-    from src.chatbox.agent import _group_stream_tool_choice
+def test_group_engineering_force_lookup_removed():
+    """Greeting/meta turns answer directly; forced tool_choice machinery is gone."""
+    import src.chatbox.agent as agent_mod
 
-    assert _group_stream_tool_choice("group_1", transcript_lookup_done=False, force_transcript_lookup=False) == "auto"
-    forced = _group_stream_tool_choice(
-        "group_1", transcript_lookup_done=False, force_transcript_lookup=True,
+    assert not hasattr(agent_mod, "_group_stream_tool_choice")
+    assert not hasattr(agent_mod, "group_force_lookup")
+
+
+def test_group_turn_without_tools_answers_directly():
+    """A group turn the model answers without tools must NOT be deferred/suppressed."""
+    from unittest.mock import MagicMock
+
+    from src.chatbox.agent import ChatboxAgent
+
+    store = MagicMock()
+    store.count_dialogue_turns.return_value = 0
+    llm = MagicMock()
+    llm._model = "test-model"
+    llm._client = MagicMock()
+    llm._client.chat.completions.create.return_value = _text_only_response(
+        "Hi! What would you like to ask about this meeting group?"
     )
-    assert forced["function"]["name"] == "lookup_group_transcript"
-    assert _group_stream_tool_choice("group_1", transcript_lookup_done=True, force_transcript_lookup=True) == "auto"
-    assert _group_stream_tool_choice("meeting_1", transcript_lookup_done=False, force_transcript_lookup=True) == "auto"
+    agent = ChatboxAgent(
+        session_store=store, chat_llm=llm, agentic_service=MagicMock(),
+    )
+    resp = agent.chat("group_abc", "你好")
+
+    assert resp.answer.startswith("Hi!")
+    assert resp.tool_calls == 0
+
+
+def _text_only_response(content: str):
+    from unittest.mock import MagicMock
+
+    resp = MagicMock()
+    choice = MagicMock()
+    choice.message.content = content
+    choice.message.tool_calls = None
+    resp.choices = [choice]
+    return resp
 
 
 def test_forced_tool_choice_disables_thinking_for_that_round():
-    from src.chatbox.agent import (
-        _group_stream_tool_choice,
-        _thinking_on_for_tool_round,
-    )
+    from src.chatbox.agent import _thinking_on_for_tool_round
 
-    forced = _group_stream_tool_choice(
-        "group_1", transcript_lookup_done=False, force_transcript_lookup=True,
-    )
+    forced = {
+        "type": "function",
+        "function": {"name": "lookup_meeting_transcript"},
+    }
     assert _thinking_on_for_tool_round(True, forced) is False
     assert _thinking_on_for_tool_round(True, "auto") is True
     assert _thinking_on_for_tool_round(False, forced) is False
@@ -64,7 +92,7 @@ def test_retry_kwargs_disable_thinking_then_drop_forced_tool():
     )
     forced = {
         "type": "function",
-        "function": {"name": "lookup_group_transcript"},
+        "function": {"name": "lookup_meeting_transcript"},
     }
     first = _retry_llm_kwargs_after_error(
         {
@@ -93,9 +121,7 @@ def test_group_transcript_lookup_is_offloaded_from_the_event_loop():
 
     src = inspect.getsource(__import__("src.chatbox.agent", fromlist=["ChatboxAgent"]))
     # chat_stream path (not the sync query fallback)
-    assert "await _run_blocking(\n                            execute_group_lookup_json" in src.replace(
-        "\r\n", "\n"
-    ) or "await _run_blocking(execute_group_lookup_json" in src
+    assert "_run_lookup_meeting_transcript" in src
 
     caller = threading.get_ident()
 
@@ -108,11 +134,11 @@ def test_group_transcript_lookup_is_offloaded_from_the_event_loop():
 
 def test_group_prompt_treats_summary_as_orientation_not_evidence():
     from src.prompts import MEETING_GROUP_CHAT_SYSTEM_PROMPT
-    from src.chatbox.query_tools import LOOKUP_GROUP_TRANSCRIPT_TOOL, READ_MEETING_SUMMARY_TOOL
 
     p = MEETING_GROUP_CHAT_SYSTEM_PROMPT.lower()
     assert "read_meeting_summary" in p
-    assert "lookup_group_transcript" in p
+    assert "lookup_meeting_transcript" in p
+    assert "list_meeting_catalog" in p
     assert "orientation" in p or "itinerary" in p or "map of the series" in p
     assert "spoken" in p or "transcript" in p
     assert "paraphrase" in p or "synthes" in p
@@ -122,7 +148,19 @@ def test_group_prompt_treats_summary_as_orientation_not_evidence():
     # Not a literal dump of the product brief
     assert "我不要看原句" not in MEETING_GROUP_CHAT_SYSTEM_PROMPT
 
+    from src.chatbox.query_tools import (
+        LOOKUP_SCOPED_TRANSCRIPT_TOOL,
+        READ_MEETING_SUMMARY_TOOL,
+    )
+
     sdesc = READ_MEETING_SUMMARY_TOOL["function"]["description"].lower()
-    tdesc = LOOKUP_GROUP_TRANSCRIPT_TOOL["function"]["description"].lower()
+    tdesc = LOOKUP_SCOPED_TRANSCRIPT_TOOL["function"]["description"].lower()
     assert "orient" in sdesc or "itinerary" in sdesc or "map" in sdesc
-    assert "evidence" in tdesc or "spoken" in tdesc
+    assert "spoken" in tdesc
+    assert "later call" not in tdesc
+    assert "additional packs" not in tdesc
+    assert "do not look them up again" in tdesc
+    p = MEETING_GROUP_CHAT_SYSTEM_PROMPT.lower()
+    assert "search again with a sharper need" not in p
+    assert "do not look them up again" in p
+    assert "different information need" in p

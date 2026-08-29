@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 
 from fastapi import HTTPException
@@ -14,9 +15,32 @@ from src.file_mgmt.layout import (
     _is_descendant,
     _row_to_folder,
 )
-from src.file_mgmt.models import FolderCreate, FolderOut, FolderTree, FolderUpdate
+from src.file_mgmt.models import (
+    FolderArchiveToggle,
+    FolderCreate,
+    FolderOut,
+    FolderTree,
+    FolderUpdate,
+)
 
 
+
+
+def _coerce_locked_icons(
+    kind: str, icon_color: str | None
+) -> tuple[str, str, str | None]:
+    """Plain → folder glyph; branch → git-branch. Color is kept."""
+    if kind == "branch":
+        return "lucide", "git-branch", icon_color
+    return "lucide", "folder", icon_color
+
+
+def _assert_group_icon_allowed(icon_value: str | None) -> None:
+    key = (icon_value or "").strip().lower()
+    if key in ("folder", "git-branch"):
+        raise HTTPException(
+            400, "Node group folders cannot use the folder or branch icon"
+        )
 
 
 # === Folder CRUD ===
@@ -47,6 +71,10 @@ def get_folder(collection_id: str, folder_id: str) -> FolderOut:
 def get_folder_tree(collection_id: str) -> list[FolderTree]:
     conn = _open_db(collection_id)
     try:
+        from src.file_mgmt.store import _ensure_folders_archive_columns
+
+        _ensure_folders_archive_columns(conn)
+        conn.commit()
         rows = conn.execute("SELECT * FROM folders ORDER BY name").fetchall()
         children_map: dict[str | None, list] = {}
         for r in rows:
@@ -136,6 +164,13 @@ def create_folder(collection_id: str, req: FolderCreate) -> FolderOut:
 
             _assert_folder_name_free(conn, parent_id, name)
 
+            icon_type, icon_value, icon_color = _coerce_locked_icons(
+                "plain", req.icon_color
+            )
+            # No icon payload → leave columns null (kind default is folder)
+            if not (req.icon_type or req.icon_value or req.icon_color):
+                icon_type = icon_value = icon_color = None
+
             folder_id = uuid.uuid4().hex
             conn.execute(
                 """INSERT INTO folders
@@ -150,9 +185,9 @@ def create_folder(collection_id: str, req: FolderCreate) -> FolderOut:
                     actor.id,
                     now,
                     now,
-                    req.icon_type,
-                    req.icon_value,
-                    req.icon_color,
+                    icon_type,
+                    icon_value,
+                    icon_color,
                 ),
             )
             row = conn.execute(
@@ -193,6 +228,23 @@ def update_folder(
                         raise HTTPException(
                             403, "System folders cannot change icons"
                         )
+
+            if "parent_folder_id" in updates and folder["kind"] != "plain":
+                raise HTTPException(403, "Only plain folders can be moved")
+
+            icon_keys = {"icon_type", "icon_value", "icon_color"}
+            if icon_keys & set(updates.keys()):
+                if folder["kind"] in ("plain", "branch"):
+                    color = (
+                        updates["icon_color"] if "icon_color" in updates else None
+                    )
+                    _t, _v, _c = _coerce_locked_icons(folder["kind"], color)
+                    updates["icon_type"] = _t
+                    updates["icon_value"] = _v
+                    if "icon_color" in updates:
+                        updates["icon_color"] = _c
+                elif folder["kind"] == "user_group":
+                    _assert_group_icon_allowed(updates.get("icon_value"))
 
             if "parent_folder_id" in updates:
                 new_parent = updates["parent_folder_id"]
@@ -322,6 +374,191 @@ def delete_folder(collection_id: str, folder_id: str) -> None:
         emit_event("folder.deleted", collection_id, {"folder_id": folder_id})
     finally:
         conn.close()
+
+
+def toggle_folder_archive(
+    collection_id: str, folder_id: str, req: FolderArchiveToggle
+) -> FolderOut:
+    """Archive or restore a plain folder and its plain subtree."""
+    _actor_for("folder.archive", collection_id, folder_id=folder_id)
+
+    conn = _open_db(collection_id)
+    try:
+        with conn:
+            from src.file_mgmt.store import _ensure_folders_archive_columns
+
+            _ensure_folders_archive_columns(conn)
+            folder = conn.execute(
+                "SELECT * FROM folders WHERE folder_id=?", (folder_id,)
+            ).fetchone()
+            if not folder:
+                raise HTTPException(404, f"Folder '{folder_id}' not found")
+            if folder["kind"] != "plain" or folder["is_system"]:
+                raise HTTPException(400, "Only plain folders can be archived")
+            if folder["version"] != req.version:
+                raise HTTPException(
+                    409, "Folder was modified by another user (version conflict)"
+                )
+
+            already = bool(folder["archived"])
+            if req.archived == already:
+                return _row_to_folder(folder)
+
+            if req.archived:
+                _archive_plain_folder(
+                    conn, collection_id, folder_id, cascade=False
+                )
+                emit_event(
+                    "folder.archived", collection_id, {"folder_id": folder_id}
+                )
+            else:
+                _unarchive_plain_folder(
+                    conn, collection_id, folder_id, as_root=True
+                )
+                emit_event(
+                    "folder.unarchived", collection_id, {"folder_id": folder_id}
+                )
+
+            row = conn.execute(
+                "SELECT * FROM folders WHERE folder_id=?", (folder_id,)
+            ).fetchone()
+            return _row_to_folder(row)
+    finally:
+        conn.close()
+
+
+def _archive_plain_folder(
+    conn, collection_id: str, folder_id: str, *, cascade: bool
+) -> None:
+    from src.file_mgmt.files import (
+        _archive_paths_on_folder,
+        _promote_file_archive_if_needed,
+    )
+
+    row = conn.execute(
+        "SELECT * FROM folders WHERE folder_id=?", (folder_id,)
+    ).fetchone()
+    if not row:
+        return
+    if row["kind"] != "plain":
+        return
+    if bool(row["archived"]):
+        return
+
+    path_ids: list[str] = []
+    promoted: list[str] = []
+    already_file_archived: list[str] = []
+    file_rows = conn.execute(
+        "SELECT DISTINCT file_id FROM file_paths WHERE folder_id=?",
+        (folder_id,),
+    ).fetchall()
+    for fr in file_rows:
+        fid = fr["file_id"]
+        was_file_archived = bool(
+            conn.execute(
+                "SELECT archived FROM files WHERE file_id=?", (fid,)
+            ).fetchone()["archived"]
+        )
+        flipped = _archive_paths_on_folder(conn, fid, folder_id)
+        path_ids.extend(flipped)
+        if flipped and was_file_archived:
+            already_file_archived.append(fid)
+        if flipped and _promote_file_archive_if_needed(conn, collection_id, fid):
+            promoted.append(fid)
+
+    kids = conn.execute(
+        "SELECT folder_id FROM folders WHERE parent_folder_id=?",
+        (folder_id,),
+    ).fetchall()
+    for k in kids:
+        _archive_plain_folder(conn, collection_id, k["folder_id"], cascade=True)
+
+    snap = json.dumps(
+        {
+            "path_ids": path_ids,
+            "promoted_file_ids": promoted,
+            "already_file_archived": already_file_archived,
+            "cascade": cascade,
+        },
+        separators=(",", ":"),
+    )
+    conn.execute(
+        """UPDATE folders
+           SET archived=1, archive_snapshot=?, updated_at=?, version=version+1
+           WHERE folder_id=?""",
+        (snap, _now_iso(), folder_id),
+    )
+
+
+def _unarchive_plain_folder(
+    conn, collection_id: str, folder_id: str, *, as_root: bool
+) -> None:
+    from src.file_mgmt.files import (
+        _path_has_active_mount,
+        _unarchive_file_if_archived,
+        _unarchive_paths_by_ids,
+    )
+
+    row = conn.execute(
+        "SELECT * FROM folders WHERE folder_id=?", (folder_id,)
+    ).fetchone()
+    if not row or row["kind"] != "plain":
+        return
+
+    snap_raw = None
+    try:
+        snap_raw = row["archive_snapshot"]
+    except (KeyError, IndexError):
+        snap_raw = None
+    snap: dict = {}
+    if snap_raw:
+        try:
+            snap = json.loads(snap_raw) or {}
+        except (TypeError, json.JSONDecodeError):
+            snap = {}
+
+    is_cascade = bool(snap.get("cascade"))
+    if bool(row["archived"]) and (as_root or is_cascade):
+        path_ids = [p for p in (snap.get("path_ids") or []) if p]
+        if path_ids:
+            _unarchive_paths_by_ids(conn, path_ids)
+        already = {
+            fid
+            for fid in (snap.get("already_file_archived") or [])
+            if fid
+        }
+        file_ids: set[str] = {
+            fid for fid in (snap.get("promoted_file_ids") or []) if fid
+        }
+        if path_ids:
+            ph = ",".join("?" * len(path_ids))
+            for r in conn.execute(
+                f"SELECT DISTINCT file_id FROM file_paths WHERE path_id IN ({ph})",
+                path_ids,
+            ).fetchall():
+                if r["file_id"]:
+                    file_ids.add(r["file_id"])
+        for fid in file_ids:
+            if fid in already:
+                continue
+            if _path_has_active_mount(conn, fid):
+                _unarchive_file_if_archived(conn, collection_id, fid)
+        conn.execute(
+            """UPDATE folders
+               SET archived=0, archive_snapshot=NULL, updated_at=?,
+                   version=version+1
+               WHERE folder_id=?""",
+            (_now_iso(), folder_id),
+        )
+
+    kids = conn.execute(
+        "SELECT folder_id FROM folders WHERE parent_folder_id=?",
+        (folder_id,),
+    ).fetchall()
+    for k in kids:
+        _unarchive_plain_folder(
+            conn, collection_id, k["folder_id"], as_root=False
+        )
 
 
 # === NodeGroup CRUD ===

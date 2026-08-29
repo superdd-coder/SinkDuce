@@ -25,6 +25,8 @@ import {
   CheckSquare,
   ChevronLeft,
   ArrowUpDown,
+  LayoutGrid,
+  List,
 } from "lucide-react"
 import {
   isCreatedSortMode,
@@ -35,11 +37,11 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import type { FileSummary, FolderTreeNode } from "@/types/file-mgmt"
 import { cn } from "@/lib/utils"
 import {
@@ -49,7 +51,12 @@ import {
   buildIconPayload,
 } from "@/components/file-mgmt/timeline-view/group-icons"
 import { useT } from "@/i18n/use-t"
-import { systemFolderDisplayName } from "@/i18n/system-folder"
+import { FolderDestCard } from "@/components/file-mgmt/folder-select-tree"
+import {
+  blockedMoveFolderIds,
+  isFileMoveSelectable,
+  isFolderMoveSelectable,
+} from "./folder-move-dest"
 
 /** Active in this folder (not file-archived, not path-greyed here). */
 function isActiveInFolder(f: FileSummary): boolean {
@@ -104,6 +111,9 @@ type ToolbarChrome =
       kind: "folder"
       folderCount: number
       canDelete: boolean
+      canMove: boolean
+      canArchive: boolean
+      canRestore: boolean
     }
   | {
       kind: "file"
@@ -127,6 +137,9 @@ type ToolbarChrome =
       isDefinitive: boolean
       isArchivedView: boolean
       isRootView: boolean
+      canMoveFolders: boolean
+      canArchiveFolders: boolean
+      canRestoreFolders: boolean
     }
 
 /** Dropdown surface — nested white + soft shadow; parent toolbar z-index above grid. */
@@ -139,7 +152,7 @@ function chromeToolKey(c: ToolbarChrome): string {
     case "multi":
       return "multi"
     case "folder":
-      return `folder:${c.canDelete ? "del" : "sys"}`
+      return `folder:${c.canDelete ? "del" : "sys"}:${c.canMove ? "mv" : "-"}${c.canArchive ? "a" : "-"}${c.canRestore ? "r" : "-"}`
     case "file":
       return [
         "file",
@@ -159,6 +172,9 @@ function chromeToolKey(c: ToolbarChrome): string {
         c.showDefinitive ? "d" : "-",
         c.multiSelectMode ? "m" : "-",
         c.isRootView ? "root" : "f",
+        c.canMoveFolders ? "mv" : "-",
+        c.canArchiveFolders ? "fa" : "-",
+        c.canRestoreFolders ? "fr" : "-",
       ].join(":")
   }
 }
@@ -221,6 +237,7 @@ export function Toolbar({
     folderFileSort,
     setFolderFileSort,
     moveFilesToFolder,
+    moveFolder,
     copyFilesToFolder,
     removeFilesFromCurrentFolder,
     archiveFilesForFolder,
@@ -229,8 +246,12 @@ export function Toolbar({
     permanentlyDeleteFiles,
     toggleDefinitive,
     removeFolder,
+    archiveFolders,
+    unarchiveFolders,
     clearFolderSelection,
     multiSelectMode,
+    folderFileView,
+    setFolderFileView,
     enterMultiSelectMode,
     exitMultiSelectMode,
     selectAllFiles,
@@ -248,7 +269,17 @@ export function Toolbar({
     useState(DEFAULT_ICON_COLOR)
   const [newFolderSymbol, setNewFolderSymbol] = useState("")
   const [moveDialogOpen, setMoveDialogOpen] = useState(false)
+  const [moveDialogMode, setMoveDialogMode] = useState<
+    "files" | "folders" | "mixed"
+  >("files")
+  /** undefined = none, null = root, string = folder */
+  const [moveTarget, setMoveTarget] = useState<string | null | undefined>(
+    undefined
+  )
   const [copyDialogOpen, setCopyDialogOpen] = useState(false)
+  const [copyTarget, setCopyTarget] = useState<string | null | undefined>(
+    undefined
+  )
   const [confirmAction, setConfirmAction] = useState<string | null>(null)
   /** At most one action menu open: move | archive | delete */
   const [openMenu, setOpenMenu] = useState<
@@ -271,10 +302,18 @@ export function Toolbar({
   const hasFileSelection = selectedFiles.length > 0
   const hasFolderSelection = selectedFolderIds.size > 0
   const selectedFolderIdsArr = Array.from(selectedFolderIds)
-  const hasSystemFolder = selectedFolderIdsArr.some((fid) => {
-    const f = findFolderInTree(folderTree, fid)
-    return f?.is_system ?? false
-  })
+  const selectedFolderNodes = selectedFolderIdsArr
+    .map((fid) => findFolderInTree(folderTree, fid))
+    .filter((f): f is FolderTreeNode => !!f)
+  const hasSystemFolder = selectedFolderNodes.some((f) => f.is_system)
+  const allSelectedFoldersPlain =
+    selectedFolderNodes.length > 0 &&
+    selectedFolderNodes.every((f) => f.kind === "plain" && !f.is_system)
+  const canMoveFolders = allSelectedFoldersPlain
+  const canArchiveFolders =
+    allSelectedFoldersPlain && selectedFolderNodes.some((f) => !f.archived)
+  const canRestoreFolders =
+    allSelectedFoldersPlain && selectedFolderNodes.some((f) => !!f.archived)
 
   const archiveUi = useMemo(() => {
     if (selectedFiles.length === 0) {
@@ -344,14 +383,11 @@ export function Toolbar({
 
   const handleCreateFolder = async () => {
     if (!newFolderName.trim()) return
-    if (newFolderIconMode === "emoji" && !newFolderSymbol.trim()) {
-      return
-    }
     const icon = buildIconPayload({
-      iconMode: newFolderIconMode,
-      iconKey: newFolderIconKey,
+      iconMode: "lucide",
+      iconKey: "folder",
       iconColor: newFolderIconColor,
-      symbol: newFolderSymbol,
+      symbol: "",
     })
     await createSubFolder(collectionId, newFolderName.trim(), icon)
     resetNewFolderForm()
@@ -359,29 +395,19 @@ export function Toolbar({
   }
 
   const newFolderPreview = useMemo(
-    () =>
-      newFolderIconMode === "emoji" && newFolderSymbol
-        ? {
-            name: newFolderName,
-            icon_type: "emoji" as const,
-            icon_value: newFolderSymbol,
-          }
-        : {
-            name: newFolderName,
-            icon_type: "lucide" as const,
-            icon_value: newFolderIconKey,
-            icon_color: newFolderIconColor,
-          },
-    [
-      newFolderIconMode,
-      newFolderName,
-      newFolderSymbol,
-      newFolderIconKey,
-      newFolderIconColor,
-    ]
+    () => ({
+      name: newFolderName,
+      icon_type: "lucide" as const,
+      icon_value: "folder",
+      icon_color: newFolderIconColor,
+    }),
+    [newFolderName, newFolderIconColor]
   )
 
-  const availableFolders = collectFolders(folderTree, currentFolderId)
+  const moveBlocked = useMemo(
+    () => blockedMoveFolderIds(folderTree, selectedFolderIdsArr),
+    [folderTree, selectedFolderIdsArr]
+  )
 
   const pickMenuAction = (action: string) => {
     setOpenMenu(null)
@@ -422,6 +448,9 @@ export function Toolbar({
         isDefinitive,
         isArchivedView,
         isRootView,
+        canMoveFolders,
+        canArchiveFolders,
+        canRestoreFolders,
       }
     }
     if (hasFileSelection) {
@@ -441,6 +470,9 @@ export function Toolbar({
         kind: "folder",
         folderCount: selectedFolderIdsArr.length,
         canDelete: !hasSystemFolder,
+        canMove: canMoveFolders,
+        canArchive: canArchiveFolders,
+        canRestore: canRestoreFolders,
       }
     }
     if (multiSelectMode) {
@@ -462,6 +494,9 @@ export function Toolbar({
     selectedFiles,
     isArchivedView,
     isRootView,
+    canMoveFolders,
+    canArchiveFolders,
+    canRestoreFolders,
   ])
 
   const toolKey = chromeToolKey(liveChrome)
@@ -727,6 +762,52 @@ export function Toolbar({
               ? t("fileMgmt.nFolders", { n: chrome.folderCount })
               : t("fileMgmt.nFoldersPlural", { n: chrome.folderCount })}
           </span>
+          {(chrome.canMove || chrome.canArchive || chrome.canRestore) && (
+            <ToolbarDivider />
+          )}
+          {chrome.canMove && (
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => {
+                if (!on) return
+                setMoveDialogMode("folders")
+                setMoveDialogOpen(true)
+              }}
+              title={t("fileMgmt.moveFolder")}
+              className={tbBtn}
+              tabIndex={tab}
+            >
+              <MoveRight />
+              {t("fileMgmt.move")}
+            </Button>
+          )}
+          {chrome.canArchive && (
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => on && setConfirmAction("archiveFolders")}
+              title={t("fileMgmt.archiveFolder")}
+              className={tbBtn}
+              tabIndex={tab}
+            >
+              <Archive />
+              {t("common.archive")}
+            </Button>
+          )}
+          {chrome.canRestore && (
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => on && setConfirmAction("restoreFolders")}
+              title={t("common.restore")}
+              className={tbBtn}
+              tabIndex={tab}
+            >
+              <ArchiveRestore />
+              {t("common.restore")}
+            </Button>
+          )}
           {chrome.canDelete && (
             <>
               <ToolbarDivider />
@@ -760,6 +841,52 @@ export function Toolbar({
                 ? t("fileMgmt.nFolders", { n: folderPart.folderCount })
                 : t("fileMgmt.nFoldersPlural", { n: folderPart.folderCount })}
             </span>
+            {(folderPart.canMoveFolders ||
+              folderPart.canArchiveFolders ||
+              folderPart.canRestoreFolders) && <ToolbarDivider />}
+            {folderPart.canMoveFolders && (
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={() => {
+                  if (!on) return
+                  setMoveDialogMode("mixed")
+                  setMoveDialogOpen(true)
+                }}
+                title={t("fileMgmt.move")}
+                className={tbBtn}
+                tabIndex={tab}
+              >
+                <MoveRight />
+                {t("fileMgmt.move")}
+              </Button>
+            )}
+            {folderPart.canArchiveFolders && (
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={() => on && setConfirmAction("archiveFolders")}
+                title={t("fileMgmt.archiveFolder")}
+                className={tbBtn}
+                tabIndex={tab}
+              >
+                <Archive />
+                {t("common.archive")}
+              </Button>
+            )}
+            {folderPart.canRestoreFolders && (
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={() => on && setConfirmAction("restoreFolders")}
+                title={t("common.restore")}
+                className={tbBtn}
+                tabIndex={tab}
+              >
+                <ArchiveRestore />
+                {t("common.restore")}
+              </Button>
+            )}
             {folderPart.canDelete && (
               <>
                 <ToolbarDivider />
@@ -810,6 +937,7 @@ export function Toolbar({
                   onClick={() => {
                     if (!on) return
                     setOpenMenu(null)
+                    setMoveDialogMode("files")
                     setMoveDialogOpen(true)
                   }}
                   title={t("fileMgmt.moveSelected")}
@@ -886,6 +1014,7 @@ export function Toolbar({
                         description={t("fileMgmt.moveToDest")}
                         onClick={() => {
                           setOpenMenu(null)
+                          setMoveDialogMode("files")
                           setMoveDialogOpen(true)
                         }}
                       />
@@ -1081,6 +1210,27 @@ export function Toolbar({
         </div>
       </div>
       {trailing}
+      <div className="pm-files-tb-sep" aria-hidden />
+      <div className="pm-files-view-toggle" role="group" aria-label={t("fileMgmt.gridView")}>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={cn(tbIconBtn, folderFileView === "grid" && "is-on")}
+          title={t("fileMgmt.gridView")}
+          onClick={() => setFolderFileView(collectionId, "grid")}
+        >
+          <LayoutGrid />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={cn(tbIconBtn, folderFileView === "list" && "is-on")}
+          title={t("fileMgmt.listView")}
+          onClick={() => setFolderFileView(collectionId, "list")}
+        >
+          <List />
+        </Button>
+      </div>
     </div>
 
       <input
@@ -1147,14 +1297,15 @@ export function Toolbar({
               </div>
             </div>
             <IconPickerPanel
-              iconMode={newFolderIconMode}
-              iconKey={newFolderIconKey}
+              iconMode="lucide"
+              iconKey="folder"
               iconColor={newFolderIconColor}
-              symbol={newFolderSymbol}
+              symbol=""
               onIconMode={setNewFolderIconMode}
               onIconKey={setNewFolderIconKey}
               onIconColor={setNewFolderIconColor}
               onSymbol={setNewFolderSymbol}
+              variant="plain"
             />
           </div>
           <div className="flex justify-end gap-2 pt-2">
@@ -1168,10 +1319,7 @@ export function Toolbar({
             <Button
               size="sm"
               onClick={() => void handleCreateFolder()}
-              disabled={
-                !newFolderName.trim() ||
-                (newFolderIconMode === "emoji" && !newFolderSymbol.trim())
-              }
+              disabled={!newFolderName.trim()}
             >
               {t("common.create")}
             </Button>
@@ -1179,55 +1327,140 @@ export function Toolbar({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={moveDialogOpen} onOpenChange={setMoveDialogOpen}>
-        <DialogContent className="pm-dialog max-w-sm">
-          <DialogHeader>
-            <DialogTitle>{t("fileMgmt.moveToN", { n: selectedIds.length })}</DialogTitle>
+      <Dialog
+        open={moveDialogOpen}
+        onOpenChange={(open) => {
+          setMoveDialogOpen(open)
+          if (open) setMoveTarget(undefined)
+        }}
+      >
+        <DialogContent className="pm-dialog pm-files-dest-dialog">
+          <DialogHeader className="pm-group-dialog-head">
+            <DialogTitle className="pm-group-dialog-title">
+              {moveDialogMode === "files"
+                ? t("fileMgmt.moveToN", { n: selectedIds.length })
+                : moveDialogMode === "folders"
+                  ? t("fileMgmt.moveFoldersToN", {
+                      n: selectedFolderIdsArr.length,
+                    })
+                  : t("fileMgmt.moveItemsToN", {
+                      n: selectedIds.length + selectedFolderIdsArr.length,
+                    })}
+            </DialogTitle>
           </DialogHeader>
-          <ScrollArea className="max-h-[300px]">
-            <div className="flex flex-col gap-0.5">
-              {availableFolders.map((f) => (
-                <button
-                  key={f.id}
-                  type="button"
-                  className="pm-files-menu-opt truncate text-left"
-                  style={{ paddingLeft: `${8 + f.depth * 12}px` }}
-                  onClick={async () => {
-                    await moveFilesToFolder(collectionId, selectedIds, f.id)
-                    setMoveDialogOpen(false)
-                  }}
-                >
-                  {systemFolderDisplayName(f.name, t)}
-                </button>
-              ))}
-            </div>
-          </ScrollArea>
+          <div className="pm-files-dest-body">
+            <FolderDestCard
+              key={moveDialogOpen ? "move-open" : "move-closed"}
+              collectionId={collectionId}
+              nodes={folderTree}
+              selectedId={moveTarget}
+              onSelect={setMoveTarget}
+              includeRoot={
+                moveDialogMode !== "files" && currentFolderId != null
+              }
+              isSelectable={(n) =>
+                moveDialogMode === "files"
+                  ? isFileMoveSelectable(n, currentFolderId)
+                  : isFolderMoveSelectable(n, {
+                      currentParentId: currentFolderId,
+                      blocked: moveBlocked,
+                    })
+              }
+            />
+          </div>
+          <DialogFooter className="pm-group-dialog-foot gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setMoveDialogOpen(false)}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              size="sm"
+              disabled={
+                moveDialogMode === "files"
+                  ? !moveTarget
+                  : moveTarget === undefined
+              }
+              onClick={async () => {
+                if (moveDialogMode === "files") {
+                  if (!moveTarget) return
+                  await moveFilesToFolder(collectionId, selectedIds, moveTarget)
+                } else {
+                  if (moveTarget === undefined) return
+                  for (const node of selectedFolderNodes) {
+                    await moveFolder(
+                      collectionId,
+                      node.folder_id,
+                      moveTarget,
+                      node.version
+                    )
+                  }
+                  if (
+                    moveDialogMode === "mixed" &&
+                    selectedIds.length &&
+                    moveTarget
+                  ) {
+                    await moveFilesToFolder(
+                      collectionId,
+                      selectedIds,
+                      moveTarget
+                    )
+                  }
+                }
+                setMoveDialogOpen(false)
+              }}
+            >
+              {t("fileMgmt.move")}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={copyDialogOpen} onOpenChange={setCopyDialogOpen}>
-        <DialogContent className="pm-dialog max-w-sm">
-          <DialogHeader>
-            <DialogTitle>{t("fileMgmt.mirrorToN", { n: selectedIds.length })}</DialogTitle>
+      <Dialog
+        open={copyDialogOpen}
+        onOpenChange={(open) => {
+          setCopyDialogOpen(open)
+          if (open) setCopyTarget(undefined)
+        }}
+      >
+        <DialogContent className="pm-dialog pm-files-dest-dialog">
+          <DialogHeader className="pm-group-dialog-head">
+            <DialogTitle className="pm-group-dialog-title">
+              {t("fileMgmt.mirrorToN", { n: selectedIds.length })}
+            </DialogTitle>
           </DialogHeader>
-          <ScrollArea className="max-h-[300px]">
-            <div className="flex flex-col gap-0.5">
-              {availableFolders.map((f) => (
-                <button
-                  key={f.id}
-                  type="button"
-                  className="pm-files-menu-opt truncate text-left"
-                  style={{ paddingLeft: `${8 + f.depth * 12}px` }}
-                  onClick={async () => {
-                    await copyFilesToFolder(collectionId, selectedIds, f.id)
-                    setCopyDialogOpen(false)
-                  }}
-                >
-                  {systemFolderDisplayName(f.name, t)}
-                </button>
-              ))}
-            </div>
-          </ScrollArea>
+          <div className="pm-files-dest-body">
+            <FolderDestCard
+              key={copyDialogOpen ? "copy-open" : "copy-closed"}
+              collectionId={collectionId}
+              nodes={folderTree}
+              selectedId={copyTarget}
+              onSelect={setCopyTarget}
+              isSelectable={(n) => isFileMoveSelectable(n, currentFolderId)}
+            />
+          </div>
+          <DialogFooter className="pm-group-dialog-foot gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setCopyDialogOpen(false)}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              size="sm"
+              disabled={!copyTarget}
+              onClick={async () => {
+                if (!copyTarget) return
+                await copyFilesToFolder(collectionId, selectedIds, copyTarget)
+                setCopyDialogOpen(false)
+              }}
+            >
+              {t("fileMgmt.mirrorTo")}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -1243,6 +1476,8 @@ export function Toolbar({
               {confirmAction === "archiveFolder" && t("fileMgmt.archiveInFolderQ")}
               {confirmAction === "excludeSearch" && t("fileMgmt.archiveGloballyQ")}
               {confirmAction === "unarchive" && t("fileMgmt.restoreFilesQ")}
+              {confirmAction === "archiveFolders" && t("fileMgmt.archiveFolderQ")}
+              {confirmAction === "restoreFolders" && t("fileMgmt.restoreFolderQ")}
               {confirmAction === "unlink" && t("fileMgmt.removeFromFolderQ")}
             </DialogTitle>
           </DialogHeader>
@@ -1255,6 +1490,8 @@ export function Toolbar({
               (isArchivedView
                 ? t("fileMgmt.restoreSearch")
                 : t("fileMgmt.restoreInFolder"))}
+            {confirmAction === "archiveFolders" && t("fileMgmt.archiveFolderBody")}
+            {confirmAction === "restoreFolders" && t("fileMgmt.restoreFolderBody")}
             {confirmAction === "unlink" && t("fileMgmt.removeFromFolderBody")}
           </p>
           <div className="flex justify-end gap-2">
@@ -1310,6 +1547,22 @@ export function Toolbar({
                       targets.map((f) => f.file_id),
                       targets
                     )
+                } else if (confirmAction === "archiveFolders") {
+                  await archiveFolders(
+                    collectionId,
+                    selectedFolderNodes
+                      .filter((f) => f.kind === "plain" && !f.archived)
+                      .map((f) => f.folder_id)
+                  )
+                  clearFolderSelection()
+                } else if (confirmAction === "restoreFolders") {
+                  await unarchiveFolders(
+                    collectionId,
+                    selectedFolderNodes
+                      .filter((f) => f.kind === "plain" && f.archived)
+                      .map((f) => f.folder_id)
+                  )
+                  clearFolderSelection()
                 } else if (confirmAction === "unlink")
                   await removeFilesFromCurrentFolder(collectionId, selectedIds)
                 setConfirmAction(null)
@@ -1338,19 +1591,4 @@ function findFolderInTree(
   return null
 }
 
-function collectFolders(
-  tree: FolderTreeNode[],
-  currentFolderId: string | null,
-  depth = 0
-): { id: string; name: string; depth: number }[] {
-  const result: { id: string; name: string; depth: number }[] = []
-  for (const n of tree) {
-    if (n.folder_id !== currentFolderId && n.name !== "Archived") {
-      result.push({ id: n.folder_id, name: n.name, depth })
-    }
-    if (n.children?.length) {
-      result.push(...collectFolders(n.children, currentFolderId, depth + 1))
-    }
-  }
-  return result
-}
+

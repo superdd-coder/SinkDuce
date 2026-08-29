@@ -272,3 +272,15 @@ class TestContextBuilderMultiCollection:
         chunks = [_ck("text", collection="my_knowledge_base")]
         result = _cb(chunks)
         assert "## Database: my_knowledge_base" in result
+
+    def test_database_header_uses_collection_display_name(self):
+        from unittest.mock import patch
+
+        chunks = [_ck("text", collection="col_707b8ca8d617")]
+        with patch(
+            "src.collections.store.get_collection_meta",
+            return_value={"id": "col_707b8ca8d617", "name": "Project WD"},
+        ):
+            result = _cb(chunks)
+        assert "## Database: Project WD" in result
+        assert "col_707b8ca8d617" not in result.split("### Source:")[0]

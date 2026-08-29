@@ -33,3 +33,32 @@ export function onTodoRefresh(
   window.addEventListener(TODO_REFRESH_EVENT, listener)
   return () => window.removeEventListener(TODO_REFRESH_EVENT, listener)
 }
+
+const TODO_CHAT_TOOLS: Record<string, TodoRefreshDetail["reason"]> = {
+  create_todo: "create",
+  update_todo: "update",
+  delete_todo: "delete",
+}
+
+/** After Chat / Quick Chat structure tools mutate todos, refresh visible lists. */
+export function refreshTodosAfterChatTool(
+  tool: string,
+  opts?: { collectionId?: string | null; status?: string; content?: unknown },
+) {
+  const reason = TODO_CHAT_TOOLS[tool]
+  if (!reason) return
+  const status = opts?.status || "done"
+  if (status === "declined" || status === "error") return
+  let collectionId = (opts?.collectionId || "").trim()
+  if (!collectionId && typeof opts?.content === "string") {
+    try {
+      const parsed = JSON.parse(opts.content) as Record<string, unknown>
+      const raw = parsed.collection ?? parsed.collection_id
+      if (typeof raw === "string") collectionId = raw.trim()
+    } catch {
+      /* tool preview may not be JSON */
+    }
+  }
+  if (!collectionId) return
+  triggerTodoRefresh({ collectionId, reason })
+}

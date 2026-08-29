@@ -15,6 +15,7 @@ from src.file_mgmt.models import (
     ChainCreate,
     ChainUpdate,
     EndChainRequest,
+    FolderArchiveToggle,
     FolderCreate,
     FolderUpdate,
     GroupCreate,
@@ -55,6 +56,14 @@ def create_folder(collection_id: str, req: FolderCreate):
 @router.patch("/{collection_id}/folders/{folder_id}")
 def update_folder(collection_id: str, folder_id: str, req: FolderUpdate):
     return service.update_folder(collection_id, folder_id, req)
+
+
+@router.patch("/{collection_id}/folders/{folder_id}/archive")
+def toggle_folder_archive(
+    collection_id: str, folder_id: str, req: FolderArchiveToggle
+):
+    """Archive or restore a plain folder (subtree path-archive + snapshot)."""
+    return service.toggle_folder_archive(collection_id, folder_id, req)
 
 
 @router.delete("/{collection_id}/folders/{folder_id}", status_code=204)

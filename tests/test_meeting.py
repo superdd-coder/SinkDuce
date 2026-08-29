@@ -435,6 +435,49 @@ class TestMeetingStore:
         with pytest.raises(FileNotFoundError):
             save_transcript("nope", _make_transcript_result())
 
+    def test_read_cache_hit_and_invalidation(self):
+        """Repeated reads hit the mtime cache; writes invalidate it."""
+        from src.meeting import store
+
+        meeting = store.create_meeting("Cache Probe")
+        mid = meeting.id
+
+        first = store.get_meeting(mid)
+        assert first is not None
+
+        # Cached Meeting instance: mutating one caller's copy must not leak.
+        first.title = "Caller Mutation"
+        second = store.get_meeting(mid)
+        assert second is not None
+        assert second.title == "Cache Probe"
+        assert second is not first
+
+        # update_meeting writes meta.json → next read sees the new value.
+        store.update_meeting(mid, title="Renamed")
+        third = store.get_meeting(mid)
+        assert third is not None
+        assert third.title == "Renamed"
+
+    def test_read_cache_sentences_and_section(self):
+        """Sentences and section md cache; save_* invalidates; missing stays None."""
+        from src.meeting import store
+
+        meeting = store.create_meeting("Cache Rows")
+        mid = meeting.id
+
+        assert store.get_sentences(mid) is None
+        store.save_sentences(mid, [{"sentence_id": "s1", "original_text": "hi"}])
+        rows = store.get_sentences(mid)
+        assert rows == [{"sentence_id": "s1", "original_text": "hi"}]
+        rows[0]["original_text"] = "mutated"
+        assert store.get_sentences(mid)[0]["original_text"] == "hi"
+
+        assert store.get_section_md(mid, "tab_general") is None
+        store.save_section_md(mid, "tab_general", "# Head\nfirst paragraph")
+        assert store.get_section_md(mid, "tab_general") == "# Head\nfirst paragraph"
+        store.save_section_md(mid, "tab_general", "rewritten")
+        assert store.get_section_md(mid, "tab_general") == "rewritten"
+
 
 # ═══════════════════════════════════════════════════════════════
 # 4. Summary Parser Tests

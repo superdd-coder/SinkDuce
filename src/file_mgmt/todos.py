@@ -267,7 +267,8 @@ def update_todo(collection_id: str, todo_id: str, req: TodoUpdate) -> TodoOut:
             # Content edits blocked when completed (done flip still allowed)
             content_keys = {
                 "title", "body", "ddl", "target_chain_id",
-                "clear_ddl", "clear_chain", "clear_body",
+                "assignee_person_id",
+                "clear_ddl", "clear_chain", "clear_body", "clear_assignee",
             }
             if bool(row["done"]) and any(
                 (k in data and data[k] is not None and data[k] is not False)
@@ -313,6 +314,12 @@ def update_todo(collection_id: str, todo_id: str, req: TodoUpdate) -> TodoOut:
                 else:
                     updates["target_chain_id"] = None
 
+            if data.get("clear_assignee"):
+                updates["assignee_person_id"] = None
+            elif "assignee_person_id" in data and data["assignee_person_id"] is not None:
+                aid = str(data["assignee_person_id"]).strip()
+                updates["assignee_person_id"] = aid or None
+
             if "done" in data and data["done"] is not None:
                 new_done = bool(data["done"])
                 was_done = bool(row["done"])
@@ -337,6 +344,23 @@ def update_todo(collection_id: str, todo_id: str, req: TodoUpdate) -> TodoOut:
 
         emit_event("todo.updated", collection_id, {"todo_id": todo_id})
         return _row_to_todo(row, conn)
+    finally:
+        conn.close()
+
+
+def get_todo(collection_id: str, todo_id: str) -> TodoOut:
+    from src.file_mgmt.store import _ensure_todos_table
+
+    conn = _open_db(collection_id)
+    try:
+        _ensure_todos_table(conn)
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM todos WHERE todo_id=?", (todo_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, f"Todo '{todo_id}' not found")
+        return _ensure_assignee(_row_to_todo(row, conn), conn)
     finally:
         conn.close()
 

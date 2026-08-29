@@ -123,13 +123,40 @@ SEARCH_KNOWLEDGE_BASE_TOOL = _fn(
     required=["raw_query"],
 )
 
+LIST_MEETING_CATALOG_TOOL = _fn(
+    "list_meeting_catalog",
+    (
+        "Full meeting directory with each meeting's summary head (first line "
+        "of its General summary) — use the heads to route a question to the "
+        "right meeting(s) before lookup_meeting_transcript. A minimal "
+        "directory (titles + dates) is already in context; call this only "
+        "when you need those summary heads, ids, or the full list. "
+        "Not a content search."
+    ),
+    {
+        "collection": {
+            "type": "string",
+            "description": (
+                "Optional extra collection ID. Chat already limits the catalog "
+                "to collections currently selected in the UI (all meetings if "
+                "none). This further narrows to one of those. Quick Chat "
+                "ignores this and uses the bound collection."
+            ),
+        },
+    },
+)
+
 LOOKUP_MEETING_TRANSCRIPT_TOOL = _fn(
     "lookup_meeting_transcript",
     (
         "PRIMARY search over this meeting's spoken transcript (not the written summary). "
         "Each call is an independent search: there is no offset, continuation, or "
         "cursor. [ref:N] in the result is a sentence id, not a read position. "
+        "A gap between excerpts is sentences that did not rank — not unread "
+        "transcript. Do not look them up again. "
         "The server locks the search to the current meeting. "
+        "Multiple distinct information needs → several lookup calls in the "
+        "SAME round (up to 4), not one per round. "
         "If a named speaker filter returns nothing, tell the user; a short preview "
         "may show who actually said it. Ask before searching the whole meeting "
         "(speaker_scope=all). A name outside the mapping is a mention: put it in "
@@ -204,19 +231,82 @@ LOOKUP_GROUP_TRANSCRIPT_TOOL = _fn(
 READ_MEETING_SUMMARY_TOOL = _fn(
     "read_meeting_summary",
     (
-        "Read the written General summary for one meeting in this Group. "
-        "Orientation / itinerary only: which meeting, who, what the series is "
-        "about. Do not treat it as spoken evidence and do not answer from it "
-        "alone. After reading, search spoken lines with "
-        "lookup_group_transcript. meeting_id must be a roster id for this Group."
+        "Read the written General summary for one visible meeting "
+        "(id from list_meeting_catalog). Orientation / itinerary only: "
+        "which meeting, who, what it is about, plus the action items it "
+        "lists. Do not treat it as spoken evidence and do not answer "
+        "content questions (who said what, exact numbers) from it alone — "
+        "after reading, search spoken lines with lookup_meeting_transcript. "
+        "WHEN NOT: the question is already answered by the summary head in "
+        "the catalog, or is not about meeting content."
     ),
     {
         "meeting_id": {
             "type": "string",
-            "description": "Roster meeting_id (not the group number n).",
+            "description": "meeting_id from list_meeting_catalog.",
         },
     },
     required=["meeting_id"],
+)
+
+LOOKUP_SCOPED_TRANSCRIPT_TOOL = _fn(
+    "lookup_meeting_transcript",
+    (
+        "PRIMARY search over spoken meeting transcripts (not written summaries). "
+        "WHEN: the question is about meeting content — decisions, numbers, "
+        "who said what, action items, topics discussed. "
+        "WHEN NOT: document Q&A → search / lookup_collection; the directory "
+        "shows no meeting that could cover the topic → do not call. "
+        "Omit meeting_ids to search every indexed meeting in the current visible "
+        "set. Pass catalog ids to narrow. Ids outside the visible set error. "
+        "Unindexed meetings are skipped and named in the result. "
+        "Each call is a new search. Already-returned packs are not repeated. "
+        "A gap between excerpts is sentences that did not rank — not unread "
+        "transcript. Do not look them up again. "
+        "Search again only for a different information need (another topic or "
+        "a subset of meetings), not to fill those gaps. "
+        "Multiple distinct information needs → several lookup calls in the "
+        "SAME round (up to 4), not one per round. "
+        "speaker_scope=auto filters packs that contain speakers named in the "
+        "user question when a mapping exists; all searches without that filter "
+        "(only after the user agrees). "
+        "Citation markers belong to the tool result only — the host renders "
+        "citations per surface; never copy citation syntax into the answer."
+    ),
+    {
+        "query": {
+            "type": "string",
+            "description": (
+                "WHAT information you need — not a tape position. "
+                "Natural phrase naming people, actions, numbers, or topics."
+            ),
+        },
+        "meeting_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Optional meeting_id values from list_meeting_catalog. "
+                "Empty or omitted searches all indexed meetings in the visible set."
+            ),
+        },
+        "speaker_scope": {
+            "type": "string",
+            "enum": ["auto", "all"],
+            "description": (
+                "auto (default): per-meeting speaker filter when the user names "
+                "a mapped speaker. all: no speaker filter (only after the user agrees)."
+            ),
+        },
+        "collection": {
+            "type": "string",
+            "description": (
+                "Optional extra collection ID. Chat already limits to currently "
+                "selected collections (all if none). This further narrows to "
+                "one of those. Quick Chat ignores this."
+            ),
+        },
+    },
+    required=["query"],
 )
 
 LOOKUP_COLLECTION_TOOL = _fn(
@@ -581,6 +671,160 @@ STRUCTURE_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         {"collection": _COL},
         required=["collection"],
     ),
+    "list_todos": _fn(
+        "list_todos",
+        (
+            "List collection to-dos (checklist items, not timeline nodes). "
+            "Default: open items only. include_done=true adds completed "
+            "(open first). done=true/false is an exact filter and overrides "
+            "include_done. mine=true keeps items assigned to People Me "
+            "(error if Me is unset; unassigned is not mine).\n"
+            "Omit collection to scan all libraries (Chat / MCP). "
+            "Quick Chat is locked to this collection. "
+            "WHEN: user asks about to-dos, due dates, or their tasks. "
+            "WHEN NOT: document Q&A → search; folder layout → list_library_tree; "
+            "timeline events → get_timeline."
+        ),
+        {
+            "collection": {
+                "type": "string",
+                "description": (
+                    "Collection **ID**. Omit to search all libraries. "
+                    "Never a display name."
+                ),
+            },
+            "include_done": {
+                "type": "boolean",
+                "default": False,
+                "description": "Include completed to-dos (open items still first).",
+            },
+            "done": {
+                "type": "boolean",
+                "description": (
+                    "Exact done filter. When set, overrides include_done."
+                ),
+            },
+            "mine": {
+                "type": "boolean",
+                "default": False,
+                "description": "Only to-dos assigned to People Me.",
+            },
+        },
+    ),
+    "create_todo": _fn(
+        "create_todo",
+        (
+            "Create one or more collection to-dos in ONE call. "
+            "Put every new item in todos[{title, body, ddl}]. "
+            "A single title still works. Do not call create_todo once per item "
+            "across multiple turns — the host runs the whole list without "
+            "another model round. Do not invent tasks."
+        ),
+        {
+            "collection": _COL,
+            "todos": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "body": {"type": "string"},
+                        "ddl": {"type": "string"},
+                        "assign_to_me": {"type": "boolean"},
+                        "assignee_person_id": {"type": "string"},
+                    },
+                    "required": ["title"],
+                },
+                "description": "All new to-dos to create now.",
+            },
+            "title": {"type": "string", "description": "Single title (or use todos)."},
+            "body": {"type": "string", "description": "Optional description."},
+            "ddl": {
+                "type": "string",
+                "description": "Optional due date (ISO date or datetime).",
+            },
+            "assign_to_me": {
+                "type": "boolean",
+                "default": False,
+                "description": "Assign to People Me.",
+            },
+            "assignee_person_id": {
+                "type": "string",
+                "description": "Optional People id; wins over assign_to_me.",
+            },
+        },
+        required=["collection"],
+    ),
+    "update_todo": _fn(
+        "update_todo",
+        (
+            "Update one or more to-dos in ONE call. Put every patch in "
+            "updates[{todo_id, title, body, ddl, done, ...}]. "
+            "A single todo_id still works. Do not call update_todo once per "
+            "item across turns. Completed items cannot change content — reopen "
+            "with done=false first."
+        ),
+        {
+            "collection": _COL,
+            "updates": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "todo_id": {"type": "string"},
+                        "title": {"type": "string"},
+                        "body": {"type": "string"},
+                        "clear_body": {"type": "boolean"},
+                        "ddl": {"type": "string"},
+                        "clear_ddl": {"type": "boolean"},
+                        "done": {"type": "boolean"},
+                        "assignee_person_id": {"type": "string"},
+                        "assign_to_me": {"type": "boolean"},
+                        "clear_assignee": {"type": "boolean"},
+                    },
+                    "required": ["todo_id"],
+                },
+                "description": "All patches to apply now.",
+            },
+            "todo_id": {"type": "string"},
+            "title": {"type": "string"},
+            "body": {"type": "string", "description": "Description."},
+            "clear_body": {"type": "boolean", "default": False},
+            "ddl": {"type": "string", "description": "ISO due date."},
+            "clear_ddl": {"type": "boolean", "default": False},
+            "done": {"type": "boolean", "description": "Complete or reopen."},
+            "assignee_person_id": {"type": "string"},
+            "assign_to_me": {"type": "boolean", "default": False},
+            "clear_assignee": {"type": "boolean", "default": False},
+        },
+        required=["collection"],
+    ),
+    "delete_todo": _fn(
+        "delete_todo",
+        (
+            "Delete one or more to-dos. Destructive. Call ONLY when the user "
+            "clearly asks to delete/remove them. Need ids from list_todos. "
+            "Pass every id in todo_ids in this single call — the host confirms "
+            "each item in sequence without another model round. Do not call "
+            "delete_todo once per item across multiple turns."
+        ),
+        {
+            "collection": _COL,
+            "todo_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "All to-do ids to delete now. Prefer this when deleting "
+                    "more than one item."
+                ),
+            },
+            "todo_id": {
+                "type": "string",
+                "description": "Single id (same as todo_ids with one entry).",
+            },
+        },
+        required=["collection"],
+    ),
 }
 
 # Agent: global discovery + structure + low-priority full text + search
@@ -603,6 +847,10 @@ AGENT_STRUCTURE_NAMES: tuple[str, ...] = (
     "get_collection_summary",
     "get_doc_summary",
     "get_conflicts",
+    "list_todos",
+    "create_todo",
+    "update_todo",
+    "delete_todo",
 )
 
 # Quick: same without global list_collections
@@ -614,8 +862,92 @@ SEARCH_TOOL_NAMES = frozenset({
     "search_knowledge_base",
     "lookup_collection",
     "lookup_meeting_transcript",
+    "list_meeting_catalog",
 })
 STRUCTURE_TOOL_NAMES = frozenset(STRUCTURE_TOOL_SCHEMAS.keys())
+
+
+def _parse_object_list(raw: Any) -> list[dict[str, Any]]:
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return []
+        try:
+            raw = json.loads(text)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(raw, list):
+        return []
+    return [x for x in raw if isinstance(x, dict)]
+
+
+def collect_todo_create_items(args: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Flatten ``todos[]`` plus a lone title into create payloads."""
+    src = args or {}
+    items = _parse_object_list(src.get("todos"))
+    title = str(src.get("title") or "").strip()
+    if title:
+        items.insert(
+            0,
+            {
+                "title": title,
+                "body": src.get("body") or "",
+                "ddl": src.get("ddl") or "",
+                "assign_to_me": bool(src.get("assign_to_me") or False),
+                "assignee_person_id": str(src.get("assignee_person_id") or ""),
+            },
+        )
+    return [it for it in items if str(it.get("title") or "").strip()]
+
+
+def collect_todo_update_items(args: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Flatten ``updates[]`` plus a lone todo_id patch."""
+    src = args or {}
+    items = _parse_object_list(src.get("updates"))
+    tid = str(src.get("todo_id") or "").strip()
+    if tid:
+        items.insert(
+            0,
+            {
+                "todo_id": tid,
+                "title": src.get("title") or "",
+                "body": src.get("body") if "body" in src else "",
+                "clear_body": bool(src.get("clear_body") or False),
+                "ddl": src.get("ddl") or "",
+                "clear_ddl": bool(src.get("clear_ddl") or False),
+                "done": src.get("done"),
+                "assignee_person_id": str(src.get("assignee_person_id") or ""),
+                "assign_to_me": bool(src.get("assign_to_me") or False),
+                "clear_assignee": bool(src.get("clear_assignee") or False),
+            },
+        )
+    return [it for it in items if str(it.get("todo_id") or "").strip()]
+
+
+def collect_todo_delete_ids(args: dict[str, Any] | None) -> list[str]:
+    """Unique todo ids from ``todo_ids`` and/or ``todo_id``, order preserved."""
+    out: list[str] = []
+    seen: set[str] = set()
+    raw = (args or {}).get("todo_ids")
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text.startswith("["):
+            try:
+                raw = json.loads(text)
+            except json.JSONDecodeError:
+                raw = [p.strip() for p in text.split(",") if p.strip()]
+        else:
+            raw = [p.strip() for p in text.split(",") if p.strip()]
+    if isinstance(raw, list):
+        for item in raw:
+            sid = str(item or "").strip()
+            if sid and sid not in seen:
+                seen.add(sid)
+                out.append(sid)
+    one = str((args or {}).get("todo_id") or "").strip()
+    if one and one not in seen:
+        out.append(one)
+    return out
 
 
 def _maybe_web_tool(*, web_search_enabled: bool) -> list[dict[str, Any]]:
@@ -641,20 +973,38 @@ def tools_for_mode(
     is_meeting: bool = False,
     is_group: bool = False,
     web_search_enabled: bool = False,
+    has_meetings: bool = True,
 ) -> list[dict[str, Any]]:
-    """Return OpenAI tools array for agentic / direct / meeting / group."""
+    """Return OpenAI tools array for agentic / direct / meeting / group.
+
+    ``has_meetings=False`` drops the meeting trio from Chat / Quick Chat:
+    when the scope has no ingested meetings the model cannot call them.
+    """
     if is_group:
-        return [LOOKUP_GROUP_TRANSCRIPT_TOOL, READ_MEETING_SUMMARY_TOOL]
+        return [
+            LIST_MEETING_CATALOG_TOOL,
+            LOOKUP_SCOPED_TRANSCRIPT_TOOL,
+            READ_MEETING_SUMMARY_TOOL,
+        ]
     if is_meeting:
         return [LOOKUP_MEETING_TRANSCRIPT_TOOL]
+    meeting_tools = (
+        [
+            LIST_MEETING_CATALOG_TOOL,
+            LOOKUP_SCOPED_TRANSCRIPT_TOOL,
+            READ_MEETING_SUMMARY_TOOL,
+        ]
+        if has_meetings
+        else []
+    )
     if mode == "direct":
-        tools = [LOOKUP_COLLECTION_TOOL]
+        tools = [LOOKUP_COLLECTION_TOOL, *meeting_tools]
         for name in QUICK_STRUCTURE_NAMES:
             tools.append(STRUCTURE_TOOL_SCHEMAS[name])
         tools.extend(_maybe_web_tool(web_search_enabled=web_search_enabled))
         return tools
     # agentic (default)
-    tools = [SEARCH_KNOWLEDGE_BASE_TOOL]
+    tools = [SEARCH_KNOWLEDGE_BASE_TOOL, *meeting_tools]
     for name in AGENT_STRUCTURE_NAMES:
         tools.append(STRUCTURE_TOOL_SCHEMAS[name])
     tools.extend(_maybe_web_tool(web_search_enabled=web_search_enabled))
@@ -667,16 +1017,35 @@ def allowed_tool_names(
     is_meeting: bool = False,
     is_group: bool = False,
     web_search_enabled: bool = False,
+    has_meetings: bool = True,
 ) -> frozenset[str]:
     if is_group:
-        return frozenset({"lookup_group_transcript", "read_meeting_summary"})
+        return frozenset(
+            {
+                "list_meeting_catalog",
+                "lookup_meeting_transcript",
+                "read_meeting_summary",
+            }
+        )
     if is_meeting:
         return frozenset({"lookup_meeting_transcript"})
     names: set[str]
     if mode == "direct":
-        names = {"lookup_collection", *QUICK_STRUCTURE_NAMES}
+        names = {
+            "lookup_collection",
+            *QUICK_STRUCTURE_NAMES,
+        }
     else:
-        names = {"search_knowledge_base", *AGENT_STRUCTURE_NAMES}
+        names = {
+            "search_knowledge_base",
+            *AGENT_STRUCTURE_NAMES,
+        }
+    if has_meetings:
+        names |= {
+            "list_meeting_catalog",
+            "lookup_meeting_transcript",
+            "read_meeting_summary",
+        }
     # Always allow the name so execution can return status=disabled / user_declined
     # (toggle state is enforced inside the tool handler, not by omitting the tool).
     names.add(WEB_SEARCH_TOOL_NAME)
@@ -693,9 +1062,16 @@ def force_collection_args(
     out = dict(args or {})
     if mode != "direct":
         return out, None
-    if tool_name == "lookup_collection":
+    if tool_name in (
+        "lookup_collection",
+        "list_meeting_catalog",
+        "lookup_meeting_transcript",
+        "read_meeting_summary",
+    ):
         if not forced_collection:
             return out, "No collection is bound to this Quick Chat session."
+        if tool_name != "lookup_collection":
+            out["collection"] = forced_collection
         return out, None
     if tool_name not in STRUCTURE_TOOL_NAMES:
         return out, None
@@ -942,6 +1318,40 @@ async def _dispatch_structure_async(name: str, args: dict[str, Any]) -> Any:
         from src.mcp.tools.summaries import get_conflicts
 
         return await get_conflicts(col)
+
+    if name == "list_todos":
+        from src.mcp.tools.file_mgmt import list_todos
+
+        done = args.get("done")
+        if done is not None:
+            done = bool(done)
+        return await list_todos(
+            col,
+            include_done=bool(args.get("include_done") or False),
+            done=done,
+            mine=bool(args.get("mine") or False),
+        )
+
+    if name == "create_todo":
+        from src.mcp.tools.file_mgmt import create_todo
+
+        items = collect_todo_create_items(args)
+        return await create_todo(col, todos=items)
+
+    if name == "update_todo":
+        from src.mcp.tools.file_mgmt import update_todo
+
+        items = collect_todo_update_items(args)
+        return await update_todo(col, updates=items)
+
+    if name == "delete_todo":
+        from src.mcp.tools.file_mgmt import delete_todo
+
+        return await delete_todo(
+            col,
+            todo_id=str(args.get("todo_id") or ""),
+            todo_ids=collect_todo_delete_ids(args) or None,
+        )
 
     return json.dumps({"error": f"Unknown structure tool: {name}"})
 

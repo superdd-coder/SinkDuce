@@ -11,6 +11,7 @@ import {
 import { FolderIconView } from "@/components/file-mgmt/timeline-view/group-icons"
 import {
   DEFAULT_ICON_COLOR,
+  ZE_GREEN,
   GroupIconView,
   IconPickerPanel,
   buildIconPayload,
@@ -47,6 +48,14 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useT } from "@/i18n/use-t"
 import { systemFolderDisplayName } from "@/i18n/system-folder"
+import {
+  getSubfolders,
+  sortFolderGridItems,
+} from "@/components/file-mgmt/folder-view/sorted-items"
+import {
+  FileListRow,
+  FolderListRow,
+} from "@/components/file-mgmt/folder-view/file-list"
 
 export function IconGrid({
   collectionId,
@@ -79,6 +88,7 @@ export function IconGrid({
     renameFile,
     ingestingFiles,
     folderFileSort,
+    folderFileView,
   } = useFileMgmtStore()
 
   const [dragOver, setDragOver] = useState(false)
@@ -117,14 +127,25 @@ export function IconGrid({
     setEditTarget({ kind: "folder", folder })
     setEditClash(null)
     setEditName(folder.name || "")
-    if (folder.icon_type === "emoji" && folder.icon_value) {
+    if (folder.kind === "plain" || folder.kind === "branch") {
+      setEditIconMode("lucide")
+      setEditSymbol("")
+      setEditIconKey(folder.kind === "plain" ? "folder" : "git-branch")
+      setEditIconColor(
+        folder.icon_color ||
+          (folder.kind === "branch" ? ZE_GREEN : DEFAULT_ICON_COLOR)
+      )
+    } else if (folder.icon_type === "emoji" && folder.icon_value) {
       setEditIconMode("emoji")
       setEditSymbol(folder.icon_value)
-      setEditIconKey("folder")
+      setEditIconKey("users")
       setEditIconColor(DEFAULT_ICON_COLOR)
     } else {
       setEditIconMode("lucide")
-      setEditIconKey(folder.icon_value || "folder")
+      const key = folder.icon_value || "users"
+      setEditIconKey(
+        key === "folder" || key === "git-branch" ? "users" : key
+      )
       setEditIconColor(folder.icon_color || DEFAULT_ICON_COLOR)
       setEditSymbol("")
     }
@@ -148,22 +169,45 @@ export function IconGrid({
     }
   }, [])
 
-  const editFolderPreview = useMemo(
-    () =>
-      editIconMode === "emoji" && editSymbol
-        ? {
-            name: editName,
-            icon_type: "emoji" as const,
-            icon_value: editSymbol,
-          }
-        : {
-            name: editName,
-            icon_type: "lucide" as const,
-            icon_value: editIconKey,
-            icon_color: editIconColor,
-          },
-    [editIconMode, editName, editSymbol, editIconKey, editIconColor]
-  )
+  const editFolderKind =
+    editTarget?.kind === "folder" ? editTarget.folder.kind : null
+  const editFolderPreview = useMemo(() => {
+    if (editFolderKind === "plain") {
+      return {
+        name: editName,
+        icon_type: "lucide" as const,
+        icon_value: "folder",
+        icon_color: editIconColor,
+      }
+    }
+    if (editFolderKind === "branch") {
+      return {
+        name: editName,
+        icon_type: "lucide" as const,
+        icon_value: "git-branch",
+        icon_color: editIconColor,
+      }
+    }
+    return editIconMode === "emoji" && editSymbol
+      ? {
+          name: editName,
+          icon_type: "emoji" as const,
+          icon_value: editSymbol,
+        }
+      : {
+          name: editName,
+          icon_type: "lucide" as const,
+          icon_value: editIconKey,
+          icon_color: editIconColor,
+        }
+  }, [
+    editFolderKind,
+    editIconMode,
+    editName,
+    editSymbol,
+    editIconKey,
+    editIconColor,
+  ])
 
   const handleSaveEdit = async () => {
     const name = editName.trim()
@@ -172,7 +216,13 @@ export function IconGrid({
     setEditClash(null)
     try {
       if (editTarget.kind === "folder") {
-        if (editIconMode === "emoji" && !editSymbol.trim()) return
+        if (
+          editTarget.folder.kind !== "plain" &&
+          editTarget.folder.kind !== "branch" &&
+          editIconMode === "emoji" &&
+          !editSymbol.trim()
+        )
+          return
         const siblings = getSubfolders(folderTree, currentFolderId)
         const taken = siblings
           .filter((f) => f.folder_id !== editTarget.folder.folder_id)
@@ -183,11 +233,17 @@ export function IconGrid({
           setEditName(suggested)
           return
         }
+        const lockedKey =
+          editTarget.folder.kind === "plain"
+            ? "folder"
+            : editTarget.folder.kind === "branch"
+              ? "git-branch"
+              : null
         const icon = buildIconPayload({
-          iconMode: editIconMode,
-          iconKey: editIconKey,
+          iconMode: lockedKey ? "lucide" : editIconMode,
+          iconKey: lockedKey ?? editIconKey,
           iconColor: editIconColor,
-          symbol: editSymbol,
+          symbol: lockedKey ? "" : editSymbol,
         })
         const clash = await updateFolderDetails(
           collectionId,
@@ -271,104 +327,9 @@ export function IconGrid({
     return m
   }, [groups])
 
-  /**
-   * Unified grid items: folders + files sorted by the same mode.
-   * - name / type / created / updated all include folders
-   * - folder updated time = content_updated_at (max of contained files)
-   */
-  type GridItem =
-    | { kind: "folder"; folder: FolderTreeNode }
-    | { kind: "file"; file: FileSummary }
-
   const sortedItems = useMemo(() => {
     const subfolders = getSubfolders(folderTree, currentFolderId)
-    const items: GridItem[] = [
-      ...subfolders.map((folder) => ({ kind: "folder" as const, folder })),
-      ...currentFolderFiles.map((file) => ({ kind: "file" as const, file })),
-    ]
-
-    const collator = new Intl.Collator(undefined, {
-      numeric: true,
-      sensitivity: "base",
-    })
-    const nameOf = (it: GridItem) =>
-      it.kind === "folder"
-        ? (it.folder.name || "").toLowerCase()
-        : (it.file.display_name || it.file.filename || "").toLowerCase()
-    /**
-     * By type order:
-     * 0 system folders → 1 branch → 2 group → 3 plain folders → 4+ files by ext
-     */
-    const typeRank = (it: GridItem): string => {
-      if (it.kind === "folder") {
-        const k = it.folder.kind
-        if (k === "system_group") return "0-system"
-        if (k === "branch") return "1-branch"
-        if (k === "user_group") return "2-group"
-        return "3-plain" // plain and any other folder kinds
-      }
-      const fromMeta = (it.file.original_ext || "")
-        .replace(/^\./, "")
-        .toLowerCase()
-      if (fromMeta) return `4-${fromMeta}`
-      const n = it.file.filename || ""
-      const i = n.lastIndexOf(".")
-      const ext = i > 0 ? n.slice(i + 1).toLowerCase() : ""
-      return ext ? `4-${ext}` : "4-"
-    }
-    const createdOf = (it: GridItem) =>
-      it.kind === "folder"
-        ? it.folder.created_at || ""
-        : it.file.created_at || ""
-    const updatedOf = (it: GridItem) => {
-      if (it.kind === "folder") {
-        return (
-          it.folder.content_updated_at ||
-          it.folder.updated_at ||
-          it.folder.created_at ||
-          ""
-        )
-      }
-      return it.file.updated_at || it.file.created_at || ""
-    }
-    const cmpName = (a: GridItem, b: GridItem) =>
-      collator.compare(nameOf(a), nameOf(b))
-
-    if (folderFileSort === "type") {
-      items.sort((a, b) => {
-        const t = typeRank(a).localeCompare(typeRank(b))
-        if (t !== 0) return t
-        return cmpName(a, b)
-      })
-    } else if (
-      folderFileSort === "created_desc" ||
-      folderFileSort === "created_asc"
-    ) {
-      const desc = folderFileSort === "created_desc"
-      items.sort((a, b) => {
-        const ta = createdOf(a)
-        const tb = createdOf(b)
-        const t = desc ? tb.localeCompare(ta) : ta.localeCompare(tb)
-        if (t !== 0) return t
-        return cmpName(a, b)
-      })
-    } else if (
-      folderFileSort === "updated_desc" ||
-      folderFileSort === "updated_asc"
-    ) {
-      const desc = folderFileSort === "updated_desc"
-      items.sort((a, b) => {
-        const ta = updatedOf(a)
-        const tb = updatedOf(b)
-        const t = desc ? tb.localeCompare(ta) : ta.localeCompare(tb)
-        if (t !== 0) return t
-        return cmpName(a, b)
-      })
-    } else {
-      // name
-      items.sort(cmpName)
-    }
-    return items
+    return sortFolderGridItems(subfolders, currentFolderFiles, folderFileSort)
   }, [folderTree, currentFolderId, currentFolderFiles, folderFileSort])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -508,9 +469,38 @@ export function IconGrid({
           </div>
         ) : (
           <TooltipProvider delay={TIP_OPEN_MS} closeDelay={TIP_CLOSE_MS}>
-            <div className="pm-files-grid">
+            <div
+              className={
+                folderFileView === "list" ? "pm-files-list" : "pm-files-grid"
+              }
+            >
               {sortedItems.map((item) =>
                 item.kind === "folder" ? (
+                  folderFileView === "list" ? (
+                    <FolderListRow
+                      key={item.folder.folder_id}
+                      folder={item.folder}
+                      selected={selectedFolderIds.has(item.folder.folder_id)}
+                      multiSelectMode={multiSelectMode}
+                      sortMode={folderFileSort}
+                      boundGroup={
+                        groupByFolderId.get(item.folder.folder_id) ?? null
+                      }
+                      onOpen={() =>
+                        selectFolder(collectionId, item.folder.folder_id)
+                      }
+                      onSelect={() => {
+                        if (multiSelectMode)
+                          toggleFolderSelection(item.folder.folder_id)
+                        else selectSingleFolder(item.folder.folder_id)
+                      }}
+                      onEdit={
+                        item.folder.is_system
+                          ? undefined
+                          : () => openEditFolder(item.folder)
+                      }
+                    />
+                  ) : (
                   <FolderIconItem
                     key={item.folder.folder_id}
                     folder={item.folder}
@@ -531,6 +521,31 @@ export function IconGrid({
                       item.folder.is_system
                         ? undefined
                         : () => openEditFolder(item.folder)
+                    }
+                  />
+                  )
+                ) : folderFileView === "list" ? (
+                  <FileListRow
+                    key={item.file.file_id}
+                    file={item.file}
+                    selected={selectedFileIds.has(item.file.file_id)}
+                    multiSelectMode={multiSelectMode}
+                    ingesting={ingestingFiles[item.file.file_id] ?? null}
+                    sortMode={folderFileSort}
+                    onSelect={() => {
+                      if (ingestingFiles[item.file.file_id]) return
+                      if (multiSelectMode) toggleSelection(item.file.file_id)
+                      else selectSingleFile(item.file.file_id)
+                    }}
+                    onOpen={
+                      multiSelectMode || ingestingFiles[item.file.file_id]
+                        ? undefined
+                        : () => onOpenFile?.(item.file.file_id)
+                    }
+                    onEdit={
+                      ingestingFiles[item.file.file_id]
+                        ? undefined
+                        : () => openEditFile(item.file)
                     }
                   />
                 ) : (
@@ -613,14 +628,33 @@ export function IconGrid({
                   </div>
                 </div>
                 <IconPickerPanel
-                  iconMode={editIconMode}
-                  iconKey={editIconKey}
+                  iconMode={
+                    editTarget.folder.kind === "plain" ||
+                    editTarget.folder.kind === "branch"
+                      ? "lucide"
+                      : editIconMode
+                  }
+                  iconKey={
+                    editTarget.folder.kind === "plain"
+                      ? "folder"
+                      : editTarget.folder.kind === "branch"
+                        ? "git-branch"
+                        : editIconKey
+                  }
                   iconColor={editIconColor}
                   symbol={editSymbol}
                   onIconMode={setEditIconMode}
                   onIconKey={setEditIconKey}
                   onIconColor={setEditIconColor}
                   onSymbol={setEditSymbol}
+                  variant={
+                    editTarget.folder.kind === "plain" ||
+                    editTarget.folder.kind === "branch"
+                      ? "plain"
+                      : editTarget.folder.kind === "user_group"
+                        ? "group"
+                        : "full"
+                  }
                 />
               </>
             ) : (
@@ -673,6 +707,8 @@ export function IconGrid({
                 editSaving ||
                 !editName.trim() ||
                 (editTarget?.kind === "folder" &&
+                  editTarget.folder.kind !== "plain" &&
+                  editTarget.folder.kind !== "branch" &&
                   editIconMode === "emoji" &&
                   !editSymbol.trim())
               }
@@ -720,7 +756,8 @@ function FolderIconItem({
             type="button"
             className={cn(
               "pm-files-item group",
-              selected && "is-selected"
+              selected && "is-selected",
+              folder.archived && "is-archived"
             )}
             onClick={onSelect}
             onDoubleClick={(e) => {
@@ -985,23 +1022,6 @@ function entryToFile(fileEntry: FileSystemFileEntry): Promise<File | null> {
   })
 }
 
-// Helper: get subfolders from tree by parent_folder_id
-function getSubfolders(tree: FolderTreeNode[], parentId: string | null): FolderTreeNode[] {
-  if (!parentId) {
-    return tree
-  }
-  // Special: Archived virtual view
-  if (parentId === "__archived__") return []
-  // Search tree
-  function search(nodes: FolderTreeNode[]): FolderTreeNode[] | null {
-    for (const n of nodes) {
-      if (n.folder_id === parentId) return n.children
-      const found = search(n.children)
-      if (found) return found
-    }
-    return null
-  }
-  return search(tree) ?? []
-}
+
 
 

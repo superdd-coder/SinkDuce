@@ -385,6 +385,26 @@ class TestDirectQueryErrorHandling:
         # Should not crash, returns un-reranked results
         assert len(result.chunks) == 2
 
+    def test_rerank_timeout_still_caps_to_rerank_top_k(self):
+        """Rerank timeout must not dump retrieve top_k into the grader."""
+        from src.rag.direct_query import DirectQueryModule
+
+        mock_retriever = MagicMock()
+        mock_retriever.retrieve.return_value = [
+            _make_chunk(f"text {i}", 0.90 - i * 0.01) for i in range(12)
+        ]
+        mock_db = MagicMock()
+        mock_db.get_collection_config.return_value = {"chunk_mode": "normal"}
+        mock_reranker = MagicMock()
+        mock_reranker.rerank.side_effect = TimeoutError("The read operation timed out")
+
+        dm = DirectQueryModule(retriever=mock_retriever, db=mock_db, reranker=mock_reranker)
+        result = dm.retrieve(
+            "test", ["col_a"],
+            top_k=20, rerank_enabled=True, rerank_top_k=5,
+        )
+        assert len(result.chunks) == 5
+
     def test_db_config_read_fails(self):
         """db.get_collection_config 抛异常：断言有合理降级（默认 normal 模式）"""
         from src.rag.direct_query import DirectQueryModule

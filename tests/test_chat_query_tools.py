@@ -11,6 +11,9 @@ from src.chatbox.query_tools import (
     AGENT_STRUCTURE_NAMES,
     QUICK_STRUCTURE_NAMES,
     allowed_tool_names,
+    collect_todo_create_items,
+    collect_todo_delete_ids,
+    collect_todo_update_items,
     force_collection_args,
     merge_search_tool_calls,
     tools_for_mode,
@@ -29,6 +32,10 @@ class TestAllowlists:
         assert "list_collections" in names
         assert "list_library_tree" in names
         assert "get_document_text" in names
+        assert "list_todos" in names
+        assert "create_todo" in names
+        assert "update_todo" in names
+        assert "delete_todo" in names
         assert "lookup_collection" not in names
         assert "list_notes" not in names
         assert "get_query_history" not in names
@@ -39,6 +46,10 @@ class TestAllowlists:
         names = {t["function"]["name"] for t in tools}
         assert "lookup_collection" in names
         assert "list_library_tree" in names
+        assert "list_todos" in names
+        assert "create_todo" in names
+        assert "update_todo" in names
+        assert "delete_todo" in names
         assert "list_collections" not in names
         assert "search_knowledge_base" not in names
         assert "list_notes" not in names
@@ -50,13 +61,35 @@ class TestAllowlists:
             {"lookup_meeting_transcript"}
         )
 
+    def test_has_meetings_false_drops_meeting_trio(self):
+        """No ingested meetings → no meeting tools in Chat / Quick Chat."""
+        meeting_tools = {"list_meeting_catalog", "lookup_meeting_transcript", "read_meeting_summary"}
+        for mode in ("agentic", "direct"):
+            names = {t["function"]["name"] for t in tools_for_mode(mode, has_meetings=False)}
+            assert names.isdisjoint(meeting_tools)
+            allowed = allowed_tool_names(mode, has_meetings=False)
+            assert allowed.isdisjoint(meeting_tools)
+
+    def test_has_meetings_default_keeps_meeting_trio(self):
+        for mode in ("agentic", "direct"):
+            names = {t["function"]["name"] for t in tools_for_mode(mode)}
+            assert "lookup_meeting_transcript" in names
+            assert "read_meeting_summary" in names
+
     def test_group_has_lookup_and_summary_tools(self):
         names = {t["function"]["name"] for t in tools_for_mode("direct", is_group=True)}
-        assert names == {"lookup_group_transcript", "read_meeting_summary"}
+        assert names == {
+            "list_meeting_catalog",
+            "lookup_meeting_transcript",
+            "read_meeting_summary",
+        }
         assert allowed_tool_names("direct", is_group=True) == frozenset(names)
-        from src.chatbox.query_tools import LOOKUP_GROUP_TRANSCRIPT_TOOL
-
-        params = LOOKUP_GROUP_TRANSCRIPT_TOOL["function"]["parameters"]["properties"]
+        lookup = next(
+            t
+            for t in tools_for_mode("direct", is_group=True)
+            if t["function"]["name"] == "lookup_meeting_transcript"
+        )
+        params = lookup["function"]["parameters"]["properties"]
         assert "meeting_ids" in params
         assert "latest" not in str(params).lower()
 
@@ -71,6 +104,7 @@ class TestAllowlists:
         assert "independent" in desc or "each call" in desc
         assert "later parts" not in desc
         assert "next page" not in desc
+        assert "do not look them up again" in desc
         assert "information need" in query_desc or "what information" in query_desc
         prompt = MEETING_CHAT_SYSTEM_PROMPT.lower()
         assert "full transcript" in prompt or "entire transcript" in prompt
@@ -78,6 +112,8 @@ class TestAllowlists:
         assert "display name" in prompt
         assert "later parts" not in prompt
         assert "next page" not in prompt
+        assert "if excerpts miss a fact" not in prompt
+        assert "do not look it up again" in prompt or "do not look them up again" in prompt
 
     def test_meeting_lookup_mentions_are_not_speaker_filters(self):
         from src.chatbox.query_tools import LOOKUP_MEETING_TRANSCRIPT_TOOL
@@ -134,6 +170,57 @@ class TestAllowlists:
         assert props["offset"]["default"] == 0
         assert props["limit"]["default"] == 32000
         assert "page" in desc or "continuation" in desc or "paging" in desc
+
+    def test_todo_tool_schemas(self):
+        tools = {t["function"]["name"]: t for t in tools_for_mode("agentic")}
+        listed = tools["list_todos"]["function"]
+        assert "collection" not in listed["parameters"].get("required", [])
+        assert listed["parameters"]["properties"]["mine"]["default"] is False
+        assert listed["parameters"]["properties"]["include_done"]["default"] is False
+        create = tools["create_todo"]["function"]
+        assert "collection" in create["parameters"].get("required", [])
+        assert "todos" in create["parameters"]["properties"]
+        update = tools["update_todo"]["function"]
+        assert "updates" in update["parameters"]["properties"]
+        assert "title" in update["parameters"]["properties"]
+        assert "body" in update["parameters"]["properties"]
+        assert "ddl" in update["parameters"]["properties"]
+        delete = tools["delete_todo"]["function"]
+        assert "todo_ids" in delete["parameters"]["properties"]
+        assert "todo_id" in delete["parameters"]["properties"]
+        desc = delete["description"].lower()
+        assert "delete" in desc
+        assert "todo_ids" in desc
+        meeting_names = {t["function"]["name"] for t in tools_for_mode("direct", is_meeting=True)}
+        assert "list_todos" not in meeting_names
+
+    def test_collect_todo_create_and_update_items(self):
+        assert collect_todo_create_items({"title": "A", "ddl": "2026-09-01"}) == [
+            {
+                "title": "A",
+                "body": "",
+                "ddl": "2026-09-01",
+                "assign_to_me": False,
+                "assignee_person_id": "",
+            }
+        ]
+        got = collect_todo_create_items(
+            {"todos": [{"title": "B"}, {"title": "C"}], "title": "A"}
+        )
+        assert [x["title"] for x in got] == ["A", "B", "C"]
+        ups = collect_todo_update_items(
+            {"updates": [{"todo_id": "t1", "done": True}, {"todo_id": "t2", "title": "X"}]}
+        )
+        assert [x["todo_id"] for x in ups] == ["t1", "t2"]
+
+    def test_collect_todo_delete_ids_unique_order(self):
+        assert collect_todo_delete_ids({"todo_id": "a"}) == ["a"]
+        assert collect_todo_delete_ids({"todo_ids": ["b", "a", "b"], "todo_id": "a"}) == [
+            "b",
+            "a",
+        ]
+        assert collect_todo_delete_ids({"todo_ids": "x, y"}) == ["x", "y"]
+        assert collect_todo_delete_ids({}) == []
 
 
 # ── get_document_text Chat clamp ──────────────────────────────
@@ -240,6 +327,71 @@ class TestCollectionLock:
             forced_collection="col_mine",
         )
         assert err is not None
+
+    def test_quick_overwrites_todo_write_collection(self):
+        args, err = force_collection_args(
+            "create_todo",
+            {"collection": "other_col", "title": "X"},
+            mode="direct",
+            forced_collection="col_mine",
+        )
+        assert err is None
+        assert args["collection"] == "col_mine"
+        assert args["title"] == "X"
+
+
+class TestTodoStructureDispatch:
+    def test_list_todos_dispatches_to_mcp(self):
+        import asyncio
+
+        from src.chatbox.query_tools import execute_structure_tool_async
+
+        captured: list[dict] = []
+
+        async def _fake_list(collection="", include_done=False, done=None, mine=False):
+            captured.append(
+                {
+                    "collection": collection,
+                    "include_done": include_done,
+                    "done": done,
+                    "mine": mine,
+                }
+            )
+            return {"todos": [], "total": 0}
+
+        async def _run():
+            with patch(
+                "src.mcp.tools.file_mgmt.list_todos",
+                side_effect=_fake_list,
+            ):
+                raw = await execute_structure_tool_async(
+                    "list_todos",
+                    {"mine": True},
+                    mode="agentic",
+                )
+                return raw
+
+        out = asyncio.run(_run())
+        assert captured == [
+            {"collection": "", "include_done": False, "done": None, "mine": True}
+        ]
+        assert '"total": 0' in out or '"total":0' in out.replace(" ", "")
+
+    def test_create_todo_agentic_requires_collection(self):
+        import asyncio
+
+        from src.chatbox.query_tools import execute_structure_tool_async
+
+        async def _run():
+            return await execute_structure_tool_async(
+                "create_todo",
+                {"title": "X"},
+                mode="agentic",
+            )
+
+        out = json.loads(asyncio.run(_run()))
+        assert "error" in out
+        assert "collection is required" in out["error"]
 
 
 # ── Merge search only ─────────────────────────────────────────

@@ -157,13 +157,26 @@ def build_context(chunks: list, gap_indicators: bool = True) -> str:
 
     # ── Detect how many distinct collections are present ────────────
     distinct_collections = sorted(clusters.keys())
+    col_labels: dict[str, str] = {}
+
+    def _col_label(cid: str) -> str:
+        if cid in col_labels:
+            return col_labels[cid]
+        try:
+            from src.collections.store import collection_display_name
+
+            label = collection_display_name(cid)
+        except Exception:
+            label = cid
+        col_labels[cid] = (label or cid).strip() or cid
+        return col_labels[cid]
 
     # ── Render ──────────────────────────────────────────────────────
     parts: list[str] = []
 
     # Multi-collection hint
     if len(distinct_collections) > 1:
-        col_list = ", ".join(distinct_collections)
+        col_list = ", ".join(_col_label(c) for c in distinct_collections)
         parts.append(
             f"[IMPORTANT: The following context comes from {len(distinct_collections)} "
             f"DIFFERENT collections: {col_list}. These are separate knowledge bases "
@@ -172,9 +185,9 @@ def build_context(chunks: list, gap_indicators: bool = True) -> str:
             f"fact originates from, and do not assume consistency across collections.]"
         )
 
-    for collection_name in distinct_collections:
-        parts.append(f"## Database: {collection_name}")
-        sources = clusters[collection_name]
+    for collection_id in distinct_collections:
+        parts.append(f"## Database: {_col_label(collection_id)}")
+        sources = clusters[collection_id]
 
         for source_name in sorted(sources.keys()):
             source_chunks = sources[source_name]

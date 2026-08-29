@@ -47,7 +47,9 @@ _CREATE_TABLES = [
       version          INTEGER NOT NULL DEFAULT 1,
       icon_type        TEXT,
       icon_value       TEXT,
-      icon_color       TEXT
+      icon_color       TEXT,
+      archived         INTEGER NOT NULL DEFAULT 0,
+      archive_snapshot TEXT
     )''',
     # node_groups (1:1 folder)
     '''CREATE TABLE node_groups (
@@ -356,6 +358,37 @@ def _ensure_folders_icon_columns(conn: sqlite3.Connection) -> None:
             if not _is_duplicate_column_error(e):
                 raise
             cols.add(col)
+    _ensure_folders_archive_columns(conn, cols)
+
+
+def _ensure_folders_archive_columns(
+    conn: sqlite3.Connection, cols: set[str] | None = None
+) -> None:
+    """Add folders.archived + archive_snapshot if missing."""
+    if cols is None:
+        cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(folders)").fetchall()
+        }
+    if "archived" not in cols:
+        try:
+            conn.execute(
+                "ALTER TABLE folders ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"
+            )
+            logger.info("Added folders.archived column")
+            cols.add("archived")
+        except sqlite3.OperationalError as e:
+            if not _is_duplicate_column_error(e):
+                raise
+            cols.add("archived")
+    if "archive_snapshot" not in cols:
+        try:
+            conn.execute("ALTER TABLE folders ADD COLUMN archive_snapshot TEXT")
+            logger.info("Added folders.archive_snapshot column")
+            cols.add("archive_snapshot")
+        except sqlite3.OperationalError as e:
+            if not _is_duplicate_column_error(e):
+                raise
+            cols.add("archive_snapshot")
 
 
 def _ensure_nodes_external_ref(conn: sqlite3.Connection) -> None:

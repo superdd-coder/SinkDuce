@@ -159,6 +159,11 @@ def _assert_file_name_free(
 
 
 def _row_to_folder(row) -> FolderOut:
+    archived = False
+    try:
+        archived = bool(row["archived"])
+    except (KeyError, IndexError):
+        archived = False
     return FolderOut(
         folder_id=row["folder_id"],
         parent_folder_id=row["parent_folder_id"],
@@ -172,6 +177,7 @@ def _row_to_folder(row) -> FolderOut:
         icon_type=_row_icon(row, "icon_type"),
         icon_value=_row_icon(row, "icon_value"),
         icon_color=_row_icon(row, "icon_color"),
+        archived=archived,
     )
 
 

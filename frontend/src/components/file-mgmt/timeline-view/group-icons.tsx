@@ -44,6 +44,7 @@ export function isSystemGroup(g: Pick<NodeGroup, "name" | "is_system">): boolean
 
 export const LUCIDE_PRESETS: { key: string; Icon: LucideIcon; label: string }[] = [
   { key: "folder", Icon: FolderIcon, label: "Folder" },
+  { key: "git-branch", Icon: GitBranch, label: "Branch" },
   { key: "users", Icon: Users, label: "Users" },
   { key: "briefcase", Icon: Briefcase, label: "Briefcase" },
   { key: "file-text", Icon: FileText, label: "Document" },
@@ -212,13 +213,48 @@ export function resolveFolderDisplayIcon(
   emoji?: string
   color: string
 } {
+  if (folder.kind === "plain") {
+    return {
+      kind: "lucide",
+      Icon: FolderIcon,
+      color: folder.icon_color || DEFAULT_ICON_COLOR,
+    }
+  }
+  if (folder.kind === "branch") {
+    return {
+      kind: "lucide",
+      Icon: GitBranch,
+      color: folder.icon_color || ZE_GREEN,
+    }
+  }
   if (
     boundGroup &&
     (folder.kind === "user_group" || folder.kind === "system_group")
   ) {
+    if (
+      folder.kind === "user_group" &&
+      boundGroup.icon_type !== "emoji" &&
+      ["folder", "git-branch"].includes(boundGroup.icon_value || "")
+    ) {
+      return {
+        kind: "lucide",
+        Icon: Users,
+        color: boundGroup.icon_color || DEFAULT_ICON_COLOR,
+      }
+    }
     return resolveGroupIcon(boundGroup)
   }
   if (folder.icon_type && folder.icon_value) {
+    if (
+      folder.kind === "user_group" &&
+      (folder.icon_value === "folder" || folder.icon_value === "git-branch")
+    ) {
+      return {
+        kind: "lucide",
+        Icon: Users,
+        color: folder.icon_color || DEFAULT_ICON_COLOR,
+      }
+    }
     return resolveGroupIcon({
       name: folder.name,
       icon_type: folder.icon_type,
@@ -333,6 +369,7 @@ export function IconPickerPanel({
   onIconKey,
   onIconColor,
   onSymbol,
+  variant = "full",
 }: {
   iconMode: "lucide" | "emoji"
   iconKey: string
@@ -342,37 +379,47 @@ export function IconPickerPanel({
   onIconKey: (k: string) => void
   onIconColor: (c: string) => void
   onSymbol: (s: string) => void
+  /** plain = color only; group = presets minus folder/git-branch; full = all */
+  variant?: "full" | "plain" | "group"
 }) {
   const t = useT()
+  const presets =
+    variant === "group"
+      ? LUCIDE_PRESETS.filter(
+          (p) => p.key !== "folder" && p.key !== "git-branch"
+        )
+      : LUCIDE_PRESETS
   return (
     <div className="pm-group-icon-picker">
-      <div className="pm-group-icon-grid" role="listbox" aria-label={t("common.icon")}>
-        {LUCIDE_PRESETS.map((p) => {
-          const on = iconMode === "lucide" && iconKey === p.key
-          return (
-            <button
-              key={p.key}
-              type="button"
-              role="option"
-              title={p.label}
-              aria-selected={on}
-              aria-pressed={on}
-              className={cn("pm-group-icon-cell", on && "is-on")}
-              onClick={() => {
-                onIconMode("lucide")
-                onIconKey(p.key)
-                onSymbol("")
-              }}
-            >
-              <p.Icon
-                className="h-3.5 w-3.5 transition-colors"
-                strokeWidth={1.6}
-                style={{ color: iconColor }}
-              />
-            </button>
-          )
-        })}
-      </div>
+      {variant !== "plain" && (
+        <div className="pm-group-icon-grid" role="listbox" aria-label={t("common.icon")}>
+          {presets.map((p) => {
+            const on = iconMode === "lucide" && iconKey === p.key
+            return (
+              <button
+                key={p.key}
+                type="button"
+                role="option"
+                title={p.label}
+                aria-selected={on}
+                aria-pressed={on}
+                className={cn("pm-group-icon-cell", on && "is-on")}
+                onClick={() => {
+                  onIconMode("lucide")
+                  onIconKey(p.key)
+                  onSymbol("")
+                }}
+              >
+                <p.Icon
+                  className="h-3.5 w-3.5 transition-colors"
+                  strokeWidth={1.6}
+                  style={{ color: iconColor }}
+                />
+              </button>
+            )
+          })}
+        </div>
+      )}
 
       {/* COLOR label + jelly bars on one row; track pads so select rings aren’t clipped */}
       <div className="pm-group-swatch-row">
@@ -406,6 +453,7 @@ export function IconPickerPanel({
         </div>
       </div>
 
+      {variant !== "plain" && (
       <div className="pm-group-custom-field">
         <label className="pm-field-label" htmlFor="pm-group-custom-icon">
           {t("fileMgmt.customSymbol")}
@@ -423,6 +471,7 @@ export function IconPickerPanel({
           placeholder={t("fileMgmt.optionalEmoji")}
         />
       </div>
+      )}
     </div>
   )
 }

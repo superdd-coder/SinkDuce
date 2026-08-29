@@ -71,6 +71,19 @@ def get_collection_meta(collection_id: str) -> dict | None:
     return _read_json(_meta_path(collection_id))
 
 
+def collection_display_name(collection_id: str) -> str:
+    """Human collection name for UI / LLM context. Falls back to the id."""
+    col = (collection_id or "").strip()
+    if not col:
+        return ""
+    try:
+        meta = get_collection_meta(col)
+    except Exception:
+        meta = None
+    name = str((meta or {}).get("name") or "").strip()
+    return name or col
+
+
 def update_collection_meta(collection_id: str, **kwargs) -> dict | None:
     """Update collection metadata."""
     from src.identity import authorize, get_actor

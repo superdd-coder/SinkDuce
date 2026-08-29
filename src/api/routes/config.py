@@ -348,6 +348,10 @@ async def update_config(req: ConfigUpdateRequest):
                 setattr(config, key, value)
         save_config(config)
         reload_config()
+        # Model slots (default_chat_model / visual_model_id) must reach the
+        # running ChatboxAgent — without this refresh, existing sessions keep
+        # calling the previous model until restart.
+        await async_refresh_llm_runtime()
         from src.services import services
         services.config = get_config()
         return {"message": f"Config '{req.section}' updated"}

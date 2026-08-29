@@ -780,6 +780,9 @@ export function MeetingQuickChat({
   ) => {
     switch (type) {
       case "thinking": appendThinking(assistantId, data.content as string); break
+      case "planning":
+        appendThinking(assistantId, `\n${tr("chat.nextStep")}`)
+        break
       case "token": appendToken(assistantId, data.content as string); break
       case "searching":
         // Show searching indicator in the assistant message

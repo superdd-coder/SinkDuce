@@ -29,6 +29,10 @@ import { cn } from "@/lib/utils"
 import { listChains, updateTodo } from "@/api/file-mgmt"
 import type { Chain, TodoItem } from "@/types/file-mgmt"
 import { triggerTodoRefresh } from "@/lib/todo-refresh"
+import {
+  seedFromTodo,
+  shouldMountTodoDetailEditor,
+} from "@/lib/todo-detail-form"
 import type { Editor } from "@tiptap/core"
 import { useT } from "@/i18n/use-t"
 import { formatApiError } from "@/api/http"
@@ -71,9 +75,11 @@ export function TodoDetailDialog({
   const [selectedChainId, setSelectedChainId] = useState("")
   const [loadingChains, setLoadingChains] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [editorKey, setEditorKey] = useState(0)
+  /** Which todo the title/body/ddl state was seeded from. */
+  const [seededTodoId, setSeededTodoId] = useState<string | null>(null)
   const titleInputRef = useRef<HTMLTextAreaElement>(null)
   const descEditorRef = useRef<Editor | null>(null)
+  const openTodoId = todo?.todo_id ?? null
 
   const syncTitleHeight = useCallback(() => {
     const el = titleInputRef.current
@@ -93,16 +99,12 @@ export function TodoDetailDialog({
 
   useEffect(() => {
     if (!open || !todo) return
-    setTitle(todo.title)
-    setBody(todo.body || "")
-    setDdl(todo.ddl?.slice(0, 10) || "")
-    setSelectedChainId(todo.chain_id)
-    setEditorKey((k) => k + 1)
+    const expectedChainId = todo.chain_id
     setLoadingChains(true)
     listChains(collectionId)
       .then((list) => {
         setChains(list)
-        if (!list.some((c) => c.chain_id === todo.chain_id)) {
+        if (!list.some((c) => c.chain_id === expectedChainId)) {
           const main = list.find((c) => c.is_main)
           setSelectedChainId(main?.chain_id || list[0]?.chain_id || "")
         }
@@ -213,6 +215,23 @@ export function TodoDetailDialog({
       return (a.title || "").localeCompare(b.title || "")
     })
   }, [chains])
+
+  // Seed during render so TipTap never mounts on the previous todo's body.
+  // (useEffect runs after first paint; keepMounted dialog + TipTap would stick.)
+  if (open && todo && seededTodoId !== todo.todo_id) {
+    const seed = seedFromTodo(todo)
+    setSeededTodoId(seed.todoId)
+    setDisplayTodo(todo)
+    setTitle(seed.title)
+    setBody(seed.body)
+    setDdl(seed.ddl)
+    setSelectedChainId(seed.chainId)
+  }
+  if (!open && seededTodoId !== null) {
+    setSeededTodoId(null)
+  }
+
+  const descReady = shouldMountTodoDetailEditor(open, openTodoId, seededTodoId)
 
   // Keep shell mounted for exit when displayTodo still held
   if (!displayTodo) return null
@@ -331,9 +350,9 @@ export function TodoDetailDialog({
               )}
               onMouseDown={focusDescEnd}
             >
-              {open && (
+              {descReady && (
                 <MarkdownEditor
-                  key={editorKey}
+                  key={openTodoId || displayTodo.todo_id}
                   value={body}
                   onChange={setBody}
                   enableSlash={false}

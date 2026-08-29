@@ -486,13 +486,10 @@ class AgenticQueryService:
                         len(images_payload),
                     )
             else:
-                logger.warning(
-                    "[Agentic] IMAGE STITCH FAILED: include_images=True but "
-                    "images_payload empty. chunks=%d, checked metadata for images",
+                logger.debug(
+                    "[Agentic] include_images=True, no embeddable images in %d chunks",
                     len(all_chunks),
                 )
-        elif include_images and not all_chunks:
-            logger.warning("[Agentic] IMAGE STITCH SKIPPED: no chunks")
 
         return AgenticQueryResult(
             answer=final_answer, context=context,

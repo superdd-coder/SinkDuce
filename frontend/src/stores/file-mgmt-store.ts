@@ -26,6 +26,7 @@ import {
   removeFilePath,
   deleteFile,
   toggleFileArchive,
+  toggleFolderArchive,
   addFilePath,
   createFolderMessage,
   updateMessage,
@@ -96,6 +97,10 @@ export type FolderUploadConfirmState = {
 const FOLDER_FILE_SORT_MAP_KEY = "sinkduce:folder-file-sort-by-collection"
 /** @deprecated single global key — migrated once into the map */
 const FOLDER_FILE_SORT_LEGACY_KEY = "sinkduce:folder-file-sort"
+const FOLDER_FILE_VIEW_MAP_KEY = "sinkduce:folder-file-view-by-collection"
+
+export type FolderFileViewMode = "grid" | "list"
+const DEFAULT_FOLDER_FILE_VIEW: FolderFileViewMode = "grid"
 
 const SORT_MODES: FolderFileSortMode[] = [
   "name",
@@ -171,6 +176,54 @@ function persistFolderFileSort(
   const map = loadSortMap()
   map[collectionId] = mode
   saveSortMap(map)
+}
+
+function loadViewMap(): Record<string, FolderFileViewMode> {
+  try {
+    const raw = localStorage.getItem(FOLDER_FILE_VIEW_MAP_KEY)
+    if (raw) {
+      const obj = JSON.parse(raw) as Record<string, unknown>
+      const out: Record<string, FolderFileViewMode> = {}
+      for (const [k, v] of Object.entries(obj || {})) {
+        if (v === "grid" || v === "list") out[k] = v
+      }
+      return out
+    }
+  } catch {
+    /* ignore */
+  }
+  return {}
+}
+
+export function loadFolderFileView(collectionId: string): FolderFileViewMode {
+  if (!collectionId) return DEFAULT_FOLDER_FILE_VIEW
+  return loadViewMap()[collectionId] || DEFAULT_FOLDER_FILE_VIEW
+}
+
+function persistFolderFileView(
+  collectionId: string,
+  mode: FolderFileViewMode
+) {
+  if (!collectionId) return
+  const map = loadViewMap()
+  map[collectionId] = mode
+  try {
+    localStorage.setItem(FOLDER_FILE_VIEW_MAP_KEY, JSON.stringify(map))
+  } catch {
+    /* ignore */
+  }
+}
+
+function findFolderNode(
+  tree: FolderTreeNode[],
+  fid: string
+): FolderTreeNode | null {
+  for (const n of tree) {
+    if (n.folder_id === fid) return n
+    const found = findFolderNode(n.children || [], fid)
+    if (found) return found
+  }
+  return null
 }
 
 export function isCreatedSortMode(mode: FolderFileSortMode): boolean {
@@ -294,6 +347,8 @@ interface FileMgmtState {
     version: number
   ) => Promise<NameConflictDetail | null>
   moveFolder: (collectionId: string, folderId: string, newParentId: string | null, version: number) => Promise<void>
+  archiveFolders: (collectionId: string, folderIds: string[]) => Promise<void>
+  unarchiveFolders: (collectionId: string, folderIds: string[]) => Promise<void>
   removeFolder: (collectionId: string, folderId: string) => Promise<void>
   toggleFolderSelection: (folderId: string) => void
   /** Replace selection with a single folder (normal / non-multi mode). */
@@ -307,6 +362,9 @@ interface FileMgmtState {
   hydrateFolderFileSort: (collectionId: string) => void
   /** Persist sort for a collection and apply to the grid. */
   setFolderFileSort: (collectionId: string, mode: FolderFileSortMode) => void
+  folderFileView: FolderFileViewMode
+  hydrateFolderFileView: (collectionId: string) => void
+  setFolderFileView: (collectionId: string, mode: FolderFileViewMode) => void
   /** Pending folder-upload confirm (system Dialog, not window.confirm). */
   folderUploadConfirm: FolderUploadConfirmState | null
   cancelFolderUploadConfirm: () => void
@@ -410,6 +468,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
   perCollectionFolderCache: {},
   nameConflict: null,
   folderFileSort: DEFAULT_FOLDER_FILE_SORT,
+  folderFileView: DEFAULT_FOLDER_FILE_VIEW,
   folderUploadConfirm: null,
 
   hydrateFolderFileSort: (collectionId) => {
@@ -419,6 +478,15 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
   setFolderFileSort: (collectionId, mode) => {
     persistFolderFileSort(collectionId, mode)
     set({ folderFileSort: mode })
+  },
+
+  hydrateFolderFileView: (collectionId) => {
+    set({ folderFileView: loadFolderFileView(collectionId) })
+  },
+
+  setFolderFileView: (collectionId, mode) => {
+    persistFolderFileView(collectionId, mode)
+    set({ folderFileView: mode })
   },
 
   cancelFolderUploadConfirm: () => set({ folderUploadConfirm: null }),
@@ -736,6 +804,36 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
         return
       }
       toast.error(tr("fileMgmt.failedMove", { error: errMsg(err) }))
+    }
+  },
+
+  archiveFolders: async (collectionId, folderIds) => {
+    try {
+      for (const fid of folderIds) {
+        const f = findFolderNode(get().folderTree, fid)
+        if (!f || f.kind !== "plain" || f.archived) continue
+        await toggleFolderArchive(collectionId, fid, true, f.version)
+        await get().fetchFolderTree(collectionId)
+      }
+      await get().refreshFiles(collectionId)
+      toast.success(tr("fileMgmt.foldersArchived"))
+    } catch (err) {
+      toast.error(tr("fileMgmt.archiveFailed", { error: errMsg(err) }))
+    }
+  },
+
+  unarchiveFolders: async (collectionId, folderIds) => {
+    try {
+      for (const fid of folderIds) {
+        const f = findFolderNode(get().folderTree, fid)
+        if (!f || f.kind !== "plain" || !f.archived) continue
+        await toggleFolderArchive(collectionId, fid, false, f.version)
+        await get().fetchFolderTree(collectionId)
+      }
+      await get().refreshFiles(collectionId)
+      toast.success(tr("fileMgmt.foldersRestored"))
+    } catch (err) {
+      toast.error(tr("fileMgmt.unarchiveFailed", { error: errMsg(err) }))
     }
   },
 

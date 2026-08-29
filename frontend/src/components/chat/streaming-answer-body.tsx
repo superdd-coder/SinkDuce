@@ -17,6 +17,19 @@ function stabilizeStreamingMarkdown(md: string): string {
 }
 
 /**
+ * Meeting cite markers ([n:k], [ref:N]) are rendered as chips by the Meeting /
+ * Group Chat surfaces only. Main Chat / Quick Chat answers must never show the
+ * raw syntax — models occasionally leak it, so strip it at render time.
+ * The colon keeps ordinary markdown links ("[text](url)") untouched.
+ */
+const CITE_MARKER_RE = /\[(?:n|ref)\s*:\s*[^\]]*\]/gi
+const CITE_MARKER_PARTIAL_RE = /\[(?:n|ref)\s*:\s*[^\]]*$/i
+
+function stripCiteMarkers(md: string): string {
+  return md.replace(CITE_MARKER_RE, "")
+}
+
+/**
  * Live answer rendering (main Chat + Quick Chat).
  *
  * Full ReactMarkdown on every token freezes the main thread. While streaming:
@@ -64,25 +77,30 @@ export const StreamingAnswerBody = memo(function StreamingAnswerBody({
   if (!isStreaming) {
     return (
       <div className={proseClass}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          {stripCiteMarkers(content)}
+        </ReactMarkdown>
       </div>
     )
   }
 
   // Instant path: always show full content as plain text so stream never stalls.
   // Overlay formatted completed lines above when available (optional polish).
-  const head = mdHead && content.startsWith(mdHead) ? mdHead : ""
-  const tail = head ? content.slice(head.length) : content
+  const full = stripCiteMarkers(content)
+  const head = mdHead && full.startsWith(mdHead) ? mdHead : ""
+  const tail = head ? full.slice(head.length) : full
+  // Hide a marker that is still arriving (no closing bracket yet) this frame.
+  const shownTail = tail.replace(CITE_MARKER_PARTIAL_RE, "")
 
   return (
     <div className={proseClass}>
       {head ? (
         <ReactMarkdown remarkPlugins={[remarkGfm]}>
-          {stabilizeStreamingMarkdown(head)}
+          {stabilizeStreamingMarkdown(stripCiteMarkers(head))}
         </ReactMarkdown>
       ) : null}
       <span className="whitespace-pre-wrap break-words text-[var(--pm-ink,#121410)]">
-        {tail}
+        {shownTail}
       </span>
     </div>
   )

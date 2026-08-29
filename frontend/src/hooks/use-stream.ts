@@ -5,8 +5,10 @@ import {
   _getCachedMessages, _setCachedMessages,
   type ThinkingSummary,
 } from "@/stores/app-store"
-import { confirmWebSearch, generateSessionTitle, iterateSessionSse, listSessions, postSessionMessage } from "@/api/client"
+import { confirmTodoDelete, confirmWebSearch, generateSessionTitle, iterateSessionSse, listSessions, postSessionMessage } from "@/api/client"
 import { promptWebSearchConfirm } from "@/lib/web-search-confirm"
+import { promptTodoDeleteConfirm } from "@/lib/todo-delete-confirm"
+import { refreshTodosAfterChatTool } from "@/lib/todo-refresh"
 /** Check if sid is the active session; if not, update cache instead of store. */
 function _isActive(sid: string) {
   return useAppStore.getState().sessionId === sid
@@ -148,6 +150,11 @@ export function useStreamChat() {
             const active = _isActive(sid)
 
             switch (currentEvent) {
+              case "planning":
+                // After a tool Done: next LLM round has started. Trail shows
+                // "Deciding next step…" until the next tool_call_start / token.
+                break
+
               case "thinking":
                 // Reasoning timeline is plain text — keep low latency, no MD cost
                 if (active) appendTimelineThinking(String(data.content ?? ""))
@@ -187,6 +194,10 @@ export function useStreamChat() {
                 break
 
               case "tool_result":
+                refreshTodosAfterChatTool(String(data.tool || ""), {
+                  status: String(data.status || "done"),
+                  content: data.content,
+                })
                 if (active) {
                   const st = String(data.status || "done")
                   const mapped =
@@ -246,6 +257,49 @@ export function useStreamChat() {
                 }
                 if (active && !approved) {
                   finishTimelineTool({ status: "declined", source_type: "web" })
+                }
+                break
+              }
+
+              case "todo_delete_confirm": {
+                const confirmId = String(data.confirm_id || "")
+                const title = String(data.title || "")
+                const collectionName = String(data.collection_name || "")
+                if (active) {
+                  setTimelineToolStatus(
+                    title
+                      ? `Waiting to delete to-do: ${title}`
+                      : "Waiting to confirm to-do delete…",
+                  )
+                }
+                if (!confirmId) {
+                  console.error("[Chat] todo_delete_confirm missing confirm_id")
+                  break
+                }
+                let approved = false
+                try {
+                  approved = await promptTodoDeleteConfirm(
+                    confirmId,
+                    title,
+                    sid,
+                    collectionName,
+                  )
+                } catch (err) {
+                  console.error("[Chat] promptTodoDeleteConfirm failed:", err)
+                  approved = false
+                }
+                try {
+                  await confirmTodoDelete(confirmId, approved)
+                } catch (err) {
+                  console.error("[Chat] todo-delete-confirm POST failed:", err)
+                  try {
+                    await confirmTodoDelete(confirmId, approved)
+                  } catch (err2) {
+                    console.error("[Chat] todo-delete-confirm retry failed:", err2)
+                  }
+                }
+                if (active && !approved) {
+                  finishTimelineTool({ status: "declined" })
                 }
                 break
               }
