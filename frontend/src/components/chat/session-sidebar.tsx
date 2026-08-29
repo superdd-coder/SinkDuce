@@ -52,10 +52,11 @@ export function SessionSidebar() {
     if (!activeEl || !listEl) return
     const activeRect = activeEl.getBoundingClientRect()
     const listRect = listEl.getBoundingClientRect()
-    setIndicator({
-      top: activeRect.top - listRect.top + listEl.scrollTop,
-      height: activeRect.height,
-    })
+    const top = activeRect.top - listRect.top + listEl.scrollTop
+    const height = activeRect.height
+    setIndicator((prev) =>
+      prev.top === top && prev.height === height ? prev : { top, height },
+    )
     // First place hard; subsequent moves slide
     requestAnimationFrame(() => setIndicatorReady(true))
   }, [sessionId, sessions])

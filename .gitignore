@@ -90,3 +90,6 @@ src-tauri/
 *.onnx
 !src/parsers/ocr_models/*.onnx
 !src/meeting/transcription/onnx/campplus_models/*.onnx
+
+# ZCode agent local workspace
+.zcode/

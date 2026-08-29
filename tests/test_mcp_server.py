@@ -37,7 +37,7 @@ class TestToolRegistration:
         "get_file_chunks",
         "get_document_text",
         "set_document_definitive",
-        # File Management L1 (13)
+        # File Management L1 (17)
         "list_library_tree",
         "get_timeline",
         "list_folders",
@@ -48,6 +48,10 @@ class TestToolRegistration:
         "get_chain",
         "get_node",
         "list_groups",
+        "list_todos",
+        "create_todo",
+        "update_todo",
+        "delete_todo",
         "upload_file_from_staging",
         "upload_file_version_from_staging",
         "set_file_definitive",
@@ -73,8 +77,9 @@ class TestToolRegistration:
         "update_note",
         "delete_note",
         "trigger_propagation",
-        # Meetings (10)
+        # Meetings (11)
         "list_meetings",
+        "list_meeting_catalog",
         "get_meeting",
         "get_section",
         "get_meeting_transcript",
@@ -95,8 +100,8 @@ class TestToolRegistration:
     def test_all_56_tools_registered(self):
         from src.mcp.server import mcp
         tools = mcp._tool_manager._tools
-        assert len(tools) == 57, (
-            f"Expected 57 tools, got {len(tools)}: {sorted(tools.keys())}"
+        assert len(tools) == 62, (
+            f"Expected 62 tools, got {len(tools)}: {sorted(tools.keys())}"
         )
 
     def test_tool_set_matches_expected(self):
@@ -218,12 +223,12 @@ class TestModuleImports:
 
     def test_meetings_imports(self):
         from src.mcp.tools.meetings import (
-            list_meetings, get_meeting, get_section, get_meeting_transcript,
+            list_meetings, list_meeting_catalog, get_meeting, get_section, get_meeting_transcript,
             create_meeting, update_meeting, delete_meeting,
             start_meeting_summary, upload_meeting_audio_from_staging,
             lookup_meeting_transcript,
         )
-        for fn in (list_meetings, get_meeting, get_section, get_meeting_transcript,
+        for fn in (list_meetings, list_meeting_catalog, get_meeting, get_section, get_meeting_transcript,
                    create_meeting, update_meeting, delete_meeting,
                    start_meeting_summary, upload_meeting_audio_from_staging,
                    lookup_meeting_transcript):
@@ -244,12 +249,14 @@ class TestModuleImports:
         from src.mcp.tools.file_mgmt import (
             list_library_tree, get_timeline, list_folders, list_files, get_file,
             list_file_versions, list_chains, get_chain, get_node, list_groups,
+            list_todos, create_todo, update_todo, delete_todo,
             upload_file_from_staging, upload_file_version_from_staging,
             set_file_definitive,
         )
         for fn in (
             list_library_tree, get_timeline, list_folders, list_files, get_file,
             list_file_versions, list_chains, get_chain, get_node, list_groups,
+            list_todos, create_todo, update_todo, delete_todo,
             upload_file_from_staging, upload_file_version_from_staging,
             set_file_definitive,
         ):
@@ -567,7 +574,23 @@ class TestToolsReturnJson:
                 loop.close()
 
         # The result must be a JSON string parseable as dict OR list
-        data = json.loads(result)
+        # (todo tools return a CallToolResult — unwrap its structured payload;
+        # the SDK exposes it as structured_content / structuredContent alias)
+        raw = result
+        if not isinstance(raw, str):
+            structured = getattr(raw, "structuredContent", None) or getattr(
+                raw, "structured_content", None
+            )
+            if structured is not None:
+                raw = json.dumps(structured, ensure_ascii=False, default=str)
+            else:
+                parts = [
+                    getattr(c, "text", "")
+                    for c in (getattr(raw, "content", None) or [])
+                    if getattr(c, "text", "")
+                ]
+                raw = "\n".join(parts) if parts else ""
+        data = json.loads(raw)
         assert isinstance(data, (dict, list)), (
             f"Tool {tool_name!r} should return a JSON object or array, "
             f"got {type(data).__name__}"

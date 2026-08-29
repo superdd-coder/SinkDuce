@@ -10,6 +10,16 @@ export const confirmWebSearch = (confirmId: string, approved: boolean) =>
     },
   )
 
+/** Approve or deny a pending Chat todo-delete HITL request. */
+export const confirmTodoDelete = (confirmId: string, approved: boolean) =>
+  request<{ ok: boolean; confirm_id: string; approved: boolean }>(
+    "/chat/todo-delete-confirm",
+    {
+      method: "POST",
+      body: JSON.stringify({ confirm_id: confirmId, approved }),
+    },
+  )
+
 // ── Sessions ──
 
 export interface SessionItem {

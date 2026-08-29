@@ -70,6 +70,8 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
     setPendingOpenFile,
     collections,
     fetchCollections,
+    setSidebarView,
+    setActiveMeeting,
   } = useAppStore(
     useShallow((s) => ({
       activeCollection: s.activeCollection,
@@ -81,6 +83,8 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
       setPendingOpenFile: s.setPendingOpenFile,
       collections: s.collections,
       fetchCollections: s.fetchCollections,
+      setSidebarView: s.setSidebarView,
+      setActiveMeeting: s.setActiveMeeting,
     }))
   )
   const t = useT()
@@ -755,6 +759,10 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
                 ? source.trim()
                 : null
             setDetailOpen({ fileId, source })
+          }}
+          onMeetingClick={(meetingId) => {
+            setActiveMeeting(meetingId)
+            setSidebarView("meeting")
           }}
         />
       )}

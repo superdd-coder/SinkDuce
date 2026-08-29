@@ -536,32 +536,69 @@ async def upload_meeting_audio_from_staging(
     return to_json(await run_sync(_run))
 
 
-async def lookup_meeting_transcript(
-    meeting_id: str,
-    query: str,
-    speaker_scope: str = "auto",
-) -> str:
-    """Search a meeting's verbatim transcript packs (not allocated summaries).
+async def list_meeting_catalog(collection: str = "") -> str:
+    """List meetings this client may search (id, title, date, index_ready).
 
-    Quick Chat locks ``meeting_id`` to the open meeting. Use this from MCP with
-    an explicit meeting id. ``speaker_scope=auto`` filters packs that contain
-    speakers named in ``query`` when a mapping exists. ``all`` searches the
-    whole meeting. Empty named-speaker hits may include ``preview_unfiltered``.
-
-    Args:
-        meeting_id: Target meeting.
-        query: Natural-language search (topics, facts, wording).
-        speaker_scope: ``auto`` (default) or ``all``.
+    Omit ``collection`` for every meeting. Pass a collection id to list only
+    meetings ingested into that library. Not a transcript search — use
+    :func:`lookup_meeting_transcript` for spoken content.
     """
+
     def _run() -> dict[str, Any]:
-        from src.meeting.transcript_index import execute_lookup_json
+        from src.meeting.catalog import catalog_tool_json
         import json
 
-        raw = execute_lookup_json(
-            meeting_id,
+        raw = catalog_tool_json(collection=(collection or "").strip() or None)
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return err(raw)
+        if not isinstance(data, dict):
+            return err("catalog failed")
+        return ok(**data)
+
+    return to_json(await run_sync(_run))
+
+
+async def lookup_meeting_transcript(
+    query: str,
+    meeting_id: str = "",
+    meeting_ids: list[str] | None = None,
+    speaker_scope: str = "auto",
+    collection: str = "",
+) -> str:
+    """Search spoken transcript packs (not allocated summaries).
+
+    Pass ``meeting_ids`` (or a single ``meeting_id``) to narrow. Omit ids to
+    search every indexed meeting in the visible set (all meetings, or those
+    ingested into ``collection`` when that is set). Ids outside the visible
+    set return an error. ``speaker_scope=auto`` filters packs that contain
+    speakers named in ``query`` when a mapping exists. ``all`` searches
+    without that filter.
+
+    Args:
+        query: Natural-language search (topics, facts, wording).
+        meeting_id: Optional single meeting (legacy). Combined with meeting_ids.
+        meeting_ids: Optional meeting id list from list_meeting_catalog.
+        speaker_scope: ``auto`` (default) or ``all``.
+        collection: Optional collection id to restrict the visible set.
+    """
+    def _run() -> dict[str, Any]:
+        from src.meeting.catalog import lookup_tool_json
+        import json
+
+        ids: list[str] = []
+        if meeting_ids:
+            ids.extend(str(x).strip() for x in meeting_ids if str(x).strip())
+        one = (meeting_id or "").strip()
+        if one and one not in ids:
+            ids.append(one)
+        raw = lookup_tool_json(
             query,
+            meeting_ids=ids or None,
             speaker_scope=speaker_scope,
             user_question=query,
+            collection=(collection or "").strip() or None,
         )
         try:
             data = json.loads(raw)
@@ -569,6 +606,8 @@ async def lookup_meeting_transcript(
             return err(raw)
         if not isinstance(data, dict):
             return err("lookup failed")
+        if data.get("error"):
+            return err(str(data.get("error")), **{k: v for k, v in data.items() if k != "error"})
         return ok(**data)
 
     return to_json(await run_sync(_run))
@@ -576,6 +615,7 @@ async def lookup_meeting_transcript(
 
 __all__ = [
     "list_meetings",
+    "list_meeting_catalog",
     "get_meeting",
     "get_section",
     "get_meeting_transcript",

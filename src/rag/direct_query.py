@@ -175,13 +175,16 @@ class DirectQueryModule:
                 k = rerank_top_k if rerank_top_k else None
                 all_chunks = self.reranker.rerank(query, all_chunks, top_k=k)
                 logger.debug("[Direct] rerank: %d → %d chunks", n_before, len(all_chunks))
-            except Exception:
-                logger.exception("[Direct] rerank failed, using un-reranked results")
+            except Exception as e:
+                logger.warning(
+                    "[Direct] rerank failed (%s), using un-reranked results", e,
+                )
                 do_rerank = False
 
         # ── Truncate ───────────────────────────────────────────────────
-        # After rerank: use rerank_top_k; without rerank: use top_k
-        if do_rerank and rerank_top_k:
+        # Keep the post-rerank cap even when rerank fails. Otherwise each
+        # variant dumps retrieve top_k into the grader (40k+ prompts).
+        if rerank_enabled and rerank_top_k:
             limit = rerank_top_k
         else:
             limit = top_k

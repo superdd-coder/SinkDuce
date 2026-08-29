@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Check, ChevronDown, ChevronRight, Search } from "lucide-react"
+import { ChevronDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -12,7 +12,7 @@ import { FieldLabel } from "@/components/ui/field-label"
 import { Input } from "@/components/ui/input"
 import { toast } from "sonner"
 import { useT } from "@/i18n/use-t"
-import { systemFolderDisplayName } from "@/i18n/system-folder"
+
 import { formatApiError } from "@/api/http"
 import type { FolderTreeNode, NodeGroup } from "@/types/file-mgmt"
 import {
@@ -25,28 +25,12 @@ import {
 } from "@/api/file-mgmt"
 import {
   DEFAULT_ICON_COLOR,
-  FolderIconView,
   GroupIconView,
   IconPickerPanel,
   buildIconPayload,
 } from "./group-icons"
 import { cn } from "@/lib/utils"
-
-function FolderRowIcon({
-  folder,
-  boundGroup,
-}: {
-  folder: FolderTreeNode
-  boundGroup?: NodeGroup | null
-}) {
-  return (
-    <FolderIconView
-      folder={folder}
-      boundGroup={boundGroup}
-      className="h-3.5 w-3.5 shrink-0"
-    />
-  )
-}
+import { FolderSelectTree } from "@/components/file-mgmt/folder-select-tree"
 
 interface GroupFormDialogProps {
   collectionId: string
@@ -57,195 +41,6 @@ interface GroupFormDialogProps {
   onSaved: () => void
   /** After successful delete (edit mode only) */
   onDeleted?: () => void
-}
-
-/**
- * Folder-only bind tree — UI language matches Node Detail attach tree
- * (pm-timeline-ftree-*), but still single-selects flat plain folders only.
- */
-function FolderBindTree({
-  nodes,
-  boundFolderIds,
-  groupByFolderId,
-  editingFolderId,
-  selectedId,
-  onSelect,
-  depth = 0,
-  expanded,
-  onToggle,
-}: {
-  nodes: FolderTreeNode[]
-  boundFolderIds: Set<string>
-  groupByFolderId: Map<string, NodeGroup>
-  editingFolderId: string | null
-  selectedId: string
-  onSelect: (id: string) => void
-  depth?: number
-  expanded: Set<string>
-  onToggle: (id: string) => void
-}) {
-  const t = useT()
-  return (
-    <>
-      {nodes.map((n) => {
-        const isBound =
-          boundFolderIds.has(n.folder_id) && n.folder_id !== editingFolderId
-        const hasChildren = (n.children?.length ?? 0) > 0
-        // Group folders must be flat — cannot bind a folder that has subfolders
-        const selectable = n.kind === "plain" && !isBound && !hasChildren
-        const isOpen = expanded.has(n.folder_id)
-        const selected = selectedId === n.folder_id
-        const boundGroup = groupByFolderId.get(n.folder_id) ?? null
-        const title = isBound
-          ? t("fileMgmt.alreadyBoundGroup")
-          : n.kind !== "plain"
-            ? t("fileMgmt.foldersCannotBeBound", { kind: n.kind })
-            : hasChildren
-              ? t("fileMgmt.groupFoldersMustBeFlat")
-              : systemFolderDisplayName(n.name, t)
-
-        return (
-          <div key={n.folder_id}>
-            <div
-              className={cn(
-                "pm-timeline-ftree-row",
-                !selectable && !hasChildren && "opacity-45"
-              )}
-              style={{ paddingLeft: depth * 14 }}
-            >
-              <button
-                type="button"
-                className={cn(
-                  "pm-timeline-ftree-chev",
-                  isOpen && hasChildren && "is-open"
-                )}
-                disabled={!hasChildren}
-                aria-label={isOpen ? "Collapse" : "Expand"}
-                onClick={(e) => {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  if (hasChildren) onToggle(n.folder_id)
-                }}
-              >
-                {!hasChildren ? (
-                  <span className="inline-block w-3 h-3" />
-                ) : isOpen ? (
-                  <ChevronDown className="h-3.5 w-3.5" strokeWidth={1.75} />
-                ) : (
-                  <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.75} />
-                )}
-              </button>
-              <button
-                type="button"
-                className={cn(
-                  "pm-timeline-ftree-folder",
-                  isOpen && hasChildren && "is-open",
-                  selected && selectable && "is-selected",
-                  !selectable && "is-muted"
-                )}
-                disabled={!selectable && !hasChildren}
-                title={title}
-                onClick={(e) => {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  if (selectable) onSelect(n.folder_id)
-                  else if (hasChildren) onToggle(n.folder_id)
-                }}
-              >
-                <span className="pm-timeline-ftree-icon">
-                  <FolderRowIcon folder={n} boundGroup={boundGroup} />
-                </span>
-                <span className="pm-timeline-ftree-name">{systemFolderDisplayName(n.name, t)}</span>
-                {isBound && (
-                  <span className="pm-meta text-[var(--pm-faint)] shrink-0">
-                    bound
-                  </span>
-                )}
-                {selectable && selected && (
-                  <Check
-                    className="pm-timeline-ftree-check"
-                    strokeWidth={2.25}
-                    aria-hidden
-                  />
-                )}
-              </button>
-            </div>
-
-            <div
-              className={cn(
-                "pm-timeline-ftree-kids",
-                isOpen && hasChildren && "is-open"
-              )}
-            >
-              <div className="pm-timeline-ftree-kids-inner">
-                {hasChildren && isOpen && (
-                  <FolderBindTree
-                    nodes={n.children}
-                    boundFolderIds={boundFolderIds}
-                    groupByFolderId={groupByFolderId}
-                    editingFolderId={editingFolderId}
-                    selectedId={selectedId}
-                    onSelect={onSelect}
-                    depth={depth + 1}
-                    expanded={expanded}
-                    onToggle={onToggle}
-                  />
-                )}
-              </div>
-            </div>
-          </div>
-        )
-      })}
-    </>
-  )
-}
-
-function collectExpandableIds(nodes: FolderTreeNode[]): string[] {
-  const ids: string[] = []
-  const walk = (list: FolderTreeNode[]) => {
-    for (const n of list) {
-      if (n.children?.length) {
-        ids.push(n.folder_id)
-        walk(n.children)
-      }
-    }
-  }
-  walk(nodes)
-  return ids
-}
-
-function findFolderName(
-  nodes: FolderTreeNode[],
-  folderId: string
-): string | null {
-  for (const n of nodes) {
-    if (n.folder_id === folderId) return n.name
-    if (n.children?.length) {
-      const found = findFolderName(n.children, folderId)
-      if (found) return found
-    }
-  }
-  return null
-}
-
-/** Filter folder tree by name (keeps ancestors of matches). */
-function filterFolderTree(
-  nodes: FolderTreeNode[],
-  q: string
-): FolderTreeNode[] {
-  const needle = q.trim().toLowerCase()
-  if (!needle) return nodes
-  const walk = (list: FolderTreeNode[]): FolderTreeNode[] => {
-    const out: FolderTreeNode[] = []
-    for (const n of list) {
-      const kids = walk(n.children ?? [])
-      if (n.name.toLowerCase().includes(needle) || kids.length > 0) {
-        out.push({ ...n, children: kids })
-      }
-    }
-    return out
-  }
-  return walk(nodes)
 }
 
 export function GroupFormDialog({
@@ -261,7 +56,7 @@ export function GroupFormDialog({
   const [name, setName] = useState("")
   /** lucide when picking line icon; emoji when using symbol field */
   const [iconMode, setIconMode] = useState<"lucide" | "emoji">("lucide")
-  const [iconKey, setIconKey] = useState("folder")
+  const [iconKey, setIconKey] = useState("users")
   const [iconColor, setIconColor] = useState(DEFAULT_ICON_COLOR)
   const [symbol, setSymbol] = useState("")
   const [folderMode, setFolderMode] = useState<"new" | "existing">("new")
@@ -271,10 +66,8 @@ export function GroupFormDialog({
    * selected (and folderId kept) when Appearance is expanded again.
    */
   const [treePanelOpen, setTreePanelOpen] = useState(false)
-  const [folderSearch, setFolderSearch] = useState("")
   const [folderTree, setFolderTree] = useState<FolderTreeNode[]>([])
   const [groups, setGroups] = useState<NodeGroup[]>([])
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [submitting, setSubmitting] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -301,16 +94,21 @@ export function GroupFormDialog({
     setConfirmDelete(false)
     setDeleting(false)
     setTreePanelOpen(false)
-    setFolderSearch("")
     if (editing) {
       setName(editing.name)
       if (editing.icon_type === "emoji" && editing.icon_value) {
         setIconMode("emoji")
         setSymbol(editing.icon_value)
-        setIconKey("folder")
+        setIconKey("users")
       } else {
         setIconMode("lucide")
-        setIconKey(editing.icon_value || "users")
+        setIconKey(
+          !editing.icon_value ||
+            editing.icon_value === "folder" ||
+            editing.icon_value === "git-branch"
+            ? "users"
+            : editing.icon_value
+        )
         setIconColor(editing.icon_color || DEFAULT_ICON_COLOR)
         setSymbol("")
       }
@@ -319,7 +117,7 @@ export function GroupFormDialog({
     } else {
       setName("")
       setIconMode("lucide")
-      setIconKey("folder")
+      setIconKey("users")
       setIconColor(DEFAULT_ICON_COLOR)
       setSymbol("")
       setFolderMode("new")
@@ -333,7 +131,6 @@ export function GroupFormDialog({
       .then(([tree, gs]) => {
         setFolderTree(tree)
         setGroups(gs)
-        setExpanded(new Set(collectExpandableIds(tree)))
       })
       .catch(() => {
         setFolderTree([])
@@ -423,15 +220,6 @@ export function GroupFormDialog({
     }
   }
 
-  const toggleExpand = (id: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
   const handleDelete = async () => {
     if (!sessionEditing) return
     setDeleting(true)
@@ -469,16 +257,21 @@ export function GroupFormDialog({
   const chooseKeepOrNew = () => {
     setFolderMode("new")
     setFolderId("")
-    setFolderSearch("")
     setTreePanelOpen(false)
   }
 
   const segIndex = folderMode === "existing" ? 1 : 0
 
-  const visibleFolders = useMemo(
-    () => filterFolderTree(folderTree, folderSearch),
-    [folderTree, folderSearch]
-  )
+  const origHasChildren = (id: string) => {
+    const walk = (list: FolderTreeNode[]): boolean => {
+      for (const n of list) {
+        if (n.folder_id === id) return (n.children?.length ?? 0) > 0
+        if (n.children?.length && walk(n.children)) return true
+      }
+      return false
+    }
+    return walk(folderTree)
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -578,13 +371,18 @@ export function GroupFormDialog({
                 <div className="pm-group-card-scroll">
                   <IconPickerPanel
                     iconMode={iconMode}
-                    iconKey={iconKey}
+                    iconKey={
+                      iconKey === "folder" || iconKey === "git-branch"
+                        ? "users"
+                        : iconKey
+                    }
                     iconColor={iconColor}
                     symbol={symbol}
                     onIconMode={setIconMode}
                     onIconKey={setIconKey}
                     onIconColor={setIconColor}
                     onSymbol={setSymbol}
+                    variant="group"
                   />
                 </div>
               </div>
@@ -664,54 +462,35 @@ export function GroupFormDialog({
               */}
               <div className={cn("pm-group-tree-slot", treeOpen && "is-open")}>
                 <div className="pm-group-tree-slot-inner">
-                  <div className="pm-timeline-ftree-search-wrap pm-group-folder-search">
-                    <Search
-                      className="pm-timeline-ftree-search-icon"
-                      strokeWidth={1.75}
-                    />
-                    <input
-                      className="pm-timeline-ftree-search pm-group-folder-search-input"
-                      placeholder={t("fileMgmt.searchFolders")}
-                      value={folderSearch}
-                      onChange={(e) => setFolderSearch(e.target.value)}
-                      tabIndex={treeOpen ? 0 : -1}
-                    />
-                  </div>
-                  <div className="pm-group-tree-list">
-                    {folderTree.length === 0 ? (
-                      <p className="pm-meta text-center py-6 text-[var(--pm-faint)]">
-                        {t("fileMgmt.noFoldersYet")}
-                      </p>
-                    ) : visibleFolders.length === 0 ? (
-                      <p className="pm-meta text-center py-6 text-[var(--pm-faint)]">
-                        {t("common.noMatches")}
-                      </p>
-                    ) : (
-                      <div className="pm-timeline-ftree pm-group-ftree">
-                        <div className="pm-timeline-ftree-scroll pm-group-ftree-scroll">
-                          <FolderBindTree
-                            nodes={visibleFolders}
-                            boundFolderIds={boundFolderIds}
-                            groupByFolderId={groupByFolderId}
-                            editingFolderId={sessionEditing?.folder_id ?? null}
-                            selectedId={folderId}
-                            onSelect={setFolderId}
-                            expanded={expanded}
-                            onToggle={toggleExpand}
-                          />
-                        </div>
-                      </div>
-                    )}
-                    {folderId && (
-                      <p className="pm-group-folder-selected">
-                        {t("fileMgmt.selectedNamed", {
-                          name:
-                            findFolderName(folderTree, folderId) ??
-                            folderId.slice(0, 8),
-                        })}
-                      </p>
-                    )}
-                  </div>
+                  <FolderSelectTree
+                    key={`${collectionId}-${open}`}
+                    nodes={folderTree}
+                    selectedId={folderId || undefined}
+                    onSelect={(id) => {
+                      if (id) setFolderId(id)
+                    }}
+                    isSelectable={(n) => {
+                      const isBound =
+                        boundFolderIds.has(n.folder_id) &&
+                        n.folder_id !== (sessionEditing?.folder_id ?? null)
+                      return (
+                        n.kind === "plain" &&
+                        !isBound &&
+                        !origHasChildren(n.folder_id)
+                      )
+                    }}
+                    groupByFolderId={groupByFolderId}
+                    badge={(n) =>
+                      boundFolderIds.has(n.folder_id) &&
+                      n.folder_id !== (sessionEditing?.folder_id ?? null) ? (
+                        <span className="pm-meta text-[var(--pm-faint)] shrink-0">
+                          bound
+                        </span>
+                      ) : null
+                    }
+                    searchTabIndex={treeOpen ? 0 : -1}
+                    showSelectedCaption
+                  />
                 </div>
               </div>
             </section>

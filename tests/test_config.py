@@ -212,3 +212,39 @@ def test_provider_types_endpoint_returns_three_sections():
     embedding_names = {e["name"] for e in result["embedding"]}
     assert "openai_compatible" in embedding_names
     assert "remote" not in embedding_names
+
+
+def test_update_default_chat_model_refreshes_llm_runtime():
+    """Changing a top-level model slot must rebuild the chatbox agent.
+
+    Regression: PUT /config with section=default_chat_model only saved the
+    yaml — services.chatbox_agent kept the previous model, so existing
+    Quick Chat sessions kept calling the old default until restart.
+    """
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    import src.api.routes.config as config_routes
+    from src.api.routes.config import update_config
+    from src.api.schemas import ConfigUpdateRequest
+
+    req = ConfigUpdateRequest(
+        section="default_chat_model", data={"default_chat_model": "pid|new-model"}
+    )
+    fake_config = MagicMock()
+    fake_config.locale = "en"
+    refresh = AsyncMock()
+
+    with (
+        patch.object(config_routes, "get_config", return_value=fake_config),
+        patch.object(config_routes, "save_config"),
+        patch.object(config_routes, "reload_config"),
+        patch.object(config_routes, "async_refresh_llm_runtime", refresh),
+    ):
+        resp = asyncio.run(update_config(req))
+
+    assert refresh.awaited_once(), (
+        "default_chat_model update must call async_refresh_llm_runtime so the "
+        "ChatboxAgent (and existing sessions) pick up the new default model"
+    )
+    assert "message" in resp

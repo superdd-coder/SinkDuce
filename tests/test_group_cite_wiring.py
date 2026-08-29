@@ -25,7 +25,7 @@ def test_group_cite_chip_requires_sentence_id():
     assert "{match[0]}" not in src
 
 
-def test_lookup_group_transcript_cites_saved_on_tool_trace():
+def test_lookup_meeting_transcript_cites_saved_on_tool_trace():
     src = AGENT.read_text(encoding="utf-8")
     assert '_trace_entry["cites"]' in src
     assert '_tr["cites"]' in src

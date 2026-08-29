@@ -253,6 +253,10 @@ def update_group(
                 set_clauses.append("description = ?")
                 params.append(updates["description"])
 
+            if "icon_value" in updates:
+                from src.file_mgmt.folders import _assert_group_icon_allowed
+
+                _assert_group_icon_allowed(updates.get("icon_value"))
             for field in ("icon_type", "icon_value", "icon_color"):
                 if field in updates:
                     set_clauses.append(f"{field} = ?")

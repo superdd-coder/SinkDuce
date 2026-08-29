@@ -508,23 +508,42 @@ export const useAppStore = create<AppState>((set) => ({
       if (msgs.length > 0) {
         const last = msgs[msgs.length - 1]
         const tl = [...(last.timeline || [])]
-        for (let i = tl.length - 1; i >= 0; i--) {
-          if (tl[i].type === "tool") {
-            const st = info?.status || "done"
-            tl[i] = {
-              ...tl[i],
-              isStreaming: false,
-              toolStatus: st,
-              tool: info?.tool || tl[i].tool,
-              sourcesCount:
-                info?.sources_count !== undefined
-                  ? info.sources_count
-                  : tl[i].sourcesCount,
-              sourceType: info?.source_type || tl[i].sourceType,
-              toolResult:
-                info?.content !== undefined ? info.content : tl[i].toolResult,
+        const want = (info?.tool || "").trim()
+        let target = -1
+        for (let i = 0; i < tl.length; i++) {
+          if (tl[i].type !== "tool") continue
+          const st = tl[i].toolStatus
+          const running =
+            tl[i].isStreaming === true ||
+            st === "running" ||
+            st === "awaiting_confirm"
+          if (!running) continue
+          if (want && tl[i].tool && tl[i].tool !== want) continue
+          target = i
+          break
+        }
+        if (target < 0) {
+          for (let i = tl.length - 1; i >= 0; i--) {
+            if (tl[i].type === "tool") {
+              target = i
+              break
             }
-            break
+          }
+        }
+        if (target >= 0) {
+          const st = info?.status || "done"
+          tl[target] = {
+            ...tl[target],
+            isStreaming: false,
+            toolStatus: st,
+            tool: info?.tool || tl[target].tool,
+            sourcesCount:
+              info?.sources_count !== undefined
+                ? info.sources_count
+                : tl[target].sourcesCount,
+            sourceType: info?.source_type || tl[target].sourceType,
+            toolResult:
+              info?.content !== undefined ? info.content : tl[target].toolResult,
           }
         }
         msgs[msgs.length - 1] = { ...last, timeline: tl }

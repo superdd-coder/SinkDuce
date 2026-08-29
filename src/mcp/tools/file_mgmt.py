@@ -11,10 +11,12 @@
 
 **Secondary**
 - :func:`list_folders` / :func:`list_chains` / :func:`list_groups`
+- :func:`list_todos` / :func:`create_todo` / :func:`update_todo` / :func:`delete_todo`
 
 **Write**
 - :func:`upload_file_from_staging` / :func:`upload_file_version_from_staging`
 - :func:`set_file_definitive`
+- :func:`create_todo` / :func:`update_todo` / :func:`delete_todo` (destructive)
 
 Body text for a known ``file_id`` lives in documents tools:
 ``get_document_text`` / ``get_file_chunks`` (prefer file_id).
@@ -628,6 +630,417 @@ async def list_groups(collection: str) -> dict[str, Any]:
         except Exception as exc:
             logger.exception("list_groups failed")
             return err(str(exc))
+
+    return await _await_result(_run)
+
+
+# ── collection todos ───────────────────────────────────────────
+
+_ME_UNSET = (
+    "No Me person is set. Mark yourself in People before filtering to mine."
+)
+_WRITE_COLLECTION_REQUIRED = (
+    "collection is required to create/update/delete a todo. "
+    "Use list_collections to get an ID."
+)
+
+
+def _resolve_done_filter(include_done: bool, done: bool | None) -> bool | None:
+    if done is not None:
+        return bool(done)
+    if include_done:
+        return None
+    return False
+
+
+def _me_person_id() -> str | None:
+    from src.speakers.store import get_me_person_id
+
+    return get_me_person_id()
+
+
+def _resolve_assignee(
+    assign_to_me: bool,
+    assignee_person_id: str,
+) -> tuple[str | None, dict[str, Any] | None]:
+    explicit = (assignee_person_id or "").strip() or None
+    if explicit:
+        return explicit, None
+    if assign_to_me:
+        pid = _me_person_id()
+        if not pid:
+            return None, err(_ME_UNSET)
+        return pid, None
+    return None, None
+
+
+def _todo_dict(todo: Any, collection_id: str) -> dict[str, Any]:
+    from src.collections.store import get_collection_meta
+    from src.speakers.store import get_person, speaker_display_name
+
+    d = _dump(todo)
+    if not isinstance(d, dict):
+        d = {"todo": d}
+    meta = get_collection_meta(collection_id) or {}
+    d["collection_id"] = collection_id
+    d["collection_name"] = str(meta.get("name") or collection_id)
+    pid = d.get("assignee_person_id")
+    name = None
+    if pid:
+        person = get_person(str(pid))
+        if person is not None:
+            name = speaker_display_name(person)
+    d["assignee_name"] = name
+    return d
+
+
+def _iter_fm_collections() -> list[tuple[str, str]]:
+    from src.collections.store import list_collections_meta
+    from src.file_mgmt.store import get_db
+
+    out: list[tuple[str, str]] = []
+    for meta in list_collections_meta():
+        cid = str(meta.get("id") or "").strip()
+        if not cid:
+            continue
+        try:
+            conn = get_db(cid)
+            conn.close()
+        except Exception:
+            continue
+        out.append((cid, str(meta.get("name") or cid)))
+    return out
+
+
+def _list_todos_in_collection(
+    collection: str,
+    *,
+    done: bool | None,
+    mine: bool,
+    me_id: str | None,
+) -> list[dict[str, Any]]:
+    from src.file_mgmt import service as fm
+
+    items = fm.list_todos(collection, done=done)
+    dumped = [_todo_dict(t, collection) for t in items]
+    if mine:
+        dumped = [t for t in dumped if t.get("assignee_person_id") == me_id]
+    return dumped
+
+
+async def list_todos(
+    collection: str = "",
+    include_done: bool = False,
+    done: bool | None = None,
+    mine: bool = False,
+) -> Any:
+    """List collection to-dos (checklist items, not timeline nodes).
+
+    **When to use:** user asks what to-dos exist, what is open, what is assigned
+    to them, or due dates across one library or all libraries.
+
+    **When not to use:** document Q&A → search tools; folder layout →
+    ``list_library_tree``; timeline events → ``get_timeline``.
+
+    Default returns **open** (not done) items. Set ``include_done=true`` to
+    include completed (open first). Set ``done=true/false`` for an exact filter
+    (overrides ``include_done``).
+
+    ``mine=true`` keeps items whose assignee is the People **Me** person.
+    Unassigned items are not mine. If Me is not set, this returns an error.
+
+    Omit ``collection`` to scan every library that has a file-management DB.
+    """
+
+    def _run() -> dict[str, Any]:
+        me_id = None
+        if mine:
+            me_id = _me_person_id()
+            if not me_id:
+                return err(_ME_UNSET)
+        done_f = _resolve_done_filter(include_done, done)
+        col = (collection or "").strip()
+        try:
+            if col:
+                if e := _require_fm_collection(col):
+                    return e
+                todos = _list_todos_in_collection(
+                    col, done=done_f, mine=mine, me_id=me_id
+                )
+                return ok(collection=col, todos=todos, total=len(todos), mine=mine)
+            todos: list[dict[str, Any]] = []
+            for cid, _name in _iter_fm_collections():
+                try:
+                    todos.extend(
+                        _list_todos_in_collection(
+                            cid, done=done_f, mine=mine, me_id=me_id
+                        )
+                    )
+                except HTTPException:
+                    continue
+                except Exception:
+                    logger.debug("list_todos skip collection %s", cid, exc_info=True)
+                    continue
+            return ok(todos=todos, total=len(todos), mine=mine)
+        except HTTPException as exc:
+            return _http_err(exc)
+        except Exception as exc:
+            logger.exception("list_todos failed")
+            return err(str(exc))
+
+    return await _await_result(_run)
+
+
+async def create_todo(
+    collection: str,
+    title: str = "",
+    body: str = "",
+    ddl: str = "",
+    assign_to_me: bool = False,
+    assignee_person_id: str = "",
+    todos: list[dict[str, Any]] | None = None,
+) -> Any:
+    """Create one or more collection to-dos in a single call.
+
+    **When to use:** user asks to add / create to-do(s). Prefer ``todos`` with
+    every item (title, optional body/ddl/assignee) instead of repeated calls.
+
+    Requires a collection **ID**. Default unassigned; ``assign_to_me`` uses Me.
+    """
+    from src.file_mgmt import service as fm
+    from src.file_mgmt.models import TodoCreate
+
+    def _run() -> dict[str, Any]:
+        col = (collection or "").strip()
+        if not col:
+            return err(_WRITE_COLLECTION_REQUIRED)
+        if e := _require_fm_collection(col):
+            return e
+        items: list[dict[str, Any]] = []
+        if isinstance(todos, list):
+            items.extend(x for x in todos if isinstance(x, dict))
+        if (title or "").strip():
+            items.insert(
+                0,
+                {
+                    "title": title,
+                    "body": body,
+                    "ddl": ddl,
+                    "assign_to_me": assign_to_me,
+                    "assignee_person_id": assignee_person_id,
+                },
+            )
+        if not items:
+            return err("title or todos is required")
+        created: list[dict[str, Any]] = []
+        errors: list[str] = []
+        try:
+            for it in items:
+                t = str(it.get("title") or "").strip()
+                if not t:
+                    errors.append("empty title")
+                    continue
+                to_me = bool(it.get("assign_to_me") or False)
+                pid = str(it.get("assignee_person_id") or "")
+                assignee, aerr = _resolve_assignee(to_me, pid)
+                if aerr:
+                    return aerr
+                todo = fm.create_todo(
+                    col,
+                    TodoCreate(
+                        title=t,
+                        body=(str(it.get("body") or "").strip() or None),
+                        ddl=(str(it.get("ddl") or "").strip() or None),
+                        assignee_person_id=assignee,
+                    ),
+                )
+                created.append(_todo_dict(todo, col))
+        except HTTPException as exc:
+            return _http_err(exc)
+        except Exception as exc:
+            logger.exception("create_todo failed")
+            return err(str(exc))
+        if not created:
+            return err("; ".join(errors) or "title or todos is required")
+        return ok(
+            collection=col,
+            todo=created[0],
+            todos=created,
+            total=len(created),
+            errors=errors or None,
+        )
+
+    return await _await_result(_run)
+
+
+def _todo_update_fields(item: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Build TodoUpdate kwargs; second value is an err() payload if assignee fails."""
+    fields: dict[str, Any] = {}
+    title = str(item.get("title") or "").strip()
+    if title:
+        fields["title"] = title
+    if item.get("clear_body"):
+        fields["clear_body"] = True
+    elif "body" in item and item.get("body") != "":
+        fields["body"] = item.get("body")
+    if item.get("clear_ddl"):
+        fields["clear_ddl"] = True
+    elif str(item.get("ddl") or "").strip():
+        fields["ddl"] = str(item.get("ddl")).strip()
+    if item.get("done") is not None:
+        fields["done"] = bool(item.get("done"))
+    if item.get("clear_assignee"):
+        fields["clear_assignee"] = True
+    elif str(item.get("assignee_person_id") or "").strip() or item.get("assign_to_me"):
+        assignee, aerr = _resolve_assignee(
+            bool(item.get("assign_to_me") or False),
+            str(item.get("assignee_person_id") or ""),
+        )
+        if aerr:
+            return {}, aerr
+        fields["assignee_person_id"] = assignee
+    return fields, None
+
+
+async def update_todo(
+    collection: str,
+    todo_id: str = "",
+    title: str = "",
+    body: str = "",
+    clear_body: bool = False,
+    ddl: str = "",
+    clear_ddl: bool = False,
+    done: bool | None = None,
+    assignee_person_id: str = "",
+    assign_to_me: bool = False,
+    clear_assignee: bool = False,
+    updates: list[dict[str, Any]] | None = None,
+) -> Any:
+    """Update one or more to-dos in a single call.
+
+    Prefer ``updates`` (each with ``todo_id`` plus fields) when changing several
+    items. A lone ``todo_id`` plus fields still works.
+    """
+    from src.file_mgmt import service as fm
+    from src.file_mgmt.models import TodoUpdate
+
+    def _run() -> dict[str, Any]:
+        col = (collection or "").strip()
+        if not col:
+            return err(_WRITE_COLLECTION_REQUIRED)
+        if e := _require_fm_collection(col):
+            return e
+        items: list[dict[str, Any]] = []
+        if isinstance(updates, list):
+            items.extend(x for x in updates if isinstance(x, dict))
+        if (todo_id or "").strip():
+            items.insert(
+                0,
+                {
+                    "todo_id": todo_id,
+                    "title": title,
+                    "body": body,
+                    "clear_body": clear_body,
+                    "ddl": ddl,
+                    "clear_ddl": clear_ddl,
+                    "done": done,
+                    "assignee_person_id": assignee_person_id,
+                    "assign_to_me": assign_to_me,
+                    "clear_assignee": clear_assignee,
+                },
+            )
+        if not items:
+            return err("todo_id or updates is required")
+        patched: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+        try:
+            for it in items:
+                tid = str(it.get("todo_id") or "").strip()
+                if not tid:
+                    errors.append({"todo_id": "", "error": "todo_id is required"})
+                    continue
+                fields, aerr = _todo_update_fields(it)
+                if aerr:
+                    return aerr
+                if not fields:
+                    todo = fm.get_todo(col, tid)
+                    patched.append(_todo_dict(todo, col))
+                    continue
+                try:
+                    todo = fm.update_todo(col, tid, TodoUpdate(**fields))
+                    patched.append(_todo_dict(todo, col))
+                except HTTPException as exc:
+                    errors.append({"todo_id": tid, "error": str(exc.detail)})
+        except HTTPException as exc:
+            return _http_err(exc)
+        except Exception as exc:
+            logger.exception("update_todo failed")
+            return err(str(exc))
+        if not patched and errors:
+            return err(errors[0]["error"], results=errors)
+        return ok(
+            collection=col,
+            todo=patched[0] if patched else None,
+            todos=patched,
+            total=len(patched),
+            errors=errors or None,
+        )
+
+    return await _await_result(_run)
+
+
+async def delete_todo(
+    collection: str,
+    todo_id: str = "",
+    todo_ids: list[str] | None = None,
+) -> Any:
+    """Delete one or more collection to-dos. Destructive.
+
+    **When to use:** user explicitly asks to delete / remove to-dos.
+    Prefer ``todo_ids`` with every id in one call. ``todo_id`` is a single-id
+    alias. Chat/Quick Chat confirm each id; MCP clients should confirm first.
+
+    Requires a collection **ID**.
+    """
+    from src.file_mgmt import service as fm
+
+    def _run() -> dict[str, Any]:
+        col = (collection or "").strip()
+        if not col:
+            return err(_WRITE_COLLECTION_REQUIRED)
+        ids: list[str] = []
+        seen: set[str] = set()
+        for raw in list(todo_ids or []) + [todo_id]:
+            tid = str(raw or "").strip()
+            if tid and tid not in seen:
+                seen.add(tid)
+                ids.append(tid)
+        if not ids:
+            return err("todo_id or todo_ids is required")
+        if e := _require_fm_collection(col):
+            return e
+        deleted: list[str] = []
+        errors: list[dict[str, str]] = []
+        try:
+            for tid in ids:
+                try:
+                    fm.delete_todo(col, tid)
+                    deleted.append(tid)
+                except HTTPException as exc:
+                    errors.append({"todo_id": tid, "error": str(exc.detail)})
+        except Exception as exc:
+            logger.exception("delete_todo failed")
+            return err(str(exc))
+        if not deleted and errors:
+            return err(errors[0]["error"], results=errors)
+        return ok(
+            collection=col,
+            deleted=True,
+            todo_id=deleted[0] if len(deleted) == 1 else None,
+            todo_ids=deleted,
+            errors=errors or None,
+            total=len(deleted),
+        )
 
     return await _await_result(_run)
 

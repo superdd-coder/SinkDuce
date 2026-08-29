@@ -19,6 +19,17 @@ _SPK_RE = re.compile(r"\[spk:[^\]]*\]", re.I)
 
 _FILLERS = frozenset({"嗯", "对", "哦", "啊", "唔", "呃", "嗯嗯", "好", "ok", "OK", "okay"})
 _LOCATOR_MAX_TOKENS = 48
+TOP_PACKS_PER_MEETING = 5
+# Shown between two non-adjacent hit windows. Not a page of unread transcript.
+HIT_GAP_NOTE = (
+    "\n[Note: gap between ranked hits — these sentences did not match this "
+    "search. Not unread transcript; do not look them up again.]\n"
+)
+LOOKUP_NO_NEW_PACKS_MSG = (
+    "No new packs. The excerpts below are everything already returned this "
+    "turn. Answer from them. Do not call lookup_meeting_transcript again to "
+    "fill gaps or repeat this search."
+)
 _LOCATOR_TRAIL = frozenset({
     "to", "of", "and", "or", "the", "a", "an", "for", "with", "in", "on",
     "at", "by", "from", "as", "into", "onto", "via", "vs",
@@ -189,12 +200,26 @@ def stitch_packs(
     cap_tokens: int = 3000,
 ) -> str:
     """Merge hit packs in time order, glue ±N sentences, format as [ref:N] windows."""
+    text, _shown = stitch_packs_and_keys(
+        all_sentences, hit_packs, glue=glue, cap_tokens=cap_tokens
+    )
+    return text
+
+
+def stitch_packs_and_keys(
+    all_sentences: list[dict[str, Any]],
+    hit_packs: list[dict[str, Any]],
+    *,
+    glue: int = 2,
+    cap_tokens: int | None = 3000,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Like stitch_packs, plus the packs that actually landed in the text."""
     from src.chatbox.meeting_context import format_segments_for_chat
 
     if not hit_packs:
-        return ""
+        return "", []
     ordered = sorted(hit_packs, key=lambda p: int(p.get("pack_index", 0)))
-    islands: list[tuple[int, int]] = []
+    islands: list[tuple[int, int, list[dict[str, Any]]]] = []
     for pack in ordered:
         rows = pack.get("sentences") or []
         if not rows:
@@ -202,14 +227,16 @@ def stitch_packs(
         lo = int(rows[0]["ref_n"])
         hi = int(rows[-1]["ref_n"])
         if islands and lo <= islands[-1][1] + 1:
-            islands[-1] = (islands[-1][0], max(islands[-1][1], hi))
+            prev = islands[-1]
+            islands[-1] = (prev[0], max(prev[1], hi), prev[2] + [pack])
         else:
-            islands.append((lo, hi))
+            islands.append((lo, hi, [pack]))
 
     n_all = len(all_sentences)
     windows: list[str] = []
+    shown: list[dict[str, Any]] = []
     used_tokens = 0
-    for lo, hi in islands:
+    for lo, hi, members in islands:
         segs: list[dict[str, Any]] = []
         if n_all > 0:
             a = max(1, lo - glue)
@@ -224,11 +251,16 @@ def stitch_packs(
         if not block:
             continue
         tok = _estimate_tokens(block)
-        if windows and used_tokens + tok > cap_tokens:
+        if (
+            cap_tokens is not None
+            and windows
+            and used_tokens + tok > cap_tokens
+        ):
             break
         windows.append(block)
+        shown.extend(members)
         used_tokens += tok
-    return "\n...\n".join(windows)
+    return HIT_GAP_NOTE.join(windows) if len(windows) > 1 else (windows[0] if windows else ""), shown
 
 
 def stitch_group_hits(
@@ -236,33 +268,61 @@ def stitch_group_hits(
     meeting_meta: dict[str, dict[str, Any]],
     *,
     glue: int = 2,
-    cap_tokens: int = 3000,
+    cap_tokens: int | None = None,
 ) -> str:
     """Group packs by meeting (date order), stitch inside, never cross meetings."""
+    text, _shown = stitch_group_hits_and_keys(
+        hit_packs, meeting_meta, glue=glue, cap_tokens=cap_tokens
+    )
+    return text
+
+
+def stitch_group_hits_and_keys(
+    hit_packs: list[dict[str, Any]],
+    meeting_meta: dict[str, dict[str, Any]],
+    *,
+    glue: int = 2,
+    cap_tokens: int | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Like stitch_group_hits, plus packs that actually landed in the text."""
     from collections import defaultdict
 
     if not hit_packs:
-        return ""
+        return "", []
     by_mid: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for pack in hit_packs:
         mid = str(pack.get("meeting_id") or "")
         if mid:
             by_mid[mid].append(pack)
+    for mid, packs in list(by_mid.items()):
+        ranked = sorted(
+            packs,
+            key=lambda p: (-(_pack_score(p) or 0.0), int(p.get("pack_index") or 0)),
+        )
+        by_mid[mid] = ranked[:TOP_PACKS_PER_MEETING]
 
     def _sort_key(mid: str) -> tuple:
         meta = meeting_meta.get(mid) or {}
-        return (str(meta.get("date") or ""), int(meta.get("n") or 0), mid)
+        packs = by_mid.get(mid) or []
+        scores = [_pack_score(p) for p in packs]
+        nums = [s for s in scores if s is not None]
+        best = max(nums) if nums else 0.0
+        return (-best, str(meta.get("date") or ""), int(meta.get("n") or 0), mid)
 
     blocks: list[str] = []
+    shown: list[dict[str, Any]] = []
     used = 0
+    n_meet = max(1, len(by_mid))
     for mid in sorted(by_mid.keys(), key=_sort_key):
         meta = meeting_meta.get(mid) or {}
         title = str(meta.get("title") or mid)
-        header_lines = [
-            f"## Meeting: {title}",
-            f"n: {int(meta.get('n') or 0)}",
-            f"id: {mid}",
-        ]
+        header_lines = [f"## Meeting: {title}"]
+        # Group numbering only exists in Group Chat (cite [n:k]); in Chat /
+        # Quick Chat n is always 0 — emitting it just teaches the model a
+        # citation format its surface must not use.
+        if int(meta.get("n") or 0) > 0:
+            header_lines.append(f"n: {int(meta.get('n') or 0)}")
+        header_lines.append(f"id: {mid}")
         if meta.get("date"):
             header_lines.append(f"date: {meta['date']}")
         speakers = meta.get("speakers") or {}
@@ -271,24 +331,26 @@ def stitch_group_hits(
             if names:
                 header_lines.append(f"speakers: {names}")
         sentences = list(meta.get("sentences") or [])
-        body = stitch_packs(
-            sentences, by_mid[mid], glue=glue, cap_tokens=max(400, cap_tokens - used)
+        inner_cap: int | None = None
+        if cap_tokens is not None:
+            share = max(400, cap_tokens // n_meet)
+            inner_cap = min(share, max(400, cap_tokens - used))
+        body, used_packs = stitch_packs_and_keys(
+            sentences,
+            by_mid[mid],
+            glue=glue,
+            cap_tokens=inner_cap,
         )
         if not body:
             continue
-        if "\n...\n" in body:
-            body = body.replace(
-                "\n...\n",
-                "\n[Note: intermediate sentences omitted — not directly relevant "
-                "to the query.]\n",
-            )
         block = "\n".join(header_lines) + "\n\n" + body
         tok = _estimate_tokens(block)
-        if blocks and used + tok > cap_tokens:
+        if cap_tokens is not None and blocks and used + tok > cap_tokens:
             break
         blocks.append(block)
+        shown.extend(used_packs)
         used += tok
-    return "\n\n".join(blocks)
+    return "\n\n".join(blocks), shown
 
 
 def group_cites_from_hits(
@@ -424,29 +486,119 @@ def meeting_search_filter(meeting_id: str, speaker_ids: list[str] | None = None)
     return Filter(must=must)
 
 
-def group_search_filter(meetings: list[dict[str, Any]]):
+def group_search_filter(
+    meetings: list[dict[str, Any]],
+    exclude_point_ids: list[str] | None = None,
+):
     """One Qdrant filter for several meetings. Local speaker ids never cross meetings."""
-    from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
+    from qdrant_client.models import (
+        FieldCondition,
+        Filter,
+        HasIdCondition,
+        MatchAny,
+        MatchValue,
+    )
 
     rows = [m for m in meetings if (m.get("meeting_id") or "").strip()]
     if not rows:
-        return Filter(
+        filt = Filter(
             must=[FieldCondition(key="meeting_id", match=MatchValue(value="__none__"))]
         )
-    if all(not m.get("speaker_ids") for m in rows):
+    elif all(not m.get("speaker_ids") for m in rows):
         ids = [str(m["meeting_id"]) for m in rows]
-        return Filter(
+        filt = Filter(
             must=[FieldCondition(key="meeting_id", match=MatchAny(any=ids))]
         )
-    should: list = []
-    for m in rows:
-        mid = str(m["meeting_id"])
-        must = [FieldCondition(key="meeting_id", match=MatchValue(value=mid))]
-        spk = m.get("speaker_ids") or None
-        if spk:
-            must.append(FieldCondition(key="speakers", match=MatchAny(any=list(spk))))
-        should.append(Filter(must=must))
-    return Filter(should=should)
+    else:
+        should: list = []
+        for m in rows:
+            mid = str(m["meeting_id"])
+            must = [FieldCondition(key="meeting_id", match=MatchValue(value=mid))]
+            spk = m.get("speaker_ids") or None
+            if spk:
+                must.append(FieldCondition(key="speakers", match=MatchAny(any=list(spk))))
+            should.append(Filter(must=must))
+        filt = Filter(should=should)
+    ids = [str(x) for x in (exclude_point_ids or []) if str(x).strip()]
+    if not ids:
+        return filt
+    return Filter(
+        must=list(filt.must or []) or None,
+        should=list(filt.should or []) or None,
+        must_not=[HasIdCondition(has_id=ids)],
+    )
+
+
+def select_diverse_items(
+    items: list,
+    *,
+    meeting_id_of,
+    pack_index_of,
+    top_k: int = 10,
+    max_per_meeting: int = TOP_PACKS_PER_MEETING,
+    min_index_gap: int = 3,
+) -> list:
+    """Prefer spread packs across meetings; fill remaining slots from leftovers."""
+    if not items or top_k <= 0:
+        return []
+    selected: list = []
+    per: dict[str, int] = {}
+    chosen_idx: dict[str, list[int]] = {}
+    deferred: list = []
+    for item in items:
+        if len(selected) >= top_k:
+            break
+        mid = str(meeting_id_of(item) or "")
+        try:
+            idx = int(pack_index_of(item) or 0)
+        except (TypeError, ValueError):
+            idx = 0
+        if per.get(mid, 0) >= max_per_meeting:
+            deferred.append(item)
+            continue
+        prev = chosen_idx.get(mid) or []
+        if any(abs(idx - p) < min_index_gap for p in prev):
+            deferred.append(item)
+            continue
+        selected.append(item)
+        per[mid] = per.get(mid, 0) + 1
+        chosen_idx.setdefault(mid, []).append(idx)
+    for item in deferred:
+        if len(selected) >= top_k:
+            break
+        selected.append(item)
+    return selected
+
+
+def select_diverse_hits(
+    hits: list[dict[str, Any]],
+    *,
+    top_k: int = 10,
+    max_per_meeting: int = TOP_PACKS_PER_MEETING,
+    min_index_gap: int = 3,
+) -> list[dict[str, Any]]:
+    return select_diverse_items(
+        hits,
+        meeting_id_of=lambda h: str((h or {}).get("meeting_id") or ""),
+        pack_index_of=lambda h: int((h or {}).get("pack_index") or 0),
+        top_k=top_k,
+        max_per_meeting=max_per_meeting,
+        min_index_gap=min_index_gap,
+    )
+
+
+def _point_ids_from_pack_keys(keys: set[str] | list[str] | None) -> list[str]:
+    out: list[str] = []
+    for key in keys or []:
+        raw = str(key or "").strip()
+        if ":" not in raw:
+            continue
+        mid, _, idx_s = raw.rpartition(":")
+        try:
+            out.append(_point_id(mid, int(idx_s)))
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def purge_meeting_transcripts(meeting_id: str) -> None:
@@ -716,6 +868,19 @@ def _spoken_text_from_chunk(chunk: Any) -> str:
     return "\n".join(lines)
 
 
+def _rerank_or_truncate(query: str, chunks: list, reranker, top_k: int) -> list:
+    """Rerank if possible; never raise — lookup must not kill the Chat stream."""
+    if not chunks:
+        return []
+    if reranker is None:
+        return chunks[:top_k]
+    try:
+        return reranker.rerank(query, chunks, top_k=top_k)
+    except Exception as e:
+        logger.warning("[TX_INDEX] rerank failed (%s), using retrieve order", e)
+        return chunks[:top_k]
+
+
 def search_transcript_packs(
     query: str,
     *,
@@ -748,7 +913,7 @@ def search_transcript_packs(
         if filled:
             c.text = filled
     if use_rerank and chunks:
-        chunks = reranker.rerank(query, chunks, top_k=top_k)
+        chunks = _rerank_or_truncate(query, chunks, reranker, top_k)
     else:
         chunks = chunks[:top_k]
     packs: list[dict[str, Any]] = []
@@ -785,13 +950,24 @@ def search_group_transcript_packs(
     retriever=None,
     reranker=None,
     skip_rerank: bool = False,
+    exclude_pack_keys: set[str] | list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """One hybrid retrieve across meetings. ``meetings`` are filter clauses."""
     if retriever is None or not meetings:
         return []
     use_rerank = reranker is not None and not skip_rerank
-    search_k = 20 if use_rerank else max(top_k, 10)
-    filt = group_search_filter(meetings)
+    n_meet = max(1, len(meetings))
+    keep = min(40, max(top_k, TOP_PACKS_PER_MEETING * n_meet))
+    search_k = min(50, max(20, 6 * n_meet, keep + 10))
+    exclude_keys = {
+        str(k).strip() for k in (exclude_pack_keys or []) if str(k).strip()
+    }
+    if exclude_keys:
+        search_k = min(50, search_k + len(exclude_keys))
+    filt = group_search_filter(
+        meetings,
+        exclude_point_ids=_point_ids_from_pack_keys(exclude_keys) or None,
+    )
     chunks = retriever.retrieve(
         query,
         collection=TRANSCRIPT_COLLECTION,
@@ -803,19 +979,45 @@ def search_group_transcript_packs(
         filled = _spoken_text_from_chunk(c)
         if filled:
             c.text = filled
+
+    def _chunk_mid(c) -> str:
+        meta = getattr(c, "metadata", None) or {}
+        return str(meta.get("meeting_id") or "")
+
+    def _chunk_idx(c) -> int:
+        meta = getattr(c, "metadata", None) or {}
+        try:
+            return int(meta.get("pack_index") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    pre_k = keep if not use_rerank else min(50, max(keep, 16))
+    chunks = select_diverse_items(
+        chunks,
+        meeting_id_of=_chunk_mid,
+        pack_index_of=_chunk_idx,
+        top_k=pre_k,
+        max_per_meeting=TOP_PACKS_PER_MEETING,
+    )
     if use_rerank and chunks:
-        chunks = reranker.rerank(query, chunks, top_k=top_k)
+        chunks = _rerank_or_truncate(query, chunks, reranker, keep)
     else:
-        chunks = chunks[:top_k]
+        chunks = chunks[:keep]
     packs: list[dict[str, Any]] = []
     for c in chunks:
         meta = dict(getattr(c, "metadata", None) or {})
         if meta.get("sentences"):
+            try:
+                meta["_score"] = float(getattr(c, "score", 0) or 0)
+            except (TypeError, ValueError):
+                meta["_score"] = 0.0
             packs.append(meta)
     logger.info(
-        "[TX_INDEX] group search q=%r meetings=%d out=%d",
+        "[TX_INDEX] group search q=%r meetings=%d exclude=%d rerank=%s out=%d",
         (query or "")[:80],
         len(meetings),
+        len(exclude_keys),
+        "yes" if use_rerank else "no",
         len(packs),
     )
     return packs
@@ -928,6 +1130,61 @@ def transcript_pack_key(pack: dict[str, Any]) -> str:
     return f"{pack.get('meeting_id') or ''}:{int(pack.get('pack_index') or 0)}"
 
 
+def merge_hit_packs(*groups: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Dedupe packs by meeting_id:pack_index, keeping the first copy."""
+    by_key: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for group in groups:
+        for pack in group or []:
+            if not isinstance(pack, dict):
+                continue
+            key = transcript_pack_key(pack)
+            if not key or key.startswith(":"):
+                continue
+            if key not in by_key:
+                order.append(key)
+                by_key[key] = pack
+    return [by_key[k] for k in order]
+
+
+def _pack_score(pack: dict[str, Any] | None) -> float | None:
+    if not pack:
+        return None
+    raw = pack.get("_score", pack.get("score"))
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def select_new_hits(
+    hits: list[dict[str, Any]],
+    *,
+    prior_hits: list[dict[str, Any]] | None = None,
+    min_ratio: float = 0.6,
+    max_new: int = 6,
+) -> list[dict[str, Any]]:
+    """Drop exclude-then-search leftovers that are much weaker than packs already kept."""
+    if not hits:
+        return []
+    if not prior_hits:
+        return list(hits)
+    prior_scores = [s for s in (_pack_score(p) for p in prior_hits) if s is not None]
+    bar: float | None = None
+    if prior_scores:
+        bar = min(prior_scores) * min_ratio
+    else:
+        new_scores = [s for s in (_pack_score(h) for h in hits) if s is not None]
+        if new_scores:
+            bar = max(new_scores) * 0.65
+    if bar is None:
+        return list(hits)[:max_new]
+    kept = [h for h in hits if (_pack_score(h) or 0.0) >= bar]
+    return kept[:max_new]
+
+
 def apply_turn_pack_dedupe(
     result: dict[str, Any],
     sentences: list[dict[str, Any]],
@@ -959,7 +1216,8 @@ def lookup_json_and_keys(
     speaker_scope: str = "auto",
     user_question: str = "",
     seen_pack_keys: set[str] | None = None,
-) -> tuple[str, set[str]]:
+    prior_hits: list[dict[str, Any]] | None = None,
+) -> tuple[str, set[str], list[dict[str, Any]]]:
     """Lookup JSON for the LLM, plus pack keys found (to mark seen this turn)."""
     import json
 
@@ -993,8 +1251,18 @@ def lookup_json_and_keys(
         sentences=sentences,
         search_fn=search_fn,
     )
-    seen = seen_pack_keys or set()
-    result, found = apply_turn_pack_dedupe(result, sentences, seen)
+    prior = merge_hit_packs(prior_hits)
+    seen = {str(k).strip() for k in (seen_pack_keys or []) if str(k).strip()}
+    seen |= {transcript_pack_key(h) for h in prior}
+    hits = list(result.get("hits") or [])
+    this_keys = {transcript_pack_key(h) for h in hits}
+    new_hits = [h for h in hits if transcript_pack_key(h) not in seen]
+    merged = merge_hit_packs(prior, new_hits)
+    context = (
+        stitch_packs(sentences, merged, glue=2, cap_tokens=3000)
+        if merged
+        else ""
+    )
     names = {sid: mapping.get(sid) or sid for sid in (spk or [])}
     body = {
         "meeting_id": meeting_id,
@@ -1002,14 +1270,19 @@ def lookup_json_and_keys(
             "speaker_ids": result.get("filter_applied", {}).get("speaker_ids"),
             "display_names": names,
         },
-        "context": result.get("context") or "",
+        "context": context,
         "preview_unfiltered": result.get("preview_unfiltered") or "",
-        "hit_count": len(result.get("hits") or []),
+        "hit_count": len(merged),
     }
-    if seen and body["context"]:
-        body["message"] = "Additional packs this turn."
+    found = seen | this_keys
+    if prior and not new_hits and body["context"]:
+        body["message"] = LOOKUP_NO_NEW_PACKS_MSG
+    elif seen and new_hits:
+        body["message"] = (
+            "New ranked packs for this query; already-returned packs were not repeated."
+        )
     elif seen and found and not body["context"] and not body["preview_unfiltered"]:
-        body["message"] = "No additional packs this turn."
+        body["message"] = LOOKUP_NO_NEW_PACKS_MSG
     elif not body["context"] and not body["preview_unfiltered"]:
         body["message"] = "No matching transcript packs."
     elif not body["context"] and body["preview_unfiltered"]:
@@ -1017,7 +1290,7 @@ def lookup_json_and_keys(
             "No packs for the named speaker. preview_unfiltered shows who may "
             "have said this; ask the user before speaker_scope=all."
         )
-    return json.dumps(body, ensure_ascii=False), found
+    return json.dumps(body, ensure_ascii=False), found, merged
 
 
 def execute_lookup_json(
@@ -1028,7 +1301,7 @@ def execute_lookup_json(
     user_question: str = "",
 ) -> str:
     """Tool payload for lookup_meeting_transcript (MCP / single-shot)."""
-    raw, _found = lookup_json_and_keys(
+    raw, _found, _hits = lookup_json_and_keys(
         meeting_id,
         query,
         speaker_scope=speaker_scope,
@@ -1037,48 +1310,57 @@ def execute_lookup_json(
     return raw
 
 
-def execute_group_lookup_json(
-    group_id: str,
+def execute_meetings_lookup_json(
+    target_ids: list[str],
     query: str,
     *,
-    meeting_ids: list[str] | None = None,
     speaker_scope: str = "auto",
     user_question: str = "",
+    group_n: dict[str, int] | None = None,
+    group_id: str | None = None,
+    seen_pack_keys: set[str] | None = None,
 ) -> str:
-    """One group search. meeting_ids must be members; unindexed meetings are skipped."""
+    """Search spoken transcripts for an explicit meeting id list."""
+    raw, _found, _hits = execute_meetings_lookup_json_and_keys(
+        target_ids,
+        query,
+        speaker_scope=speaker_scope,
+        user_question=user_question,
+        group_n=group_n,
+        group_id=group_id,
+        seen_pack_keys=seen_pack_keys,
+    )
+    return raw
+
+
+def execute_meetings_lookup_json_and_keys(
+    target_ids: list[str],
+    query: str,
+    *,
+    speaker_scope: str = "auto",
+    user_question: str = "",
+    group_n: dict[str, int] | None = None,
+    group_id: str | None = None,
+    seen_pack_keys: set[str] | None = None,
+    prior_hits: list[dict[str, Any]] | None = None,
+    cap_tokens: int | None = None,
+) -> tuple[str, set[str], list[dict[str, Any]]]:
+    """Search transcripts; return JSON, keys to exclude next, accumulated packs."""
     import json
 
-    from src.meeting.group_store import get_group
     from src.meeting import store
     from src.services import services
 
-    group = get_group(group_id)
-    if group is None:
-        return json.dumps({"error": "Group not found", "context": "", "hit_count": 0})
-    member_ids = [m.meeting_id for m in group.members]
-    by_n = {m.meeting_id: m.n for m in group.members}
-    requested = [str(x).strip() for x in (meeting_ids or []) if str(x).strip()]
-    if requested:
-        unknown = [mid for mid in requested if mid not in member_ids]
-        if unknown:
-            return json.dumps(
-                {
-                    "error": "meeting_id not in this group",
-                    "unknown": unknown,
-                    "context": "",
-                    "hit_count": 0,
-                },
-                ensure_ascii=False,
-            )
-        target = requested
-    else:
-        target = list(member_ids)
-
+    target = [str(x).strip() for x in target_ids if str(x).strip()]
+    by_n = group_n or {}
     unindexed: list[str] = []
     clauses: list[dict[str, Any]] = []
     meta: dict[str, dict[str, Any]] = {}
     scope_all = (speaker_scope or "auto").lower() == "all"
     question = user_question or query
+    prior = merge_hit_packs(prior_hits)
+    seen = {str(k).strip() for k in (seen_pack_keys or []) if str(k).strip()}
+    seen |= {transcript_pack_key(h) for h in prior}
 
     for mid in target:
         meeting = store.get_meeting(mid)
@@ -1099,7 +1381,6 @@ def execute_group_lookup_json(
             "title": title,
             "date": date,
             "speakers": mapping,
-            "sentences": load_sentences_for_meeting(mid),
         }
         clauses.append({"meeting_id": mid, "speaker_ids": spk})
 
@@ -1110,29 +1391,109 @@ def execute_group_lookup_json(
             meetings=clauses,
             retriever=services.retriever,
             reranker=services.reranker,
+            skip_rerank=False,
+            exclude_pack_keys=seen or None,
         )
-    context = stitch_group_hits(hits, meta) if hits else ""
-    cites = group_cites_from_hits(hits, meta)
-    body = {
-        "group_id": group_id,
+    new_hits = [h for h in hits if transcript_pack_key(h) not in seen]
+    new_hits = select_new_hits(new_hits, prior_hits=prior)
+    merged = merge_hit_packs(prior, new_hits)
+    stitch_hits = merged
+    hit_mids = {
+        str(h.get("meeting_id") or "").strip()
+        for h in stitch_hits
+        if str(h.get("meeting_id") or "").strip()
+    }
+    for mid in hit_mids:
+        if mid not in meta:
+            meta[mid] = {"n": 0, "title": mid, "date": "", "speakers": {}}
+        meta[mid]["sentences"] = load_sentences_for_meeting(mid)
+    glue = 2 if (prior and new_hits) else (0 if seen else 2)
+    context, shown = (
+        stitch_group_hits_and_keys(
+            stitch_hits,
+            meta,
+            glue=glue,
+            cap_tokens=cap_tokens,
+        )
+        if stitch_hits
+        else ("", [])
+    )
+    found = {transcript_pack_key(h) for h in merged}
+    cites = group_cites_from_hits(shown, meta)
+    searched = [c["meeting_id"] for c in clauses]
+    titles = {mid: (meta.get(mid) or {}).get("title") or mid for mid in searched}
+    body: dict[str, Any] = {
         "context": context,
-        "hit_count": len(hits),
+        "hit_count": len(shown),
         "unindexed": unindexed,
-        "meetings_searched": [c["meeting_id"] for c in clauses],
+        "meetings_searched": searched,
+        "meeting_titles": titles,
         "cites": cites,
-        "cite_as": (
+    }
+    if group_id:
+        body["group_id"] = group_id
+        body["cite_as"] = (
             "[n:k] — n is the meeting header n, k is [ref:k] in the excerpts. "
             "The UI renumbers chips 1,2,3 in appearance order. Do not paste excerpt lines."
-        ),
-    }
-    if unindexed:
+        )
+    if prior and new_hits:
+        body["message"] = "Merged with earlier transcript hits this turn."
+    elif seen and new_hits:
         body["message"] = (
-            "Some meetings in this group have no transcript index yet: "
-            + ", ".join(unindexed)
+            "New ranked packs for this query; already-returned packs were not repeated."
+        )
+    elif prior and not new_hits:
+        body["message"] = LOOKUP_NO_NEW_PACKS_MSG
+    elif seen and not new_hits:
+        body["message"] = LOOKUP_NO_NEW_PACKS_MSG
+    elif unindexed:
+        body["message"] = (
+            "Some meetings have no transcript index yet: " + ", ".join(unindexed)
         )
     elif not context:
         body["message"] = "No matching transcript packs."
-    return json.dumps(body, ensure_ascii=False)
+    return json.dumps(body, ensure_ascii=False), found, merged
+
+
+def execute_group_lookup_json(
+    group_id: str,
+    query: str,
+    *,
+    meeting_ids: list[str] | None = None,
+    speaker_scope: str = "auto",
+    user_question: str = "",
+) -> str:
+    """Group search. meeting_ids must be members; unindexed meetings are skipped."""
+    import json
+
+    from src.meeting.catalog import select_lookup_targets
+    from src.meeting.group_store import get_group
+
+    group = get_group(group_id)
+    if group is None:
+        return json.dumps({"error": "Group not found", "context": "", "hit_count": 0})
+    member_ids = [m.meeting_id for m in group.members]
+    by_n = {m.meeting_id: m.n for m in group.members}
+    requested = [str(x).strip() for x in (meeting_ids or []) if str(x).strip()]
+    target, err = select_lookup_targets(member_ids, requested or None)
+    if err:
+        return json.dumps(
+            {
+                "error": "meeting_id not in this group",
+                "unknown": err.split(": ", 1)[-1].split(", "),
+                "context": "",
+                "hit_count": 0,
+            },
+            ensure_ascii=False,
+        )
+    return execute_meetings_lookup_json(
+        target or [],
+        query,
+        speaker_scope=speaker_scope,
+        user_question=user_question,
+        group_n=by_n,
+        group_id=group_id,
+    )
 
 
 def hit_count_from_lookup_json(raw: str) -> int:

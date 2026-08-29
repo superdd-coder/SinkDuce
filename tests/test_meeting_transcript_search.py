@@ -45,3 +45,61 @@ def test_search_transcript_packs_reranks_when_payload_text_missing():
     provider.rerank.assert_called_once()
     docs = provider.rerank.call_args.args[1]
     assert any("Q3 延期了" in doc for doc in docs)
+
+
+def test_group_search_survives_rerank_timeout():
+    from src.meeting.transcript_index import search_group_transcript_packs
+
+    chunk = RetrievedChunk(
+        text="water price 230",
+        score=0.9,
+        metadata={
+            "meeting_id": "m1",
+            "pack_index": 0,
+            "sentences": [
+                {"ref_n": 1, "text": "water price 230", "sentence_id": "s1"},
+            ],
+        },
+    )
+    retriever = MagicMock()
+    retriever.retrieve.return_value = [chunk]
+    reranker = MagicMock()
+    reranker.rerank.side_effect = TimeoutError("handshake timed out")
+
+    packs = search_group_transcript_packs(
+        "water",
+        meetings=[{"meeting_id": "m1", "speaker_ids": None}],
+        retriever=retriever,
+        reranker=reranker,
+    )
+    assert packs
+    assert packs[0]["sentences"][0]["text"] == "water price 230"
+
+
+def test_single_search_survives_rerank_timeout():
+    from src.meeting.transcript_index import search_transcript_packs
+
+    chunk = RetrievedChunk(
+        text="Q3 延期了",
+        score=0.9,
+        metadata={
+            "meeting_id": "m1",
+            "pack_index": 0,
+            "sentences": [
+                {"ref_n": 1, "text": "Q3 延期了", "sentence_id": "stt_0001"},
+            ],
+        },
+    )
+    retriever = MagicMock()
+    retriever.retrieve.return_value = [chunk]
+    reranker = MagicMock()
+    reranker.rerank.side_effect = TimeoutError("handshake timed out")
+
+    packs = search_transcript_packs(
+        "Q3",
+        meeting_id="m1",
+        retriever=retriever,
+        reranker=reranker,
+    )
+    assert packs
+    assert packs[0]["sentences"][0]["text"] == "Q3 延期了"

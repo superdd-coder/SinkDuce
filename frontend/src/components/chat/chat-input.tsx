@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, type KeyboardEvent } from "react"
 import { createPortal } from "react-dom"
 import { useShallow } from "zustand/react/shallow"
-import { Globe, Sparkles } from "lucide-react"
+import { ChevronRight, Globe, Sparkles } from "lucide-react"
 import { useAppStore } from "@/stores/app-store"
 import { useStreamChat } from "@/hooks/use-stream"
 import { uploadFiles } from "@/api/client"
@@ -137,7 +137,12 @@ export function ChatInput() {
   // Reposition open menus on scroll/resize
   useEffect(() => {
     if (!showCollections && !showProviderMenu) return
-    const bump = () => setMenuTick((t) => t + 1)
+    const bump = () => {
+      // Chat pins the thread while streaming; capture-phase scroll would
+      // setState every token and hit React error #185 (max update depth).
+      if (useAppStore.getState().isStreaming) return
+      setMenuTick((t) => t + 1)
+    }
     window.addEventListener("resize", bump)
     window.addEventListener("scroll", bump, true)
     return () => {
@@ -362,12 +367,7 @@ export function ChatInput() {
                 left: provHostRect ? provHostRect.left : 0,
               }}
             >
-              <div
-                className={cn(
-                  "pm-chat-pop-col",
-                  hoveredProvider && "is-split",
-                )}
-              >
+              <div className="pm-chat-pop-col">
                 <button
                   type="button"
                   className={cn(
@@ -410,7 +410,9 @@ export function ChatInput() {
                         </span>
                       </span>
                       {provModels.length > 0 && (
-                        <span className="pm-chat-pop-item-arrow">→</span>
+                        <span className="pm-chat-pop-item-arrow" aria-hidden>
+                          <ChevronRight className="size-3" strokeWidth={1.75} />
+                        </span>
                       )}
                       <span className="pm-chat-pop-item-wipe" aria-hidden />
                     </button>

@@ -22,6 +22,7 @@ def test_todo_crud_is_defined_in_todos_module():
         "create_todo",
         "update_todo",
         "delete_todo",
+        "get_todo",
         "link_todo_node",
     ):
         assert getattr(service, name) is getattr(todos, name)

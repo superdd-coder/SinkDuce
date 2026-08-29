@@ -72,6 +72,17 @@ export const updateFolder = (collectionId: string, folderId: string, body: Folde
 export const deleteFolder = (collectionId: string, folderId: string) =>
   req<void>(`/${collectionId}/folders/${folderId}`, { method: "DELETE" })
 
+export const toggleFolderArchive = (
+  collectionId: string,
+  folderId: string,
+  archived: boolean,
+  version: number
+) =>
+  req<Folder>(`/${collectionId}/folders/${folderId}/archive`, {
+    method: "PATCH",
+    body: JSON.stringify({ archived, version }),
+  })
+
 export const getFolderFiles = (collectionId: string, folderId: string) =>
   req<FileSummary[]>(`/${collectionId}/folders/${folderId}/files`)
 

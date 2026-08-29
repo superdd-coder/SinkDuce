@@ -42,6 +42,11 @@ class WebSearchConfirmRequest(BaseModel):
     approved: bool
 
 
+class TodoDeleteConfirmRequest(BaseModel):
+    confirm_id: str
+    approved: bool
+
+
 class SessionResponse(BaseModel):
     id: str
     title: str
@@ -327,5 +332,26 @@ def confirm_web_search(body: WebSearchConfirmRequest = Body(...)):
         raise HTTPException(
             404,
             f"No pending web-search confirmation for id={confirm_id}",
+        )
+    return {"ok": True, "confirm_id": confirm_id, "approved": body.approved}
+
+
+@router.post("/chat/todo-delete-confirm")
+async def confirm_todo_delete(body: TodoDeleteConfirmRequest = Body(...)):
+    """Approve or deny a pending Chat todo-delete HITL request from SSE.
+
+    Async so it does not compete with ``wait()`` for the default thread pool
+    (the stream holds a worker on ``Event.wait`` until this resolve).
+    """
+    from src.chatbox.todo_delete_confirm import todo_delete_confirm_store
+
+    confirm_id = (body.confirm_id or "").strip()
+    if not confirm_id:
+        raise HTTPException(400, "confirm_id is required")
+    ok = todo_delete_confirm_store.resolve(confirm_id, body.approved)
+    if not ok:
+        raise HTTPException(
+            404,
+            f"No pending todo-delete confirmation for id={confirm_id}",
         )
     return {"ok": True, "confirm_id": confirm_id, "approved": body.approved}

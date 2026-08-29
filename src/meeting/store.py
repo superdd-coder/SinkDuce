@@ -10,6 +10,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from .models import Meeting, MeetingMode, MeetingStatus, ProcessingState, GenerationState, TranscriptionResult
 from src.config import DATA_DIR
@@ -80,12 +81,49 @@ def _write_json(path: Path, data: dict) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(path)
+    _read_cache_evict(path)
 
 
 def _read_json(path: Path) -> dict | None:
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+# ── Read cache (mtime-validated) ─────────────────────────────────────
+# meta.json / sentences.json / section md are re-read several times per
+# chat turn (catalog, digest, lookup stitching). Cache the parsed value
+# keyed by path and revalidate with st_mtime_ns. Every write goes through
+# _write_json / write_text below, so a changed mtime invalidates the entry;
+# a missing file is cached as (None, None).
+_read_cache: dict[str, tuple[int | None, Any]] = {}
+_read_cache_lock = threading.Lock()
+
+
+def _read_cached(path: Path, load):
+    """mtime-validated cache around a pure read of *path*.
+
+    ``load`` is called only on miss and must not mutate its result after
+    returning (callers get defensive copies from the public getters).
+    """
+    key = str(path)
+    try:
+        mtime: int | None = path.stat().st_mtime_ns
+    except OSError:
+        mtime = None
+    with _read_cache_lock:
+        entry = _read_cache.get(key)
+        if entry is not None and entry[0] == mtime:
+            return entry[1]
+    value = None if mtime is None else load(path)
+    with _read_cache_lock:
+        _read_cache[key] = (mtime, value)
+    return value
+
+
+def _read_cache_evict(path: Path) -> None:
+    with _read_cache_lock:
+        _read_cache.pop(str(path), None)
 
 
 def _meeting_to_dict(meeting: Meeting) -> dict:
@@ -130,7 +168,15 @@ def create_meeting(title: str, mode: MeetingMode | None = None) -> Meeting:
 
 
 def get_meeting(meeting_id: str) -> Meeting | None:
-    data = _read_json(_meeting_dir(meeting_id) / "meta.json")
+    cached = _read_cached(_meeting_dir(meeting_id) / "meta.json", _load_meeting)
+    if cached is None:
+        return None
+    # Fresh instance per call: callers mutate their Meeting freely.
+    return cached.model_copy(deep=True)
+
+
+def _load_meeting(path: Path) -> Meeting | None:
+    data = _read_json(path)
     if data is None:
         return None
     return _dict_to_meeting(data)
@@ -325,6 +371,7 @@ def save_notes(meeting_id: str, content: str) -> str:
         raise FileNotFoundError(f"Meeting {meeting_id} not found")
     notes_path = _meeting_dir(meeting_id) / "notes.md"
     notes_path.write_text(content, encoding="utf-8")
+    _read_cache_evict(notes_path)
     update_meeting(meeting_id, notes_path=str(notes_path))
     logger.info("Saved notes: %s (%d chars) for meeting %s", notes_path, len(content), meeting_id)
     return str(notes_path)
@@ -356,10 +403,14 @@ def get_transcript(meeting_id: str) -> TranscriptionResult | None:
     meeting = get_meeting(meeting_id)
     if meeting is None or meeting.transcript_path is None:
         return None
-    data = _read_json(Path(meeting.transcript_path))
+    data = _read_cached(Path(meeting.transcript_path), _load_transcript_dict)
     if data is None:
         return None
     return TranscriptionResult(**data)
+
+
+def _load_transcript_dict(path: Path) -> dict | None:
+    return _read_json(path)
 
 
 # ── Pipeline data (sentences, chunks, section markdown) ───────────────
@@ -379,7 +430,15 @@ def save_sentences(meeting_id: str, sentences: list[dict]) -> str:
 
 def get_sentences(meeting_id: str) -> list[dict] | None:
     """Return raw Sentence dicts or None if not yet computed."""
-    data = _read_json(sentences_path(meeting_id))
+    cached = _read_cached(sentences_path(meeting_id), _load_sentences)
+    if cached is None:
+        return None
+    # Fresh dicts per call so callers can mutate rows without touching the cache.
+    return [dict(s) for s in cached]
+
+
+def _load_sentences(path: Path) -> list[dict] | None:
+    data = _read_json(path)
     if data is None:
         return None
     return data.get("sentences", [])
@@ -415,15 +474,25 @@ def save_section_md(meeting_id: str, tab_id: str, content: str) -> str:
     """Write a section's generated markdown to its tab file."""
     path = section_md_path(meeting_id, tab_id)
     path.write_text(content, encoding="utf-8")
+    _read_cache_evict(path)
     return str(path)
 
 
 def get_section_md(meeting_id: str, tab_id: str) -> str | None:
     """Read a section's generated markdown or None."""
     path = section_md_path(meeting_id, tab_id)
-    if not path.exists():
+    try:
+        mtime = path.stat().st_mtime_ns
+    except OSError:
         return None
-    return path.read_text(encoding="utf-8")
+    with _read_cache_lock:
+        entry = _read_cache.get(str(path))
+        if entry is not None and entry[0] == mtime:
+            return entry[1]
+    content = path.read_text(encoding="utf-8")
+    with _read_cache_lock:
+        _read_cache[str(path)] = (mtime, content)
+    return content
 
 
 def translation_md_path(meeting_id: str, tab_id: str, lang: str) -> Path:
@@ -435,6 +504,7 @@ def save_translation_md(meeting_id: str, tab_id: str, lang: str, content: str) -
     """Write a translated summary markdown to its language file."""
     path = translation_md_path(meeting_id, tab_id, lang)
     path.write_text(content, encoding="utf-8")
+    _read_cache_evict(path)
     return str(path)
 
 

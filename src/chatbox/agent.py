@@ -20,6 +20,9 @@ from src.chatbox.query_tools import (
     TOOLS,
     WEB_SEARCH_TOOL_NAME,
     allowed_tool_names,
+    collect_todo_create_items,
+    collect_todo_delete_ids,
+    collect_todo_update_items,
     execute_structure_tool,
     execute_structure_tool_async,
     force_collection_args,
@@ -83,33 +86,48 @@ def _ui_turn_count(store, session_id: str, fallback: int | None = None) -> int:
         return int(fallback or 0)
 
 
-def _group_stream_tool_choice(
-    session_id: str,
-    *,
-    transcript_lookup_done: bool,
-    force_transcript_lookup: bool,
-):
-    """Group answers need spoken hits. After a summary-only or no-tool turn, force lookup."""
-    if not session_id.startswith("group_"):
-        return "auto"
-    if transcript_lookup_done:
-        return "auto"
-    if force_transcript_lookup:
-        return {
-            "type": "function",
-            "function": {"name": "lookup_group_transcript"},
-        }
-    return "auto"
-
-
 async def _run_blocking(fn, /, *args, **kwargs):
     """Run sync retrieval/LLM-adjacent work off the asyncio event loop."""
     return await asyncio.to_thread(fn, *args, **kwargs)
 
 
-def _thinking_on_for_tool_round(thinking: bool, tool_choice) -> bool:
-    """DashScope/Qwen thinking rejects a forced function tool_choice."""
+def _new_stream_tool_names(
+    acc: dict, seen: set, known: set[str],
+) -> list[tuple[int, str]]:
+    """Tool names that just became complete (full schema name, not a prefix)."""
+    out: list[tuple[int, str]] = []
+    for idx in sorted(acc):
+        if idx in seen:
+            continue
+        fn = (acc[idx].get("function") or {}) if isinstance(acc[idx], dict) else {}
+        name = str(fn.get("name") or "")
+        if name in known:
+            out.append((idx, name))
+    return out
+
+
+def _preview_stream_tool_name(
+    acc: dict, seen: set, known: set[str],
+) -> str | None:
+    """Only the first tool in a batch — later tools start when they actually run."""
+    for idx, name in _new_stream_tool_names(acc, seen, known):
+        if idx == 0:
+            return name
+    return None
+
+
+def _thinking_on_for_tool_round(
+    thinking: bool, tool_choice, extra_messages: list | None = None,
+) -> bool:
+    """Thinking only on the first planning round this turn.
+
+    After lookup/search returns, thinking makes Chat and Group sit silently
+    on a large tool body before the next tool or answer. Forced function
+    tool_choice also cannot use thinking on Qwen.
+    """
     if not thinking:
+        return False
+    if extra_messages:
         return False
     if isinstance(tool_choice, dict):
         return False
@@ -164,6 +182,172 @@ def _build_meeting_ephemeral_context(meeting_id: str) -> str:
     return build_meeting_ephemeral_context(meeting_id)
 
 
+def _build_user_identity_line() -> str:
+    """'Current user: <name>' for the person marked as Me; empty when unset.
+
+    Me is the People entry (voice enrollment) flagged via speakers settings —
+    the same identity `list_todos mine=true` filters by.
+    """
+    try:
+        from src.speakers.store import get_me_person_id, get_person
+
+        pid = get_me_person_id()
+        if not pid:
+            return ""
+        person = get_person(pid)
+        name = (person.display_name if person else "").strip()
+        if not name:
+            return ""
+        return f"Current user: {name} (the person you are assisting)."
+    except Exception:
+        return ""
+
+
+def _build_surface_context(
+    session_id: str, collections: list[str] | None
+) -> str | None:
+    """Ephemeral per-turn context by surface, or None when nothing applies.
+
+    meeting_: speakers + General summary (as before).
+    group_:   member roster (ids, n, dates, index status).
+    quick_/agentic Chat: minimal meeting catalog digest — titles + dates only,
+    so the model can judge meeting relevance without a catalog tool round.
+    Every surface is prefixed with the user identity line when Me is set.
+    """
+    if session_id.startswith("meeting_"):
+        surface = _build_meeting_ephemeral_context(session_id[len("meeting_"):])
+    elif session_id.startswith("group_"):
+        from src.chatbox.meeting_context import build_group_ephemeral_context
+
+        surface = build_group_ephemeral_context(session_id[len("group_"):])
+    else:
+        from src.chatbox.meeting_context import build_meeting_catalog_digest
+
+        surface = build_meeting_catalog_digest(collections) or None
+    identity = _build_user_identity_line()
+    if identity:
+        surface = f"{identity}\n\n{surface}" if surface else identity
+    return surface
+
+
+def _meeting_scope_kwargs(
+    session_id: str,
+    args: dict,
+    forced_col: str | None,
+    collections: list[str] | None = None,
+) -> dict:
+    if session_id.startswith("meeting_"):
+        return {"meeting_id": session_id[len("meeting_"):]}
+    if session_id.startswith("group_"):
+        return {"group_id": session_id[len("group_"):]}
+    col = (forced_col or str((args or {}).get("collection") or "")).strip()
+    selected = [str(c).strip() for c in (collections or []) if str(c).strip()]
+    if forced_col:
+        return {"collection": forced_col}
+    return {
+        "collection": col or None,
+        "collections": selected or None,
+    }
+
+
+def _run_list_meeting_catalog(
+    session_id: str,
+    args: dict,
+    forced_col: str | None,
+    collections: list[str] | None = None,
+) -> str:
+    from src.meeting.catalog import catalog_tool_json
+
+    kw = _meeting_scope_kwargs(session_id, args, forced_col, collections)
+    return catalog_tool_json(
+        collection=kw.get("collection"),
+        collections=kw.get("collections"),
+        group_id=kw.get("group_id"),
+    )
+
+
+def _run_read_meeting_summary(
+    session_id: str,
+    args: dict,
+    forced_col: str | None,
+    collections: list[str] | None = None,
+) -> str:
+    from src.meeting.catalog import read_meeting_summary_json
+
+    kw = _meeting_scope_kwargs(session_id, args, forced_col, collections)
+    return read_meeting_summary_json(
+        str((args or {}).get("meeting_id") or ""),
+        collection=kw.get("collection"),
+        collections=kw.get("collections"),
+        group_id=kw.get("group_id"),
+    )
+
+
+def _run_lookup_meeting_transcript(
+    session_id: str,
+    args: dict,
+    user_message: str,
+    forced_col: str | None,
+    seen_tx_packs: set[str],
+    collections: list[str] | None = None,
+    seen_tx_hits: list[dict] | None = None,
+) -> tuple[str, set[str], list[dict] | None, list[dict]]:
+    """Return (tool_json, pack_keys, chat_sources_or_none, kept_hit_packs).
+
+    ``kept_hit_packs`` is the merged prior+new pack list (also mirrored into
+    ``seen_tx_hits`` in place when provided) — parallel callers pass their own
+    snapshot copies and merge the kept lists afterwards.
+    """
+    query = str((args or {}).get("query") or user_message)
+    scope = str((args or {}).get("speaker_scope") or "auto")
+    if session_id.startswith("meeting_"):
+        from src.meeting.transcript_index import lookup_json_and_keys
+
+        mid = session_id[len("meeting_"):]
+        result = lookup_json_and_keys(
+            mid,
+            query,
+            speaker_scope=scope,
+            user_question=user_message,
+            seen_pack_keys=seen_tx_packs,
+            prior_hits=list(seen_tx_hits or []),
+        )
+        raw, found = result[0], result[1]
+        kept = result[2] if len(result) > 2 else list(seen_tx_hits or [])
+        if seen_tx_hits is not None:
+            seen_tx_hits[:] = kept
+        return raw, found, None, kept
+
+    from src.meeting.catalog import lookup_hits_to_chat_sources, lookup_tool_json_and_keys
+
+    raw_ids = (args or {}).get("meeting_ids")
+    mids = raw_ids if isinstance(raw_ids, list) else None
+    kw = _meeting_scope_kwargs(session_id, args, forced_col, collections)
+    prior = list(seen_tx_hits or [])
+    raw, found, kept = lookup_tool_json_and_keys(
+        query,
+        meeting_ids=mids,
+        speaker_scope=scope,
+        user_question=user_message,
+        collection=kw.get("collection"),
+        collections=kw.get("collections"),
+        group_id=kw.get("group_id"),
+        seen_pack_keys=seen_tx_packs,
+        prior_hits=prior,
+    )
+    if seen_tx_hits is not None:
+        seen_tx_hits[:] = kept
+    chat_sources = None
+    if not session_id.startswith("group_"):
+        try:
+            payload = json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError:
+            payload = {}
+        if isinstance(payload, dict) and not payload.get("error"):
+            chat_sources = lookup_hits_to_chat_sources(payload)
+    return raw, found, chat_sources, kept
+
+
 def _format_current_time() -> str:
     """Return current local time with timezone, e.g. '2026-07-03 14:30 CST (UTC+08:00)'."""
     now = datetime.now().astimezone()
@@ -191,6 +375,30 @@ _MAX_TOOL_ROUNDS = 15
 # outer rounds so web/structure tools do not burn the KB budget, and so the
 # model is pushed to answer after enough evidence instead of endless search.
 _MAX_AGENTIC_SEARCH_CALLS = 5
+# Same hard cap for *lookup_meeting_transcript*. The no-new-packs dry flag
+# only ends the loop when a query returns nothing new; a model that keeps
+# rephrasing (each variant surfacing one more weak pack) would otherwise
+# burn every outer round re-searching meetings.
+_MAX_MEETING_LOOKUP_CALLS = 5
+
+
+def _lookup_limit_json(limit: int) -> str:
+    """Tool payload telling the model the transcript-search budget is spent."""
+    import json as _json
+
+    return _json.dumps(
+        {
+            "hit_count": 0,
+            "context": "",
+            "message": (
+                f"Transcript lookup limit reached ({limit} calls this turn). "
+                "Do NOT call lookup_meeting_transcript again. Synthesize the "
+                "final answer now from the excerpts already returned in this "
+                "conversation."
+            ),
+        },
+        ensure_ascii=False,
+    )
 # Legacy row cap (tests / callers may still reference). Context window uses dialogue turns.
 _MAX_HISTORY_MESSAGES = 50
 # LLM history: count user + final-assistant answers (tool rows ride with the turn).
@@ -233,6 +441,17 @@ class ChatboxAgent:
 
     # ── helpers ──────────────────────────────────────────────────────
 
+    def _has_meetings(self, session_id: str, collections: list[str] | None) -> bool:
+        """Whether the current scope has any ingested meetings."""
+        if session_id.startswith(("meeting_", "group_")):
+            return True
+        try:
+            from src.meeting.catalog import visible_meeting_ids
+
+            return bool(visible_meeting_ids(collections=collections or []))
+        except Exception:
+            return True
+
     def _resolve_tools_and_prompt(
         self,
         mode: str,
@@ -240,6 +459,7 @@ class ChatboxAgent:
         collections: list[str] | None = None,
         *,
         web_search_enabled: bool = False,
+        has_meetings: bool = True,
     ):
         """Return (tools, system_prompt, catalog_text) for the given mode."""
         is_meeting = session_id.startswith("meeting_")
@@ -259,6 +479,7 @@ class ChatboxAgent:
                 return tools, MEETING_CHAT_SYSTEM_PROMPT, ""
             tools = tools_for_mode(
                 "direct", is_meeting=False, web_search_enabled=web_search_enabled,
+                has_meetings=has_meetings,
             )
             cols = collections or self._get_collections(session_id)
             col_name = cols[0] if cols else "this collection"
@@ -267,6 +488,7 @@ class ChatboxAgent:
         catalog_text = self._build_catalog_text(session_id, collections=collections)
         tools = tools_for_mode(
             "agentic", is_meeting=False, web_search_enabled=web_search_enabled,
+            has_meetings=has_meetings,
         )
         return tools, self._system_prompt, catalog_text
 
@@ -284,6 +506,7 @@ class ChatboxAgent:
         session_id: str,
         *,
         web_search_enabled: bool = False,
+        has_meetings: bool = True,
     ) -> bool:
         is_meeting = session_id.startswith("meeting_")
         is_group = session_id.startswith("group_")
@@ -292,6 +515,7 @@ class ChatboxAgent:
             is_meeting=is_meeting,
             is_group=is_group,
             web_search_enabled=web_search_enabled,
+            has_meetings=has_meetings,
         )
 
     def _check_session_truncation(self, session_id: str) -> int | None:
@@ -482,6 +706,12 @@ class ChatboxAgent:
         # Non-meeting: keep system_hist for rare stored system context.
         system_hist = [] if is_meeting else [m for m in hist if m.role == "system"]
         dialogue_hist = [m for m in hist if m.role != "system"]
+        # Incremental persist writes this-turn tools to DB. extra_messages is
+        # the live copy — drop the flushed tail so the LLM does not read twice.
+        if extra_messages:
+            dialogue_hist = _dialogue_hist_without_this_turn_tools(
+                dialogue_hist, user_message,
+            )
 
         for m in system_hist:
             messages.append(self._store_message_to_llm_dict(m))
@@ -533,7 +763,7 @@ class ChatboxAgent:
                 timestamped = f"[Current time: {_format_current_time()}]\n\n{user_message}"
                 messages.append({"role": "user", "content": timestamped})
 
-        return messages
+        return _collapse_superseded_lookup_results(messages)
 
     # ── non-streaming chat ───────────────────────────────────────────
 
@@ -549,25 +779,20 @@ class ChatboxAgent:
         if not user_message or not user_message.strip():
             return ChatResponse(answer="")
 
+        collections = self._get_collections(session_id)
+        has_meetings = self._has_meetings(session_id, collections)
         _tools, _sys_prompt, _cat_text = self._resolve_tools_and_prompt(
             mode, session_id, web_search_enabled=web_search_enabled,
+            has_meetings=has_meetings,
         )
         self._check_session_truncation(session_id)
 
-        collections = self._get_collections(session_id)
-        meeting_ephemeral_ctx = None
+        meeting_ephemeral_ctx = _build_surface_context(session_id, collections)
         seen_tx_packs: set[str] = set()
-        if session_id.startswith("meeting_"):
-            meeting_id = session_id[len("meeting_"):]
-            meeting_ephemeral_ctx = _build_meeting_ephemeral_context(meeting_id)
-        elif session_id.startswith("group_"):
-            from src.chatbox.meeting_context import build_group_ephemeral_context
-
-            meeting_ephemeral_ctx = build_group_ephemeral_context(
-                session_id[len("group_"):]
-            )
+        seen_tx_hits: list[dict] = []
         total_tool_calls = 0
         agentic_search_calls = 0  # search_knowledge_base only
+        meeting_lookup_calls = 0  # lookup_meeting_transcript only (hard cap)
 
         # Save user message
         self._store.add_message(session_id, "user", user_message)
@@ -576,8 +801,8 @@ class ChatboxAgent:
         extra_messages: list[dict] = []
         final_answer = ""
         all_sources: list[dict] = []
-        group_tx_called = False
-        group_force_lookup = False
+        tx_lookup_dry = False
+        last_lookup_json = ""
 
         for _round in range(_MAX_TOOL_ROUNDS):
             messages = self._build_messages(
@@ -599,14 +824,11 @@ class ChatboxAgent:
 
             # Call LLM with tools — use underlying OpenAI client directly
             # (avoids modifying the LLMProvider ABC)
+            round_tools = _drop_lookup_tool(_tools) if tx_lookup_dry else _tools
             response = self._call_llm_with_tools(
                 messages,
-                tools=_tools,
-                tool_choice=_group_stream_tool_choice(
-                    session_id,
-                    transcript_lookup_done=group_tx_called,
-                    force_transcript_lookup=group_force_lookup,
-                ),
+                tools=round_tools,
+                tool_choice="auto",
             )
 
             if response.get("tool_calls"):
@@ -620,6 +842,7 @@ class ChatboxAgent:
                     tool_name = tc["function"]["name"]
                     if not self._is_allowed_tool(
                         tool_name, mode, session_id, web_search_enabled=web_search_enabled,
+                        has_meetings=has_meetings,
                     ):
                         logger.warning("Unknown or disallowed tool: %s", tool_name)
                         continue
@@ -644,51 +867,85 @@ class ChatboxAgent:
                                 f"confirmation (query was: {wq!r}). No internet search was run."
                             )
                         total_tool_calls += 1
+                    elif tool_name == "list_meeting_catalog":
+                        scoped, ferr = (args, None) if (
+                            session_id.startswith("meeting_")
+                            or session_id.startswith("group_")
+                        ) else force_collection_args(
+                            tool_name, args, mode=mode, forced_collection=forced_col,
+                        )
+                        tool_content = (
+                            json.dumps({"error": ferr})
+                            if ferr
+                            else _run_list_meeting_catalog(
+                                session_id, scoped, forced_col, collections
+                            )
+                        )
+                        total_tool_calls += 1
                     elif tool_name == "lookup_meeting_transcript":
-                        from src.meeting.transcript_index import lookup_json_and_keys
-                        mid = (
-                            session_id[len("meeting_"):]
-                            if session_id.startswith("meeting_")
-                            else ""
+                        scoped, ferr = (args, None) if (
+                            session_id.startswith("meeting_")
+                            or session_id.startswith("group_")
+                        ) else force_collection_args(
+                            tool_name, args, mode=mode, forced_collection=forced_col,
                         )
-                        tool_content, found_keys = lookup_json_and_keys(
-                            mid,
-                            str(args.get("query") or user_message),
-                            speaker_scope=str(args.get("speaker_scope") or "auto"),
-                            user_question=user_message,
-                            seen_pack_keys=seen_tx_packs,
-                        )
-                        seen_tx_packs |= found_keys
-                        total_tool_calls += 1
-                    elif tool_name == "lookup_group_transcript":
-                        from src.meeting.transcript_index import execute_group_lookup_json
+                        if ferr:
+                            tool_content = json.dumps({"error": ferr})
+                        elif tx_lookup_dry:
+                            from src.meeting.transcript_index import LOOKUP_NO_NEW_PACKS_MSG
 
-                        gid = (
-                            session_id[len("group_"):]
-                            if session_id.startswith("group_")
-                            else ""
-                        )
-                        raw_ids = args.get("meeting_ids")
-                        mids = raw_ids if isinstance(raw_ids, list) else None
-                        tool_content = execute_group_lookup_json(
-                            gid,
-                            str(args.get("query") or user_message),
-                            meeting_ids=mids,
-                            speaker_scope=str(args.get("speaker_scope") or "auto"),
-                            user_question=user_message,
-                        )
+                            tool_content = last_lookup_json or json.dumps(
+                                {
+                                    "hit_count": 0,
+                                    "context": "",
+                                    "message": LOOKUP_NO_NEW_PACKS_MSG,
+                                },
+                                ensure_ascii=False,
+                            )
+                        elif meeting_lookup_calls >= _MAX_MEETING_LOOKUP_CALLS:
+                            tool_content = _lookup_limit_json(
+                                _MAX_MEETING_LOOKUP_CALLS
+                            )
+                            # Hard stop: drop the tool for the remaining rounds.
+                            tx_lookup_dry = True
+                        else:
+                            meeting_lookup_calls += 1
+                            had = set(seen_tx_packs)
+                            tool_content, found_keys, chat_src, kept = (
+                                _run_lookup_meeting_transcript(
+                                    session_id,
+                                    scoped,
+                                    user_message,
+                                    forced_col,
+                                    seen_tx_packs,
+                                    collections,
+                                    seen_tx_hits,
+                                )
+                            )
+                            new_keys = found_keys - had
+                            seen_tx_packs |= found_keys
+                            last_lookup_json = (
+                                tool_content if isinstance(tool_content, str) else ""
+                            )
+                            if had and not new_keys:
+                                tx_lookup_dry = True
+                            for s in chat_src or []:
+                                if s not in all_sources:
+                                    all_sources.append(s)
                         total_tool_calls += 1
-                        group_tx_called = True
                     elif tool_name == "read_meeting_summary":
-                        from src.chatbox.meeting_context import read_group_meeting_summary
-
-                        gid = (
-                            session_id[len("group_"):]
-                            if session_id.startswith("group_")
-                            else ""
+                        scoped, ferr = (args, None) if (
+                            session_id.startswith("meeting_")
+                            or session_id.startswith("group_")
+                        ) else force_collection_args(
+                            tool_name, args, mode=mode, forced_collection=forced_col,
                         )
-                        tool_content = read_group_meeting_summary(
-                            gid, str(args.get("meeting_id") or "")
+                        tool_content = (
+                            json.dumps({"error": ferr})
+                            if ferr
+                            else _run_read_meeting_summary(
+                                session_id, scoped, forced_col, collections
+                            )
                         )
                         total_tool_calls += 1
                     elif tool_name in STRUCTURE_TOOL_NAMES:
@@ -818,13 +1075,8 @@ class ChatboxAgent:
                         "tool_call_id": tool_call_id,
                         "content": tool_content,
                     })
-                if session_id.startswith("group_") and not group_tx_called:
-                    group_force_lookup = True
             else:
                 # ── LLM returned text — final answer ──
-                if session_id.startswith("group_") and not group_tx_called:
-                    group_force_lookup = True
-                    continue
                 final_answer = response.get("content", "") or ""
                 break
 
@@ -915,8 +1167,13 @@ class ChatboxAgent:
                     break
 
         # ── Mode-specific setup ─────────────────────────────────────
+        # Prefer request collections over session's stored collections
+        if collections is None:
+            collections = self._get_collections(session_id)
+        has_meetings = self._has_meetings(session_id, collections)
         _tools, _sys_prompt, _cat_text = self._resolve_tools_and_prompt(
             mode, session_id, collections, web_search_enabled=web_search_enabled,
+            has_meetings=has_meetings,
         )
         # Explicit toggle state for the model (enabled vs disabled ≠ user Decline)
         try:
@@ -949,29 +1206,18 @@ class ChatboxAgent:
         # Quick-chat truncation check
         msg_count = self._check_session_truncation(session_id)
 
-        meeting_ephemeral_ctx = None
+        meeting_ephemeral_ctx = _build_surface_context(session_id, collections)
         seen_tx_packs: set[str] = set()
-        if session_id.startswith("meeting_"):
-            meeting_id = session_id[len("meeting_"):]
-            meeting_ephemeral_ctx = _build_meeting_ephemeral_context(meeting_id)
-        elif session_id.startswith("group_"):
-            from src.chatbox.meeting_context import build_group_ephemeral_context
-
-            meeting_ephemeral_ctx = build_group_ephemeral_context(
-                session_id[len("group_"):]
-            )
-
+        seen_tx_hits: list[dict] = []
         _quick_warn = (
             msg_count is not None
             and msg_count >= _QUICK_WARN_THRESHOLD
             and msg_count < _QUICK_MAX_MESSAGES
         )
 
-        # Prefer request collections over session's stored collections
-        if collections is None:
-            collections = self._get_collections(session_id)
         total_tool_calls = 0
         agentic_search_calls = 0  # search_knowledge_base only (see _MAX_AGENTIC_SEARCH_CALLS)
+        meeting_lookup_calls = 0  # lookup_meeting_transcript only (hard cap)
         thinking_aq_count = 0
         thinking_task_count = 0
         thinking_summary: dict = {"aq_count": 0, "task_count": 0, "tasks": []}
@@ -983,9 +1229,18 @@ class ChatboxAgent:
         _touch_group_session(session_id)
 
         extra_messages: list[dict] = []
+        _extra_saved = 0
         all_sources: list[dict] = []
-        group_tx_called = False
-        group_force_lookup = False
+        tx_lookup_dry = False
+        last_lookup_json = ""
+
+        def _flush_extra_messages() -> None:
+            nonlocal _extra_saved
+            pending = extra_messages[_extra_saved:]
+            if not pending:
+                return
+            _persist_extra_messages(self._store, session_id, pending)
+            _extra_saved = len(extra_messages)
         # Engineering control (not prompt-only): web HITL once per user-message stream.
         # approved → later request_web_search runs without dialog
         # declined → web tool removed for rest of this stream; no more confirms
@@ -994,15 +1249,18 @@ class ChatboxAgent:
 
         def _tools_this_round() -> list:
             """Drop request_web_search after decline so the model cannot re-call it."""
-            if web_hitl_decision != "declined" or not _tools:
-                return _tools or []
-            out = []
-            for t in _tools:
-                fn = (t.get("function") or {}) if isinstance(t, dict) else {}
-                if fn.get("name") == WEB_SEARCH_TOOL_NAME:
-                    continue
-                out.append(t)
-            return out
+            tools = list(_tools or [])
+            if web_hitl_decision == "declined":
+                kept = []
+                for t in tools:
+                    fn = (t.get("function") or {}) if isinstance(t, dict) else {}
+                    if fn.get("name") == WEB_SEARCH_TOOL_NAME:
+                        continue
+                    kept.append(t)
+                tools = kept
+            if tx_lookup_dry:
+                tools = _drop_lookup_tool(tools)
+            return tools
 
         def _web_tool_result(
             *,
@@ -1027,6 +1285,14 @@ class ChatboxAgent:
                 pre_message_context=meeting_ephemeral_ctx,
             )
             tools_round = _tools_this_round()
+            known_tool_names = {
+                str(((t.get("function") or {}) if isinstance(t, dict) else {}).get("name") or "")
+                for t in (tools_round or [])
+            }
+            known_tool_names.discard("")
+            previewed_tool_starts = 0
+            if extra_messages:
+                yield {"type": "planning", "content": ""}
 
             # ── Streaming LLM call (real token-by-token, threaded) ──
             token_queue: sync_queue.Queue = sync_queue.Queue()
@@ -1055,11 +1321,7 @@ class ChatboxAgent:
                 # Engineering: omit web tool after decline; force answer if no tools left
                 if tools_round:
                     stream_kwargs["tools"] = tools_round
-                    stream_kwargs["tool_choice"] = _group_stream_tool_choice(
-                        session_id,
-                        transcript_lookup_done=group_tx_called,
-                        force_transcript_lookup=group_force_lookup,
-                    )
+                    stream_kwargs["tool_choice"] = "auto"
                 else:
                     stream_kwargs["tool_choice"] = "none"
                 # Think toggle: must set enabled/disabled for DeepSeek-class models.
@@ -1069,7 +1331,9 @@ class ChatboxAgent:
                 # Forced function tool_choice cannot ride along with thinking
                 # (Qwen: "Thinking mode does not support this tool_choice").
                 think_round = _thinking_on_for_tool_round(
-                    bool(thinking), stream_kwargs.get("tool_choice"),
+                    bool(thinking),
+                    stream_kwargs.get("tool_choice"),
+                    extra_messages,
                 )
                 model_lower = (model or "").lower()
                 base_url = str(getattr(self._llm, "_base_url", "") or "").lower()
@@ -1124,6 +1388,7 @@ class ChatboxAgent:
 
                 content = ""
                 tool_calls_acc: dict[int, dict] = {}
+                emitted_tool_idxs: set[int] = set()
                 reasoning = None
                 finish_reason = None
                 # State machine for <think> tag parsing (MiniMax / R1-style models)
@@ -1131,15 +1396,10 @@ class ChatboxAgent:
                 in_think = False    # inside <think>...</think>
                 all_thinking = ""
                 streamed_answer_chars = 0  # content tokens already pushed to UI
-                suppress_answer = (
-                    session_id.startswith("group_") and not group_tx_called
-                )
 
                 def _put_token(text: str) -> None:
                     nonlocal streamed_answer_chars
                     if not text:
-                        return
-                    if suppress_answer:
                         return
                     token_queue.put(("token", text))
                     streamed_answer_chars += len(text)
@@ -1216,6 +1476,12 @@ class ChatboxAgent:
                                     acc["function"]["name"] += tc_delta.function.name
                                 if tc_delta.function.arguments:
                                     acc["function"]["arguments"] += tc_delta.function.arguments
+                        preview = _preview_stream_tool_name(
+                            tool_calls_acc, emitted_tool_idxs, known_tool_names,
+                        )
+                        if preview:
+                            emitted_tool_idxs.add(0)
+                            token_queue.put(("tool_name", preview))
 
                     if delta_reasoning:
                         if reasoning is None:
@@ -1268,6 +1534,13 @@ class ChatboxAgent:
                             yield {"type": "thinking", "content": data}
                         elif kind == "token":
                             yield {"type": "token", "content": data}
+                        elif kind == "tool_name":
+                            previewed_tool_starts += 1
+                            yield {
+                                "type": "tool_call_start",
+                                "tool": data,
+                                "raw_query": "",
+                            }
                         elif kind == "done":
                             response = data
                         elif kind == "error":
@@ -1302,7 +1575,132 @@ class ChatboxAgent:
                     tcs = merge_search_tool_calls(tcs)
                 forced_col = self._forced_collection(mode, collections)
 
-                for tc in tcs:
+                delete_pairs: list[tuple[str, str]] = []
+                _seen_del: set[tuple[str, str]] = set()
+                create_items_by_col: dict[str, list[dict]] = {}
+                update_items_by_col: dict[str, list[dict]] = {}
+                for _tc in tcs:
+                    _tname = (_tc.get("function") or {}).get("name")
+                    if _tname not in (
+                        "delete_todo",
+                        "create_todo",
+                        "update_todo",
+                    ):
+                        continue
+                    try:
+                        _da = json.loads(_tc["function"].get("arguments") or "{}")
+                    except json.JSONDecodeError:
+                        _da = {}
+                    _da, _derr = force_collection_args(
+                        str(_tname),
+                        _da,
+                        mode=mode,
+                        forced_collection=forced_col,
+                    )
+                    if _derr:
+                        continue
+                    _dcol = str((_da or {}).get("collection") or "").strip()
+                    if _tname == "create_todo":
+                        create_items_by_col.setdefault(_dcol, []).extend(
+                            collect_todo_create_items(_da)
+                        )
+                    elif _tname == "update_todo":
+                        update_items_by_col.setdefault(_dcol, []).extend(
+                            collect_todo_update_items(_da)
+                        )
+                    elif _tname == "delete_todo":
+                        for _dtid in collect_todo_delete_ids(_da):
+                            _key = (_dcol, _dtid)
+                            if _key not in _seen_del:
+                                _seen_del.add(_key)
+                                delete_pairs.append(_key)
+                todo_delete_batch_json: str | None = None
+                todo_create_batch_json: str | None = None
+                todo_update_batch_json: str | None = None
+                todo_list_cache: dict[tuple, str] = {}
+
+                # ── Same-round transcript-lookup fan-out ────────────────
+                # ≥2 lookup calls in one round → run the searches
+                # concurrently now, merge sequentially inside the loop below.
+                # Each call gets a launch-time snapshot of seen packs/hits so
+                # dedup semantics match the serial path.
+                _parallel_lookups: dict[int, dict] = {}
+                if not tx_lookup_dry:
+                    _lookup_positions = [
+                        _i for _i, _tc in enumerate(tcs)
+                        if ((_tc.get("function") or {}).get("name"))
+                        == "lookup_meeting_transcript"
+                    ]
+                    if len(_lookup_positions) >= 2:
+                        _launch: list[tuple[int, dict, set, list]] = []
+                        for _i in _lookup_positions:
+                            if (
+                                len(_launch) + meeting_lookup_calls
+                                >= _MAX_MEETING_LOOKUP_CALLS
+                            ):
+                                break
+                            _ltc = tcs[_i]
+                            try:
+                                _largs = json.loads(
+                                    _ltc["function"].get("arguments") or "{}"
+                                )
+                            except json.JSONDecodeError:
+                                _largs = {"query": user_message}
+                            _scoped, _ferr = (_largs, None) if (
+                                session_id.startswith("meeting_")
+                                or session_id.startswith("group_")
+                            ) else force_collection_args(
+                                "lookup_meeting_transcript",
+                                _largs,
+                                mode=mode,
+                                forced_collection=forced_col,
+                            )
+                            if _ferr:
+                                continue
+                            if not self._is_allowed_tool(
+                                "lookup_meeting_transcript", mode, session_id,
+                                web_search_enabled=web_search_enabled,
+                                has_meetings=has_meetings,
+                            ):
+                                continue
+                            _launch.append(
+                                (_i, _scoped, set(seen_tx_packs), list(seen_tx_hits))
+                            )
+                        if len(_launch) >= 2:
+                            from src.meeting.transcript_index import merge_hit_packs
+
+                            logger.info(
+                                "[Chatbox] parallel lookup fan-out: %d queries",
+                                len(_launch),
+                            )
+                            _results = await asyncio.gather(*[
+                                _run_blocking(
+                                    _run_lookup_meeting_transcript,
+                                    session_id, _scoped, user_message, forced_col,
+                                    _snap_packs, collections, _snap_hits,
+                                )
+                                for _i, _scoped, _snap_packs, _snap_hits in _launch
+                            ])
+                            # Fan-out consumes the same per-turn budget as
+                            # serial lookups.
+                            meeting_lookup_calls += len(_launch)
+                            _kept_lists = []
+                            for (_i, _scoped, _snap_packs, _snap_hits), res in zip(
+                                _launch, _results
+                            ):
+                                raw, found_keys, chat_src, kept = res
+                                _parallel_lookups[_i] = {
+                                    "content": raw,
+                                    "found": found_keys,
+                                    "sources": chat_src,
+                                    "snap_packs": _snap_packs,
+                                }
+                                _kept_lists.append(kept)
+                            # Merged hit state = snapshot + union of new packs,
+                            # deduped in launch order.
+                            seen_tx_hits[:] = merge_hit_packs(*_kept_lists)
+
+                for _loop_i, tc in enumerate(tcs):
                     tool_name = tc["function"]["name"]
                     try:
                         args = json.loads(tc["function"]["arguments"] or "{}")
@@ -1334,16 +1732,20 @@ class ChatboxAgent:
                     else:
                         raw_query = args.get("raw_query", user_message)
 
-                    yield {
-                        "type": "tool_call_start",
-                        "tool": tool_name,
-                        "raw_query": str(raw_query)[:200],
-                        "tool_call_id": tc.get("id", ""),
-                    }
+                    if previewed_tool_starts > 0:
+                        previewed_tool_starts -= 1
+                    else:
+                        yield {
+                            "type": "tool_call_start",
+                            "tool": tool_name,
+                            "raw_query": str(raw_query)[:200],
+                            "tool_call_id": tc.get("id", ""),
+                        }
 
                     # Disallowed tools (non-web) — return a result so the loop continues
                     if not self._is_allowed_tool(
                         tool_name, mode, session_id, web_search_enabled=web_search_enabled,
+                        has_meetings=has_meetings,
                     ):
                         logger.warning(
                             "Disallowed tool %s (mode=%s web=%s) — returning error result",
@@ -1492,71 +1894,354 @@ class ChatboxAgent:
                                 _ui_source_type = "web"
                         total_tool_calls += 1
 
+                    elif not _skip_exec and tool_name == "list_meeting_catalog":
+                        scoped, ferr = (args, None) if (
+                            session_id.startswith("meeting_")
+                            or session_id.startswith("group_")
+                        ) else force_collection_args(
+                            tool_name, args, mode=mode, forced_collection=forced_col,
+                        )
+                        tool_content = (
+                            json.dumps({"error": ferr})
+                            if ferr
+                            else await _run_blocking(
+                                _run_list_meeting_catalog,
+                                session_id, scoped, forced_col, collections,
+                            )
+                        )
+                        _sources_this_call = None
+                        total_tool_calls += 1
+
                     elif not _skip_exec and tool_name == "lookup_meeting_transcript":
-                        from src.meeting.transcript_index import (
-                            hit_count_from_lookup_json,
-                            lookup_json_and_keys,
+                        from src.meeting.transcript_index import hit_count_from_lookup_json
+
+                        scoped, ferr = (args, None) if (
+                            session_id.startswith("meeting_")
+                            or session_id.startswith("group_")
+                        ) else force_collection_args(
+                            tool_name, args, mode=mode, forced_collection=forced_col,
                         )
-                        mid = (
-                            session_id[len("meeting_"):]
-                            if session_id.startswith("meeting_")
-                            else ""
-                        )
-                        tool_content, found_keys = await _run_blocking(
-                            lookup_json_and_keys,
-                            mid,
-                            str(args.get("query") or user_message),
-                            speaker_scope=str(args.get("speaker_scope") or "auto"),
-                            user_question=user_message,
-                            seen_pack_keys=seen_tx_packs,
-                        )
-                        seen_tx_packs |= found_keys
-                        _sources_this_call = hit_count_from_lookup_json(
-                            tool_content if isinstance(tool_content, str) else ""
-                        )
+                        if ferr:
+                            tool_content = json.dumps({"error": ferr})
+                            _sources_this_call = 0
+                        elif tx_lookup_dry:
+                            from src.meeting.transcript_index import LOOKUP_NO_NEW_PACKS_MSG
+
+                            tool_content = last_lookup_json or json.dumps(
+                                {
+                                    "hit_count": 0,
+                                    "context": "",
+                                    "message": LOOKUP_NO_NEW_PACKS_MSG,
+                                },
+                                ensure_ascii=False,
+                            )
+                            _sources_this_call = 0
+                        else:
+                            had = set(seen_tx_packs)
+                            stashed = _parallel_lookups.pop(_loop_i, None)
+                            if stashed is not None:
+                                # Search already ran concurrently; merge here.
+                                tool_content = stashed["content"]
+                                found_keys = stashed["found"]
+                                chat_src = stashed["sources"]
+                            elif (
+                                meeting_lookup_calls >= _MAX_MEETING_LOOKUP_CALLS
+                            ):
+                                # Budget spent (fan-out or earlier rounds) —
+                                # hard stop and drop the tool for this turn.
+                                tool_content = _lookup_limit_json(
+                                    _MAX_MEETING_LOOKUP_CALLS
+                                )
+                                found_keys = set()
+                                chat_src = None
+                                tx_lookup_dry = True
+                            else:
+                                meeting_lookup_calls += 1
+                                tool_content, found_keys, chat_src, kept = (
+                                    await _run_blocking(
+                                        _run_lookup_meeting_transcript,
+                                        session_id,
+                                        scoped,
+                                        user_message,
+                                        forced_col,
+                                        seen_tx_packs,
+                                        collections,
+                                        seen_tx_hits,
+                                    )
+                                )
+                            new_keys = found_keys - had
+                            seen_tx_packs |= found_keys
+                            last_lookup_json = (
+                                tool_content if isinstance(tool_content, str) else ""
+                            )
+                            if had and not new_keys:
+                                tx_lookup_dry = True
+                            for s in chat_src or []:
+                                if s not in all_sources:
+                                    all_sources.append(s)
+                            _sources_this_call = (
+                                len(chat_src)
+                                if chat_src is not None
+                                else hit_count_from_lookup_json(
+                                    tool_content if isinstance(tool_content, str) else ""
+                                )
+                            )
                         _ui_source_type = "meeting"
                         total_tool_calls += 1
-
-                    elif not _skip_exec and tool_name == "lookup_group_transcript":
-                        from src.meeting.transcript_index import (
-                            execute_group_lookup_json,
-                            hit_count_from_lookup_json,
-                        )
-
-                        gid = (
-                            session_id[len("group_"):]
-                            if session_id.startswith("group_")
-                            else ""
-                        )
-                        raw_ids = args.get("meeting_ids")
-                        mids = raw_ids if isinstance(raw_ids, list) else None
-                        tool_content = await _run_blocking(
-                            execute_group_lookup_json,
-                            gid,
-                            str(args.get("query") or user_message),
-                            meeting_ids=mids,
-                            speaker_scope=str(args.get("speaker_scope") or "auto"),
-                            user_question=user_message,
-                        )
-                        _sources_this_call = hit_count_from_lookup_json(
-                            tool_content if isinstance(tool_content, str) else ""
-                        )
-                        _ui_source_type = "meeting"
-                        total_tool_calls += 1
-                        group_tx_called = True
 
                     elif not _skip_exec and tool_name == "read_meeting_summary":
-                        from src.chatbox.meeting_context import read_group_meeting_summary
+                        scoped, ferr = (args, None) if (
+                            session_id.startswith("meeting_")
+                            or session_id.startswith("group_")
+                        ) else force_collection_args(
+                            tool_name, args, mode=mode, forced_collection=forced_col,
+                        )
+                        tool_content = (
+                            json.dumps({"error": ferr})
+                            if ferr
+                            else await _run_blocking(
+                                _run_read_meeting_summary,
+                                session_id, scoped, forced_col, collections,
+                            )
+                        )
+                        _sources_this_call = None
+                        total_tool_calls += 1
 
-                        gid = (
-                            session_id[len("group_"):]
-                            if session_id.startswith("group_")
-                            else ""
+                    elif not _skip_exec and tool_name == "list_todos":
+                        scoped, ferr = force_collection_args(
+                            tool_name,
+                            args,
+                            mode=mode,
+                            forced_collection=forced_col,
                         )
-                        tool_content = await _run_blocking(
-                            read_group_meeting_summary,
-                            gid, str(args.get("meeting_id") or ""),
+                        if ferr:
+                            tool_content = json.dumps({"error": ferr})
+                            _ui_status = "error"
+                        else:
+                            done_v = scoped.get("done")
+                            if done_v is not None:
+                                done_v = bool(done_v)
+                            cache_key = (
+                                str(scoped.get("collection") or ""),
+                                bool(scoped.get("include_done") or False),
+                                done_v,
+                                bool(scoped.get("mine") or False),
+                            )
+                            cached = todo_list_cache.get(cache_key)
+                            if cached is not None:
+                                tool_content = cached
+                            else:
+                                tool_content = await execute_structure_tool_async(
+                                    tool_name,
+                                    scoped,
+                                    mode=mode,
+                                    forced_collection=forced_col,
+                                )
+                                todo_list_cache[cache_key] = tool_content
+                        _sources_this_call = None
+                        total_tool_calls += 1
+
+                    elif not _skip_exec and tool_name == "create_todo":
+                        scoped, ferr = force_collection_args(
+                            tool_name,
+                            args,
+                            mode=mode,
+                            forced_collection=forced_col,
                         )
+                        if ferr:
+                            tool_content = json.dumps({"error": ferr})
+                            _ui_status = "error"
+                        elif todo_create_batch_json is not None:
+                            tool_content = todo_create_batch_json
+                        else:
+                            chunks: list[str] = []
+                            groups = create_items_by_col or {
+                                str((scoped or {}).get("collection") or ""):
+                                collect_todo_create_items(scoped)
+                            }
+                            for _ccol, _items in groups.items():
+                                if not _items:
+                                    continue
+                                chunks.append(
+                                    await execute_structure_tool_async(
+                                        "create_todo",
+                                        {"collection": _ccol, "todos": _items},
+                                        mode=mode,
+                                        forced_collection=forced_col,
+                                    )
+                                )
+                            todo_create_batch_json = (
+                                chunks[0]
+                                if len(chunks) == 1
+                                else json.dumps(
+                                    {"results": chunks}, ensure_ascii=False
+                                )
+                            )
+                            tool_content = todo_create_batch_json or json.dumps(
+                                {"error": "title or todos is required"}
+                            )
+                            if not chunks:
+                                _ui_status = "error"
+                        _sources_this_call = None
+                        total_tool_calls += 1
+
+                    elif not _skip_exec and tool_name == "update_todo":
+                        scoped, ferr = force_collection_args(
+                            tool_name,
+                            args,
+                            mode=mode,
+                            forced_collection=forced_col,
+                        )
+                        if ferr:
+                            tool_content = json.dumps({"error": ferr})
+                            _ui_status = "error"
+                        elif todo_update_batch_json is not None:
+                            tool_content = todo_update_batch_json
+                        else:
+                            chunks = []
+                            groups = update_items_by_col or {
+                                str((scoped or {}).get("collection") or ""):
+                                collect_todo_update_items(scoped)
+                            }
+                            for _ccol, _items in groups.items():
+                                if not _items:
+                                    continue
+                                chunks.append(
+                                    await execute_structure_tool_async(
+                                        "update_todo",
+                                        {"collection": _ccol, "updates": _items},
+                                        mode=mode,
+                                        forced_collection=forced_col,
+                                    )
+                                )
+                            todo_update_batch_json = (
+                                chunks[0]
+                                if len(chunks) == 1
+                                else json.dumps(
+                                    {"results": chunks}, ensure_ascii=False
+                                )
+                            )
+                            tool_content = todo_update_batch_json or json.dumps(
+                                {"error": "todo_id or updates is required"}
+                            )
+                            if not chunks:
+                                _ui_status = "error"
+                        _sources_this_call = None
+                        total_tool_calls += 1
+
+                    # ── Todo delete (HITL per id; all ids in this round, no LLM gap) ──
+                    elif not _skip_exec and tool_name == "delete_todo":
+                        from fastapi import HTTPException as _HTTP
+                        from src.chatbox.todo_delete_confirm import (
+                            TODO_DELETE_CONFIRM_TIMEOUT,
+                            declined_payload,
+                            peek_todo_for_delete,
+                            todo_delete_confirm_store,
+                        )
+                        from src.file_mgmt import service as _fm
+                        from src.mcp.common import run_sync as _run_sync
+
+                        scoped, ferr = force_collection_args(
+                            tool_name,
+                            args,
+                            mode=mode,
+                            forced_collection=forced_col,
+                        )
+                        if ferr:
+                            tool_content = json.dumps({"error": ferr})
+                            _ui_status = "error"
+                        elif todo_delete_batch_json is not None:
+                            tool_content = todo_delete_batch_json
+                        else:
+                            pairs = list(delete_pairs)
+                            if not pairs:
+                                col0 = str((scoped or {}).get("collection") or "")
+                                pairs = [
+                                    (col0, tid)
+                                    for tid in collect_todo_delete_ids(scoped)
+                                ]
+                            if not pairs:
+                                tool_content = json.dumps(
+                                    {"error": "todo_id or todo_ids is required"}
+                                )
+                                _ui_status = "error"
+                            else:
+                                outcomes: list[dict] = []
+                                any_declined = False
+                                for _col, _tid in pairs:
+                                    peek = peek_todo_for_delete(_col, _tid)
+                                    if peek.get("error"):
+                                        outcomes.append(
+                                            {"todo_id": _tid, **peek}
+                                        )
+                                        continue
+                                    confirm_id = todo_delete_confirm_store.create(
+                                        title=str(peek["title"]),
+                                        todo_id=str(peek["todo_id"]),
+                                        collection=str(peek["collection"]),
+                                        collection_name=str(
+                                            peek["collection_name"]
+                                        ),
+                                    )
+                                    yield {
+                                        "type": "todo_delete_confirm",
+                                        "confirm_id": confirm_id,
+                                        "todo_id": peek["todo_id"],
+                                        "title": peek["title"],
+                                        "collection": peek["collection"],
+                                        "collection_name": peek[
+                                            "collection_name"
+                                        ],
+                                        "tool_call_id": tc.get("id", ""),
+                                        "message": (
+                                            f'Delete to-do "{peek["title"]}"?'
+                                        ),
+                                    }
+                                    approved = await todo_delete_confirm_store.wait(
+                                        confirm_id,
+                                        timeout=TODO_DELETE_CONFIRM_TIMEOUT,
+                                    )
+                                    if not approved:
+                                        any_declined = True
+                                        outcomes.append(
+                                            declined_payload(str(peek["todo_id"]))
+                                        )
+                                        continue
+
+                                    def _del(
+                                        col=_col, tid=_tid
+                                    ) -> dict:
+                                        try:
+                                            _fm.delete_todo(col, tid)
+                                            return {
+                                                "deleted": True,
+                                                "todo_id": tid,
+                                                "collection": col,
+                                            }
+                                        except _HTTP as exc:
+                                            detail = exc.detail
+                                            if isinstance(detail, dict):
+                                                return {
+                                                    "error": str(
+                                                        detail.get("message")
+                                                        or detail
+                                                    )
+                                                }
+                                            return {"error": str(detail)}
+
+                                    outcomes.append(await _run_sync(_del))
+                                payload = {
+                                    "results": outcomes,
+                                    "total": len(outcomes),
+                                }
+                                todo_delete_batch_json = json.dumps(
+                                    payload, ensure_ascii=False
+                                )
+                                tool_content = todo_delete_batch_json
+                                if any_declined and not any(
+                                    r.get("deleted") for r in outcomes
+                                ):
+                                    _ui_status = "declined"
                         _sources_this_call = None
                         total_tool_calls += 1
 
@@ -1804,7 +2489,7 @@ class ChatboxAgent:
                         "source_type": _ui_source_type,
                         "tool_call_id": tc.get("id", ""),
                     }
-                    if tool_name == "lookup_group_transcript" and isinstance(tool_content, str):
+                    if tool_name == "lookup_meeting_transcript" and isinstance(tool_content, str):
                         try:
                             _cited = json.loads(tool_content).get("cites")
                         except (TypeError, json.JSONDecodeError):
@@ -1854,25 +2539,16 @@ class ChatboxAgent:
                         "content": None,
                         "tool_calls": tool_call_data,
                     }
-                    if response.get("reasoning_content"):
-                        assistant_extra["reasoning_content"] = response["reasoning_content"]
                     extra_messages.append(assistant_extra)
                     extra_messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call_id,
                         "content": tool_content,
                     })
-                if session_id.startswith("group_") and not group_tx_called:
-                    group_force_lookup = True
+                    _flush_extra_messages()
 
             else:
                 # ── Text response — tokens already streamed, just finalize ──
-                if session_id.startswith("group_") and not group_tx_called:
-                    group_force_lookup = True
-                    logger.info(
-                        "Group chat deferred answer until lookup_group_transcript"
-                    )
-                    continue
                 final_content = response.get("content", "") or ""
 
                 # Save assistant message
@@ -1883,13 +2559,18 @@ class ChatboxAgent:
                     meta["tool_trace"] = tool_trace
                 if response.get("reasoning_content"):
                     meta["reasoning_content"] = response["reasoning_content"]
-                # Persist tool messages for KV cache reuse in future rounds
-                _persist_extra_messages(self._store, session_id, extra_messages)
-                self._store.add_message(
-                    session_id, "assistant", final_content,
-                    sources=all_sources if all_sources else None,
-                    metadata=meta,
-                )
+                _flush_extra_messages()
+                try:
+                    self._store.add_message(
+                        session_id, "assistant", final_content,
+                        sources=all_sources if all_sources else None,
+                        metadata=meta,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to persist assistant message session=%s tools=%d",
+                        session_id, total_tool_calls,
+                    )
 
                 logger.info(
                     "[Chatbox] YIELD done: all_sources=%d total_tool_calls=%d mode=%s tool_trace=%d",
@@ -1923,7 +2604,7 @@ class ChatboxAgent:
             "[Chatbox] Max rounds (%d) reached with %d tool calls — force generating answer",
             _MAX_TOOL_ROUNDS, total_tool_calls,
         )
-        _persist_extra_messages(self._store, session_id, extra_messages)
+        _flush_extra_messages()
         messages = self._build_messages(
             session_id, user_message, extra_messages=extra_messages,
             collections=collections,
@@ -1940,11 +2621,17 @@ class ChatboxAgent:
                 meta_final["thinking_summary"] = thinking_summary
             if tool_trace:
                 meta_final["tool_trace"] = tool_trace
-            self._store.add_message(
-                session_id, "assistant", final_content,
-                sources=all_sources if all_sources else None,
-                metadata=meta_final,
-            )
+            try:
+                self._store.add_message(
+                    session_id, "assistant", final_content,
+                    sources=all_sources if all_sources else None,
+                    metadata=meta_final,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to persist forced assistant message session=%s",
+                    session_id,
+                )
         else:
             logger.warning(
                 "[Chatbox] Force generate returned empty — total_tool_calls=%d sources=%d",
@@ -2128,6 +2815,95 @@ def _find_partial_tag(text: str, tag: str) -> int:
         if text.endswith(tag[:i]):
             return len(text) - i
     return -1
+
+
+_SUPERSEDED_LOOKUP_STUB = (
+    "Superseded by a later lookup_meeting_transcript this turn. "
+    "Use the latest tool result (merged restitch)."
+)
+
+
+def _dialogue_hist_without_this_turn_tools(dialogue_hist: list, user_message: str) -> list:
+    """Keep history through the current user row; drop flushed tool rows after it."""
+    cut = None
+    for i, m in enumerate(dialogue_hist):
+        if getattr(m, "role", None) == "user" and (getattr(m, "content", None) or "") == user_message:
+            cut = i
+    if cut is None:
+        return dialogue_hist
+    return dialogue_hist[: cut + 1]
+
+
+def _lookup_tool_has_excerpts(content: str) -> bool:
+    raw = (content or "").strip()
+    if not raw or raw == _SUPERSEDED_LOOKUP_STUB:
+        return False
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return True
+    if not isinstance(data, dict):
+        return True
+    return bool((data.get("context") or "").strip())
+
+
+def _drop_lookup_tool(tools: list) -> list:
+    out = []
+    for t in tools or []:
+        fn = (t.get("function") or {}) if isinstance(t, dict) else {}
+        if fn.get("name") == "lookup_meeting_transcript":
+            continue
+        out.append(t)
+    return out
+
+
+def _collapse_superseded_lookup_results(messages: list[dict]) -> list[dict]:
+    """Keep one lookup restitch this turn; stub earlier lookup bodies after the last user."""
+    last_user = -1
+    for i, m in enumerate(messages):
+        if m.get("role") == "user":
+            last_user = i
+    if last_user < 0:
+        return messages
+    lookup_ids: list[str] = []
+    for m in messages[last_user + 1 :]:
+        if m.get("role") != "assistant":
+            continue
+        for tc in m.get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") or {}
+            if not isinstance(fn, dict):
+                continue
+            if fn.get("name") != "lookup_meeting_transcript":
+                continue
+            tid = str(tc.get("id") or "")
+            if tid:
+                lookup_ids.append(tid)
+    if len(lookup_ids) < 2:
+        return messages
+    content_by_id: dict[str, str] = {}
+    for m in messages[last_user + 1 :]:
+        if m.get("role") != "tool":
+            continue
+        tid = str(m.get("tool_call_id") or "")
+        if tid in lookup_ids:
+            content_by_id[tid] = m.get("content") or ""
+    keep = lookup_ids[-1]
+    for tid in reversed(lookup_ids):
+        if _lookup_tool_has_excerpts(content_by_id.get(tid) or ""):
+            keep = tid
+            break
+    drop = {tid for tid in lookup_ids if tid != keep}
+    out: list[dict] = []
+    for m in messages:
+        if m.get("role") == "tool" and str(m.get("tool_call_id") or "") in drop:
+            stubbed = dict(m)
+            stubbed["content"] = _SUPERSEDED_LOOKUP_STUB
+            out.append(stubbed)
+        else:
+            out.append(m)
+    return out
 
 
 def _persist_extra_messages(store, session_id: str, extra_messages: list[dict]) -> None:

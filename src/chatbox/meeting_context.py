@@ -144,13 +144,46 @@ def apply_speaker_display_names(text: str, names: dict[str, str]) -> str:
     return out
 
 
+def me_speaker_ids(meeting_id: str) -> set[str]:
+    """Speaker ids of this meeting bound to the People 'Me' person."""
+    try:
+        from src.meeting.store import get_meeting
+        from src.speakers.store import get_me_person_id
+
+        me_pid = get_me_person_id()
+        if not me_pid:
+            return set()
+        meeting = get_meeting(meeting_id)
+        people = getattr(meeting, "speaker_people", None) if meeting else None
+        if not isinstance(people, dict):
+            return set()
+        return {
+            str(sid)
+            for sid, pid in people.items()
+            if str(pid or "") == me_pid
+        }
+    except Exception:
+        logger.exception("Failed to resolve Me speaker ids for %s", meeting_id)
+        return set()
+
+
+def _annotate_me(names: dict[str, str], me_ids: set[str]) -> dict[str, str]:
+    """Mark the Me-bound speakers with '(you)' in a display-name map."""
+    if not me_ids:
+        return names
+    return {
+        sid: f"{name} (you)" if sid in me_ids else name
+        for sid, name in names.items()
+    }
+
+
 def format_speaker_mapping(meeting_id: str) -> str:
     """Speaker id → display name lines for ephemeral meeting chat context."""
     names = speaker_display_map(meeting_id)
     if not names:
         return "No speaker names configured for this meeting."
     lines = ["Current speaker mapping:"]
-    for spk_id, name in names.items():
+    for spk_id, name in _annotate_me(names, me_speaker_ids(meeting_id)).items():
         lines.append(f"- {spk_id}: {name}")
     return "\n".join(lines)
 
@@ -158,10 +191,14 @@ def format_speaker_mapping(meeting_id: str) -> str:
 def build_meeting_ephemeral_context(meeting_id: str) -> str:
     """Speakers + General summary. Not persisted; rebuilt every turn."""
     names = speaker_display_map(meeting_id)
+    me_ids = me_speaker_ids(meeting_id)
     if names:
         parts = [
             "Current speaker mapping:\n"
-            + "\n".join(f"- {spk_id}: {name}" for spk_id, name in names.items())
+            + "\n".join(
+                f"- {spk_id}: {name}"
+                for spk_id, name in _annotate_me(names, me_ids).items()
+            )
         ]
     else:
         parts = ["No speaker names configured for this meeting."]
@@ -197,7 +234,8 @@ def build_group_ephemeral_context(group_id: str) -> str:
         )
         names = speaker_display_map(mem.meeting_id) if meeting else {}
         if names:
-            mapped = " · ".join(f"{sid} {name}" for sid, name in names.items())
+            annotated = _annotate_me(names, me_speaker_ids(mem.meeting_id))
+            mapped = " · ".join(f"{sid} {name}" for sid, name in annotated.items())
             lines.append(f"   speakers: {mapped}")
         if status != "ready":
             unindexed.append(f"{mem.n} {title}")
@@ -206,6 +244,42 @@ def build_group_ephemeral_context(group_id: str) -> str:
         lines.append(
             "Unindexed (do not search transcripts; tell the user): "
             + "; ".join(unindexed)
+        )
+    return "\n".join(lines)
+
+
+def build_meeting_catalog_digest(
+    collections: list[str] | None = None,
+    *,
+    max_rows: int = 30,
+) -> str:
+    """Minimal meeting directory for Chat / Collection Quick Chat context.
+
+    Titles + dates only (no summaries): just enough for the model to judge
+    whether a question could concern meetings. Empty string → do not inject.
+    """
+    from src.meeting.catalog import catalog_rows, visible_meeting_ids
+
+    try:
+        ids = visible_meeting_ids(collections=[str(c) for c in (collections or []) if str(c).strip()])
+        if not ids:
+            return ""
+        rows = catalog_rows(ids)
+    except Exception:
+        logger.exception("Failed to build meeting catalog digest")
+        return ""
+    if not rows:
+        return ""
+    lines = [
+        "Meetings visible to this chat (title · date · transcript index):"
+    ]
+    for row in rows[:max_rows]:
+        status = "indexed" if row.get("index_ready") else "not indexed yet"
+        date = str(row.get("date") or "")
+        lines.append(f"- {row.get('title')} · {date} · {status}".rstrip(" ·"))
+    if len(rows) > max_rows:
+        lines.append(
+            f"(+{len(rows) - max_rows} more — call list_meeting_catalog for the full list)"
         )
     return "\n".join(lines)
 

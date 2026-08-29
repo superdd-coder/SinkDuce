@@ -35,6 +35,7 @@ export function FolderView({
     selectFolder,
     perCollectionFolderCache,
     hydrateFolderFileSort,
+    hydrateFolderFileView,
     messageSidebarOpen,
     toggleMessageSidebar,
     currentFolderMessages,
@@ -45,6 +46,7 @@ export function FolderView({
       selectFolder: s.selectFolder,
       perCollectionFolderCache: s.perCollectionFolderCache,
       hydrateFolderFileSort: s.hydrateFolderFileSort,
+      hydrateFolderFileView: s.hydrateFolderFileView,
       messageSidebarOpen: s.messageSidebarOpen,
       toggleMessageSidebar: s.toggleMessageSidebar,
       currentFolderMessages: s.currentFolderMessages,
@@ -60,6 +62,7 @@ export function FolderView({
       setDetailFileId(null)
       // Restore per-collection sort (default: type)
       hydrateFolderFileSort(collectionId)
+      hydrateFolderFileView(collectionId)
       const cachedFolder = perCollectionFolderCache[collectionId]
       if (cachedFolder !== undefined) {
         if (cachedFolder === null) {

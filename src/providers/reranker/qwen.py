@@ -35,7 +35,7 @@ class QwenReranker(RerankerProvider):
                 "top_n": top_k,
             },
         }
-        resp = httpx.post(url, json=payload, headers=headers, timeout=30)
+        resp = httpx.post(url, json=payload, headers=headers, timeout=8)
         if not resp.is_success:
             logger.error("Qwen rerank HTTP %d: %s", resp.status_code, resp.text[:500])
             resp.raise_for_status()

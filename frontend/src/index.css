@@ -4119,7 +4119,6 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   bottom: 0;
   left: 0;
   border-radius: var(--pm-timeline-card-r, var(--pm-r-lg, 20px));
-  box-shadow: var(--pm-timeline-card-shadow, var(--pm-shadow-sm));
 }
 .pm-timeline-rail[data-msg-cols="2"] .pm-timeline-rail-content {
   width: calc(
@@ -4496,6 +4495,41 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   background: #ffffff;
   border-color: color-mix(in srgb, var(--pm-green) 35%, transparent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--pm-green) 12%, transparent);
+}
+/* Move / Mirror dest dialog — same nested white card as Group → Existing */
+.pm-files-dest-dialog.pm-dialog[data-slot="dialog-content"] {
+  display: flex !important;
+  flex-direction: column !important;
+  width: min(420px, calc(100% - 2rem)) !important;
+  max-width: min(420px, calc(100% - 2rem)) !important;
+  height: min(640px, 90vh) !important;
+  max-height: min(640px, 90vh) !important;
+  padding: 22px 22px 14px !important;
+  gap: 0 !important;
+  overflow: hidden !important;
+}
+.pm-files-dest-body {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+  margin-top: 10px;
+  padding: 4px 16px 16px;
+  margin-inline: -16px;
+}
+.pm-files-dest-card {
+  flex: 1 1 0 !important;
+  min-height: 0 !important;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.pm-files-folder-picker {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  gap: 8px;
 }
 /* Scroll host — flat, no nested radius/shadow (parent card owns the shell) */
 .pm-timeline-ftree-scroll {
@@ -16078,7 +16112,6 @@ button.pm-ws-path-row {
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
-  margin-left: auto;
   height: 26px;
   padding: 0 10px;
   border: none;
@@ -16105,6 +16138,12 @@ button.pm-ws-path-row {
 }
 .pm-files:not(.is-msg-collapsed) .pm-files-msg-reopen {
   transition-delay: 0ms;
+  width: 0;
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  overflow: hidden;
+  gap: 0;
 }
 .pm-files-msg-reopen:hover {
   color: var(--pm-green);
@@ -16171,6 +16210,10 @@ button.pm-ws-path-row {
   height: 28px;
   display: flex;
   align-items: center;
+  /* Absolute chrome layers sit in this slot — must occupy leftover width
+     so the view-toggle sibling is not under Sort / Select. */
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .pm-files-tb-btn {
@@ -16238,6 +16281,10 @@ button.pm-ws-path-row {
 .pm-files-tb-icon:hover:not(:disabled) {
   color: var(--pm-ink) !important;
   background: color-mix(in srgb, var(--pm-ink) 5%, transparent) !important;
+}
+.pm-files-tb-icon.is-on {
+  color: var(--pm-green) !important;
+  background: var(--pm-green-soft) !important;
 }
 .pm-files-tb-nav .pm-files-tb-icon:hover:not(:disabled) {
   background: color-mix(in srgb, var(--pm-ink) 5%, transparent) !important;
@@ -16394,6 +16441,131 @@ button.pm-ws-path-row {
   gap: 4px 2px;
   padding: 10px 12px 14px;
   box-sizing: border-box;
+}
+.pm-files-list {
+  display: flex;
+  flex-direction: column;
+  align-content: stretch;
+  padding: 4px 8px 10px;
+  box-sizing: border-box;
+}
+.pm-files-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 32px;
+  border-radius: var(--pm-r-sm, 10px);
+}
+.pm-files-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 8px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  border-radius: var(--pm-r-sm, 10px);
+}
+.pm-files-row:hover:not(.is-busy) .pm-files-row-main {
+  background: color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent);
+}
+.pm-files-row.is-selected:not(.is-busy) .pm-files-row-main {
+  background: var(--pm-green-wash);
+  box-shadow: inset 0 0 0 1px var(--pm-green-soft);
+}
+.pm-files-row.is-archived {
+  opacity: 0.42;
+}
+.pm-files-row.is-busy .pm-files-row-main {
+  cursor: default;
+  background: var(--pm-green-wash);
+}
+.pm-files-row-icon {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.pm-files-row-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: var(--pm-t-meta);
+  color: var(--pm-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pm-files-row.is-archived .pm-files-row-name {
+  color: var(--pm-faint);
+}
+.pm-files-row-type,
+.pm-files-row-meta {
+  flex-shrink: 0;
+  font: var(--pm-t-meta);
+  color: var(--pm-faint);
+  font-variant-numeric: tabular-nums;
+}
+.pm-files-row-type {
+  width: 3.2rem;
+  text-align: right;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.pm-files-row-meta {
+  width: 6.5rem;
+  text-align: right;
+}
+.pm-files-row-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--pm-green);
+  color: var(--pm-on);
+  flex-shrink: 0;
+}
+.pm-files-row-edit {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--pm-faint);
+  cursor: pointer;
+  border-radius: 6px;
+}
+.pm-files-row-edit[aria-hidden] {
+  visibility: hidden;
+  pointer-events: none;
+}
+button.pm-files-row-edit {
+  opacity: 0;
+}
+.pm-files-row:hover .pm-files-row-edit {
+  opacity: 1;
+}
+.pm-files-row-edit:hover {
+  color: var(--pm-muted);
+  background: color-mix(in srgb, var(--pm-ink) 6%, transparent);
+}
+.pm-files-view-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin-left: 2px;
+  margin-right: 0;
+  flex-shrink: 0;
 }
 .pm-files-item {
   display: flex;
@@ -17979,14 +18151,26 @@ button.pm-ws-path-row {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  /* Clip inner thread only — own box-shadow still paints outside this box */
-  overflow: hidden;
+  /* Transparent host + drop-shadow of clipped children: shadow rides with
+     the sliding white card (no empty frame, no wait-until-settled). */
+  overflow: visible;
   border-radius: var(--pm-r-lg, 20px);
-  /* same tier as To-do / Notes / Meetings — whiter than stage */
-  background: #ffffff;
-  box-shadow: var(--pm-shadow);
+  background: transparent;
+  box-shadow: none;
   border: none;
   z-index: 30;
+  filter:
+    drop-shadow(0 2px 4px rgba(18, 20, 16, 0.04))
+    drop-shadow(0 12px 16px rgba(18, 20, 16, 0.10));
+}
+.pm-qc-float-clip {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  border-radius: inherit;
 }
 /*
  * Portaled into [data-pm-rail-anchor].
@@ -18004,6 +18188,17 @@ button.pm-ws-path-row {
   width: auto;
   height: auto;
   box-sizing: border-box;
+  overflow: visible;
+}
+.pm-qc-float-slide {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  /* Card surface rides with the slide so close animation reveals the rail */
+  background: #ffffff;
+  border-radius: inherit;
 }
 /*
  * Files: host has T/B = --pm-files-v-gutter and L = shadow gutter.
@@ -18017,7 +18212,6 @@ button.pm-ws-path-row {
   left: var(--pm-files-rail-shadow-gutter, 18px);
   right: 0;
   border-radius: var(--pm-r-lg, 20px);
-  box-shadow: var(--pm-shadow-sm);
 }
 /* No rail host (rare) — fixed fallback */
 .pm-qc-float--fallback {
@@ -19707,36 +19901,98 @@ button.pm-ws-path-row {
 .pm-chat-pop--cascade {
   flex-direction: row;
   align-items: stretch;
-  padding: 0;
+  padding: 4px;
+  overflow: hidden;
+  min-height: 168px;
+}
+.pm-chat-pop--cascade .pm-chat-pop-item {
+  border-radius: 8px;
+}
+.pm-chat-pop--cascade .pm-chat-pop-item-wipe {
+  display: none;
+}
+.pm-chat-pop--cascade .pm-chat-pop-item:hover,
+.pm-chat-pop--cascade .pm-chat-pop-item.is-hover {
+  background: var(--pm-green-wash, rgba(26, 94, 61, 0.06));
+  color: var(--pm-ink, #121410);
+}
+.pm-chat-pop--cascade .pm-chat-pop-item.is-active {
+  background: var(--pm-green-soft, rgba(26, 94, 61, 0.10));
+  color: var(--pm-green, #1a5e3d);
+}
+.pm-chat-pop--cascade .pm-chat-pop-item.is-active:hover,
+.pm-chat-pop--cascade .pm-chat-pop-item.is-active.is-hover {
+  background: var(--pm-green-soft, rgba(26, 94, 61, 0.14));
+  color: var(--pm-green-deep, #0f4a2d);
 }
 .pm-chat-pop-col {
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
-  min-width: 160px;
+  flex: 0 0 auto;
+  min-width: 148px;
+  max-height: min(280px, 50vh);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--pm-ink) 18%, transparent) transparent;
 }
-.pm-chat-pop-col + .pm-chat-pop-col,
-.pm-chat-pop-col.is-split {
-  border-right: 1px solid color-mix(in srgb, var(--pm-green, #1a5e3d) 14%, transparent);
+.pm-chat-pop-col::-webkit-scrollbar {
+  width: 6px;
+}
+.pm-chat-pop-col::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pm-ink) 16%, transparent);
 }
 .pm-chat-pop-models {
-  display: flex;
-  flex-direction: column;
+  position: relative;
+  flex: 0 0 auto;
+  align-self: stretch;
+  min-height: 0;
   overflow: hidden;
+  background: transparent;
   transition:
-    max-width var(--pm-chat-pop-ms) var(--pm-chat-pop-ease),
-    opacity var(--pm-chat-pop-ms) var(--pm-chat-pop-ease);
+    max-width 280ms var(--pm-chat-pop-ease),
+    opacity 220ms var(--pm-chat-pop-ease);
 }
 .pm-chat-pop-models.is-open {
-  max-width: 200px;
+  max-width: 228px;
+  flex-basis: 228px;
   opacity: 1;
+  margin-left: 2px;
+  padding-left: 2px;
+  border-left: 1px solid color-mix(in srgb, var(--pm-green, #1a5e3d) 12%, transparent);
 }
 .pm-chat-pop-models:not(.is-open) {
   max-width: 0;
+  flex-basis: 0;
   opacity: 0;
+  pointer-events: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 .pm-chat-pop-models-inner {
-  min-width: 148px;
+  position: absolute;
+  inset: 0;
+  min-width: 168px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--pm-ink) 18%, transparent) transparent;
+}
+.pm-chat-pop-models-inner::-webkit-scrollbar {
+  width: 6px;
+}
+.pm-chat-pop-models-inner::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pm-ink) 16%, transparent);
+}
+.pm-chat-pop-models .pm-chat-pop-item-label {
+  text-transform: none;
+  letter-spacing: 0.02em;
+  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff));
 }
 /* Row with green scale-x wipe (original interaction) */
 .pm-chat-pop-item {
@@ -19788,10 +20044,13 @@ button.pm-ws-path-row {
 .pm-chat-pop-item-arrow {
   position: relative;
   z-index: 10;
+  display: flex;
+  align-items: center;
   flex-shrink: 0;
   font-size: 9px;
   opacity: 0.4;
-  padding-right: 10px;
+  padding-right: 8px;
+  color: var(--pm-faint, #969c96);
   transition: opacity var(--pm-chat-pop-ms) var(--pm-chat-pop-ease);
 }
 .pm-chat-pop-item:hover .pm-chat-pop-item-arrow,

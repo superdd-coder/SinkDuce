@@ -32,6 +32,11 @@ class FolderUpdate(BaseModel):
     version: int
 
 
+class FolderArchiveToggle(BaseModel):
+    archived: bool
+    version: int
+
+
 class FolderOut(BaseModel):
     folder_id: str
     parent_folder_id: str | None = None
@@ -45,6 +50,7 @@ class FolderOut(BaseModel):
     icon_type: str | None = None
     icon_value: str | None = None
     icon_color: str | None = None
+    archived: bool = False
 
 
 class FolderTree(FolderOut):
@@ -377,6 +383,8 @@ class TodoUpdate(BaseModel):
     clear_ddl: bool = False  # when True, set ddl to NULL
     clear_chain: bool = False  # when True, set target_chain_id to NULL (main)
     clear_body: bool = False  # when True, set body to NULL
+    assignee_person_id: str | None = None
+    clear_assignee: bool = False
 
 
 class TodoLinkNode(BaseModel):

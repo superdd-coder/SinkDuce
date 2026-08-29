@@ -49,6 +49,7 @@ from src.file_mgmt.folders import (  # noqa: F401
     get_folder,
     get_folder_tree,
     list_folders,
+    toggle_folder_archive,
     update_folder,
 )
 from src.file_mgmt.layout import suggest_unique_name  # noqa: F401
@@ -90,6 +91,7 @@ from src.file_mgmt.timeline import (  # noqa: F401
 from src.file_mgmt.todos import (  # noqa: F401
     create_todo,
     delete_todo,
+    get_todo,
     link_todo_node,
     list_todos,
     update_todo,
