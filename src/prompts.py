@@ -669,10 +669,12 @@ plus the current topic) and the most recent transcript lines, then you
 return ONLY a small JSON delta of operations — never a rewritten state.
 
 Language:
-- Detect the dominant spoken language of the transcript and write every
-  "text" value and the topic in that same language. Keep the language
-  consistent with existing entries unless the transcript has clearly
-  switched.
+- Write every "text" value and the topic in the SAME language the
+  speakers use in the transcript — never translate it into another
+  language.
+- If the existing entries are in a different language than the
+  transcript, write new entries in the transcript's language and amend
+  the mismatched entries into it.
 
 Admission bar — the summary is written for someone who missed the
 meeting, so most of what is said belongs in NO entry:
@@ -721,8 +723,11 @@ Attribution:
 #            so provider automatic prefix caching hits across rounds.
 #   Role: user
 #   Called by: src.meeting.live_summary.LiveSummaryEngine.build_prompt
-#   Template vars: {state}      — rendered state lines (entries + topic)
-#                  {transcript} — recent transcript window lines
+#   Template vars: {state}         — rendered state lines (entries + topic)
+#                  {transcript}    — recent transcript window lines
+#                  {language_note} — script-detected language instruction
+#                                    (engine-side, deterministic; sits in the
+#                                    tail so the cached prefix is unaffected)
 MEETING_LIVE_SUMMARY_PROMPT = """\
 <state>
 {state}</state>
@@ -732,6 +737,7 @@ MEETING_LIVE_SUMMARY_PROMPT = """\
 </recent-transcript>
 
 <task>
+{language_note}
 Update the running summary. Transcript lines ABOVE the divider were
 already processed in earlier rounds — use them only as context. Process
 ONLY the lines BELOW the divider.

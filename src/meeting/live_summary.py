@@ -50,6 +50,33 @@ def _id_num(entry_id: str) -> int:
         return 0
 
 
+def _language_note(window: list[dict]) -> str:
+    """Deterministic language instruction from the window's script.
+
+    A weak model left to "detect the dominant language" can latch onto a
+    wrong language on a thin first window, and a consistency anchor then
+    locks the mistake in for the whole meeting. Script detection removes
+    the guessing for CJK meetings; for shared-script languages the note
+    falls back to "the transcript's exact language, never translate".
+    """
+    text = " ".join(s.get("text", "") or "" for s in window)
+    if any("\u3040" <= ch <= "\u30ff" for ch in text):
+        lang = "Japanese"
+    elif any("\uac00" <= ch <= "\ud7af" for ch in text):
+        lang = "Korean"
+    elif any("\u4e00" <= ch <= "\u9fff" for ch in text):
+        lang = "Chinese"
+    else:
+        return (
+            "Write every text value and the topic in the transcript's "
+            "exact language — never translate."
+        )
+    return (
+        f"The transcript language is {lang}. Write every text value and "
+        f"the topic in {lang}."
+    )
+
+
 def _as_list(value) -> list:
     """Weak models sometimes emit a scalar instead of an array ("resolve":
     "e5" or a single add dict) — normalize so iterating never splits strings."""
@@ -376,7 +403,9 @@ class LiveSummaryEngine:
             parts.insert(first_new, "---- new lines below ----")
 
         user = MEETING_LIVE_SUMMARY_PROMPT.format(
-            state=state_str, transcript="\n".join(parts)
+            state=state_str,
+            transcript="\n".join(parts),
+            language_note=_language_note(window),
         )
         return MEETING_LIVE_SUMMARY_SYSTEM, user
 
