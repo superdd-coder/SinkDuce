@@ -260,7 +260,16 @@ class DashScopeRealtimeTranscription(RealtimeTranscriptionProvider):
     async def stop(self) -> None:
         """Stop the transcription session."""
         if self._recognition is not None:
-            await asyncio.to_thread(self._recognition.stop)
+            try:
+                await asyncio.to_thread(self._recognition.stop)
+            except Exception:
+                # Client may already be gone (abrupt disconnect makes the SDK
+                # raise). The vocabulary table must still be freed — accounts
+                # cap at 10 tables and leaks block ALL hot words with 429.
+                logger.warning(
+                    "Realtime recognition.stop() raised; freeing vocabulary anyway",
+                    exc_info=True,
+                )
             self._recognition = None
             logger.info("Realtime transcription stopped")
         if self._vocab_id:
