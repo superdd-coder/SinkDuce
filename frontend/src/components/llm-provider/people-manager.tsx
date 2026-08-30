@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
-import { Play, Trash2, Users, UserRound } from "lucide-react"
+import { Loader2, Play, RefreshCw, Trash2, Users, UserRound } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -13,13 +13,17 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { useT } from "@/i18n/use-t"
+import { useAppStore } from "@/stores/app-store"
 import {
   deletePerson,
   getPerson,
+  getPersonProfile,
   getSpeakerPreview,
   listPeople,
+  regeneratePersonProfile,
   speakerPreviewAudioUrl,
   updatePerson,
+  type PersonProfileState,
   type SpeakerPerson,
   type SpeakerPersonDetail,
 } from "@/api/client"
@@ -142,6 +146,9 @@ export function PeopleManager({
   const [query, setQuery] = useState("")
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<SpeakerPersonDetail | null>(null)
+  const [profile, setProfile] = useState<PersonProfileState | null>(null)
+  const [profileBusy, setProfileBusy] = useState(false)
+  const locale = useAppStore((s) => s.locale)
   const [mainIn, setMainIn] = useState(true)
   const [playing, setPlaying] = useState(false)
   const lastClip = useRef<{ meeting_id: string; start: number } | null>(null)
@@ -226,6 +233,51 @@ export function PeopleManager({
       if (fadeInRaf2) cancelAnimationFrame(fadeInRaf2)
     }
   }, [open, selectedId])
+
+  useEffect(() => {
+    if (!selectedId) {
+      setProfile(null)
+      return
+    }
+    let alive = true
+    getPersonProfile(selectedId)
+      .then((p) => {
+        if (alive) setProfile(p)
+      })
+      .catch(() => {
+        if (alive) setProfile(null)
+      })
+    return () => {
+      alive = false
+    }
+  }, [selectedId, open])
+
+  useEffect(() => {
+    if (profile?.state !== "generating" || !selectedId) return
+    const id = window.setInterval(() => {
+      getPersonProfile(selectedId)
+        .then(setProfile)
+        .catch(() => {})
+    }, 900)
+    return () => window.clearInterval(id)
+  }, [profile?.state, selectedId])
+
+  const handleRegenerateProfile = useCallback(async () => {
+    if (!selectedId) return
+    setProfileBusy(true)
+    setProfile((prev) =>
+      prev
+        ? { ...prev, state: "generating" }
+        : { state: "generating", text: "", generated_at: "", source_count: 0, dirty: true },
+    )
+    try {
+      setProfile(await regeneratePersonProfile(selectedId, locale))
+    } catch {
+      setProfile((prev) => (prev ? { ...prev, state: "ready" } : prev))
+    } finally {
+      setProfileBusy(false)
+    }
+  }, [locale, selectedId])
 
   useLayoutEffect(() => {
     if (!selectedId) {
@@ -463,6 +515,61 @@ export function PeopleManager({
                         />
                       </div>
                     </div>
+                  </section>
+
+                  <section className="pm-people-profile" aria-label={t("settings.profileTitle")}>
+                    <div className="pm-settings-hw-words-head">
+                      <div className="pm-settings-hw-words-title">
+                        <span className="pm-settings-hw-words-label">
+                          {t("settings.profileTitle")}
+                        </span>
+                        {profile?.state === "ready" && profile.source_count > 0 && (
+                          <span className="pm-settings-hw-count">{profile.source_count}</span>
+                        )}
+                        {profile?.state === "ready" && profile.dirty && (
+                          <span
+                            className="pm-people-profile-dirty"
+                            title={t("settings.profileNeedsUpdate")}
+                            aria-hidden
+                          />
+                        )}
+                      </div>
+                      {profile?.state === "generating" ? (
+                        <span className="pm-people-profile-progress">
+                          <Loader2 className="size-3.5 spin" />
+                          {t("settings.profileGenerating")}
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="pm-people-profile-refresh"
+                          onClick={() => void handleRegenerateProfile()}
+                          disabled={profileBusy}
+                        >
+                          <RefreshCw className="size-3.5" />
+                          {profile?.text
+                            ? t("settings.profileRegenerate")
+                            : t("settings.profileGenerate")}
+                        </button>
+                      )}
+                    </div>
+                    {profile?.text ? (
+                      <>
+                        <p className="pm-people-profile-text">{profile.text}</p>
+                        {profile.generated_at && (
+                          <p className="pm-people-profile-meta">
+                            {t("settings.profileBasedOn", {
+                              n: profile.source_count,
+                              date: new Date(profile.generated_at).toLocaleDateString(),
+                            })}
+                          </p>
+                        )}
+                      </>
+                    ) : (
+                      <p className="pm-settings-hw-words-empty-hint">
+                        {t("settings.profileEmpty")}
+                      </p>
+                    )}
                   </section>
 
                   <section className="pm-people-history" aria-label={t("meeting.meetings")}>

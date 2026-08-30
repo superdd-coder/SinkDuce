@@ -42,3 +42,26 @@ class Person(BaseModel):
     last_speaker_id: str | None = None
     created_at: str = ""
     updated_at: str = ""
+
+
+class MeetingObservations(BaseModel):
+    """Per-meeting batch of observation cards for EVERY speaker slot.
+
+    Extracted once per meeting and shared by all persons bound in it; a
+    per-speaker empty list is a valid, cached "no durable signal" result.
+    """
+
+    meeting_id: str
+    input_hash: str  # sha256 over the per-speaker utterance map
+    speakers: dict[str, list[str]] = Field(default_factory=dict)
+    extracted_at: str = ""
+
+
+class PersonProfile(BaseModel):
+    """Aggregated short profile; a pure derived view of effective cards."""
+
+    person_id: str
+    text: str = ""
+    generated_at: str = ""
+    source_count: int = 0  # distinct meetings the fingerprint covers
+    input_fingerprint: str = ""  # hash over (binding × transcript) input set

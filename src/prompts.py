@@ -2201,3 +2201,135 @@ Chunks:
 
 Reply with ONLY this JSON:
 {{"per_chunk": [{{"score": 1, "reason": "..."}}, ... {k} entries ...], "aggregate": {{"can_answer": "yes", "reason": "..."}}}}"""
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Person Profile (observation card extraction + aggregation)
+# ═══════════════════════════════════════════════════════════════════════
+
+# MEETING_OBSERVATION_CARD_PROMPT
+#   Purpose: Batch-extract durable person-level pattern evidence for EVERY
+#            speaker in ONE meeting. One call per meeting, shared by all
+#            persons bound in it. Meeting-topic content and volatile stances
+#            stay out; per-speaker empty lists are valid cached results.
+#   Role: user
+#   Called by: src.speakers.profile._extract_meeting
+#   Template vars:
+#     meeting_title  — display title of the source meeting
+#     meeting_date   — YYYY-MM-DD of the source meeting
+#     speaker_blocks — one "## <speaker_id>" block per speaker with their
+#                      transcript lines
+MEETING_OBSERVATION_CARD_PROMPT = """You are a behavioral analyst. For EACH speaker in the meeting below, extract durable person-level pattern evidence.
+
+What counts as pattern evidence — traits that would still hold for this speaker in a different project or a different quarter:
+- speaking style (direct vs indirect, verbose vs terse, tone)
+- recurring question patterns (what they probe before agreeing to anything)
+- what kinds of arguments persuade them (data, precedents, demos, authority)
+- decision preferences (speed vs polish, risk appetite, what they weigh first)
+- role or domain signals (what they visibly own or are authoritative on)
+
+What stays OUT:
+- the meeting's topic content, decisions, and action items
+- stances tied to one live issue (those change with the quarter)
+- one-off behaviors that never repeat
+
+Rules:
+- Each item is one short phrase, in the language the speaker used.
+- At most 3 items per speaker; prefer fewer and stronger.
+- Use generic placeholders ("Project X", "entity A") instead of concrete project or person names.
+- A speaker with only small talk, purely topical remarks, or very little speech gets an empty list — that is a valid answer.
+- Output ONLY a JSON object mapping each speaker id to its array, no markdown fence, e.g.
+  {{"spk0": ["asks about staffing before agreeing to any timeline"], "spk1": []}}
+
+Meeting context: {meeting_title} ({meeting_date})
+Speakers:
+{speaker_blocks}
+"""
+
+# PERSON_PROFILE_AGGREGATION_PROMPT
+#   Purpose: Synthesize the short working person profile from accumulated
+#            observation cards. The profile answers "how do I work with this
+#            person", never "what did they say in which meeting".
+#   Role: user
+#   Called by: src.speakers.profile._aggregate
+#   Template vars:
+#     person_name — display name of the person
+#     locale      — target output language tag (e.g. zh-CN)
+#     cards       — observation cards, oldest first, one bullet per meeting
+PERSON_PROFILE_AGGREGATION_PROMPT = """Synthesize a short working person profile from observation cards collected across meetings.
+
+The profile describes HOW to work with this person:
+- speaking style, in one line
+- recurring question patterns — what they will most likely probe
+- what evidence persuades them and what does not
+- decision preferences
+- role / domain, one line
+
+Rules:
+- At most 6 short lines; each line is a compact phrase, not a paragraph.
+- Write in {locale}.
+- Only include traits supported by the cards below; when older cards conflict with newer ones, trust the newer ones (cards are listed oldest first).
+- Use generic placeholders ("Project X", "entity A") instead of concrete project or person names.
+- If the cards are too thin to support a trait, omit that trait rather than guess.
+- Output ONLY the profile text, no title, no markdown fence.
+
+Person: {person_name}
+
+Observation cards (oldest first):
+{cards}
+"""
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Pre-Meeting Brief (group-anchored one-page prep synthesis)
+# ═══════════════════════════════════════════════════════════════════════
+
+# MEETING_PREP_BRIEF_PROMPT
+#   Purpose: One-page pre-meeting brief — the user's preparation sheet for
+#            THIS meeting, organized around their agenda (what they plan to
+#            discuss), not a generic recap. Weaves the group's last-meeting
+#            summary, open todos, and attendee profiles through that lens.
+#   Role: user
+#   Called by: src.meeting.prepare.generate_brief
+#   Template vars:
+#     locale      — target output language tag (e.g. zh-CN)
+#     agenda_block — meeting title + the user's own agenda notes (may be empty)
+#     recap_block  — last group meeting: title, date, days since, summary
+#                    (or an explicit "not yet generated" note; absent when
+#                    the meeting has no group)
+#     todos_block  — open todos from the group's meetings, stale first
+#                    (empty when the meeting has no group or no open todos)
+#     persons_block — one entry per pre-selected attendee
+MEETING_PREP_BRIEF_PROMPT = """Write a one-page pre-meeting brief. The user walks into this meeting in two minutes; the brief is their preparation sheet, organized around what THEY plan to discuss (the agenda below), not a generic recap of last time.
+
+Structure — emit each section as a markdown H2 with EXACTLY this English wording (the headings are UI tokens: never translate, reword, or number them). Omit any section whose input is empty or absent:
+## Recap — only what happened last time that matters for THIS meeting's agenda: date, title, days since, and the relevant decisions.
+## To chase — one "- " bullet per open follow-up worth pressing on, agenda- or project-relevant first: the item, its owner (by name), how long it has been open. Omit administrative or tooling follow-ups unrelated to the group's project threads.
+## Undecided — matters the last meeting left open, one bullet each; append "(likely today)" to the ones this agenda is likely to settle.
+## Attendees — one "### Name" block per attendee with two or three short lines: how they will likely react to THIS agenda, what they will probe, and ONE actionable tip prefixed with "-> " — what to bring, or how to frame it for this person.
+
+How to use the agenda:
+- When the agenda is present, it is the lens for every section: prefer agenda-relevant history over complete history, and derive each attendee tip from their profile as it applies to these topics.
+- When an agenda topic matches an open matter or follow-up, connect them explicitly in that section.
+- When the agenda is absent, write the brief from recency: the most recent threads and the most pressing follow-ups.
+
+Rules:
+- Grounding: every number, date, and name must come from the input, attached to exactly the entity and condition the input gives it — never merge or reuse a figure across projects or scenarios. When the input is ambiguous or silent on something, omit it; never interpret.
+- No meta-commentary: never add notes, caveats, or annotations such as "*Note: ...*" or "(Agenda link: ...)". State relevance inside the sentence itself. The only allowed annotation is the "(likely today)" suffix in Undecided.
+- A single matter may appear in at most one section; when it is undecided, it belongs to Undecided, not Recap.
+- Keep the whole brief within one screen; every line must earn its place.
+- If the recap input says the summary is not yet generated, the Recap section is exactly that one line and nothing else.
+- An attendee with no profile and no shared history gets a single line: first-time attendee, no profile yet.
+- Write every body line (except given person names) in {locale}; keep the H2 headings and "### Name" blocks in their exact form.
+- Use generic placeholders ("Project X", "entity A") instead of names not given in the input.
+- Never output raw speaker markers such as [spk:0]; use the person's name.
+
+Agenda (what the user plans to discuss — may be empty):
+{agenda_block}
+
+{recap_block}
+
+{todos_block}
+
+{persons_block}
+"""

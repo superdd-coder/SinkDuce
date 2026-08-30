@@ -321,6 +321,7 @@ async def update_meeting(meeting_id: str, body: dict = Body()):
         "hot_words_library_ids",
         "blueprint",
         "tabs",
+        "expected_people",
     }
     fields = {k: v for k, v in body.items() if k in allowed_fields}
     # Handle notes separately -- save to file
@@ -336,6 +337,29 @@ async def update_meeting(meeting_id: str, body: dict = Body()):
         meeting = store.get_meeting(meeting_id)
     logger.info("[UPDATE] Meeting %s updated, status=%s", meeting_id, meeting.status.value)
     return _serialize_meeting(meeting)
+
+
+@router.get("/meetings/{meeting_id}/brief")
+async def get_meeting_brief(meeting_id: str):
+    from src.meeting.prepare import brief_state
+
+    try:
+        return brief_state(meeting_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.post("/meetings/{meeting_id}/brief/generate")
+async def generate_meeting_brief(meeting_id: str, body: dict = Body(default=None)):
+    from src.meeting.prepare import start_brief_generate
+
+    locale = ((body or {}).get("locale") or "zh-CN").strip() or "zh-CN"
+    try:
+        return start_brief_generate(meeting_id, locale=locale)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 # ── File Uploads ──────────────────────────────────────────────
