@@ -230,6 +230,30 @@ def test_state_renders_placeholder_and_entry_times():
     assert '"t"' in user  # entry JSON carries its meeting time
 
 
+# ── deterministic language steering (never let the model guess) ──────
+
+
+def test_prompt_language_note_is_script_deterministic():
+    eng = _engine()
+    eng.ingest_segment(0, 2, "我们讨论一下交付时间", key="a")
+    _sys, user = eng.build_prompt()
+    assert "Chinese" in user  # CJK in window → explicit Chinese instruction
+
+    eng2 = _engine()
+    eng2.ingest_segment(0, 2, "let us talk about the delivery date", key="a")
+    _sys, user2 = eng2.build_prompt()
+    assert "never translate" in user2  # latin script → no guessing, no translating
+
+
+def test_system_prompt_has_no_sticky_language_anchor():
+    from src.prompts import MEETING_LIVE_SUMMARY_SYSTEM
+
+    # The old "keep consistent with existing entries" rule locked in a bad
+    # first-round language guess for an entire meeting.
+    assert "consistent with existing entries" not in MEETING_LIVE_SUMMARY_SYSTEM
+    assert "never translate" in MEETING_LIVE_SUMMARY_SYSTEM
+
+
 def test_drop_removes_entry():
     eng = _engine()
     eng.apply_delta({"add": [{"kind": "point", "text": "a"}, {"kind": "point", "text": "b"}]})
@@ -336,8 +360,10 @@ def test_live_summary_system_prompt_semantics_and_language():
     assert "acknowledge" in MEETING_LIVE_SUMMARY_SYSTEM
     # Point bar: durable information only
     assert "durable" in MEETING_LIVE_SUMMARY_SYSTEM
-    # Output language follows the meeting's spoken language
-    assert "spoken language" in MEETING_LIVE_SUMMARY_SYSTEM
+    # Output language follows the meeting's spoken language, never translates
+    assert "never translate" in MEETING_LIVE_SUMMARY_SYSTEM
+    # And must not anchor to existing entries (locks in a bad first guess)
+    assert "consistent with existing entries" not in MEETING_LIVE_SUMMARY_SYSTEM
 
 
 # ── ingestion & window ───────────────────────────────────────────────

@@ -167,6 +167,8 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   const [focusRef, setFocusRef] = useState<{ id: string; ts: number; fromChat?: boolean } | null>(null)
   const [activeSectionTag, setActiveSectionTag] = useState("")
   const discardingRef = useRef(false)
+  /** 3-min silent-capture hint timer; cancelled on stop/discard/unmount */
+  const noAudioWarnTimerRef = useRef<number | null>(null)
   const [playbackTime, setPlaybackTime] = useState<number | null>(null)
   const [quickChatOpen, setQuickChatOpen] = useState(false)
   const [transcriptJumpCounter, setTranscriptJumpCounter] = useState(0)
@@ -1048,6 +1050,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   }, [])
   useEffect(() => () => {
     if (startLiveChipCloseTimerRef.current) clearTimeout(startLiveChipCloseTimerRef.current)
+    if (noAudioWarnTimerRef.current) window.clearTimeout(noAudioWarnTimerRef.current)
   }, [])
 
   const handleStartRecording = async () => {
@@ -1083,8 +1086,12 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       toast.error(startError, { duration: 6500 })
       return
     }
-    window.setTimeout(() => {
-      if (!captureOwnerRef.current) return
+    // Silent-capture hint: only after a sustained 3 minutes of silence — an
+    // early check fired while macOS permission prompts were still open.
+    if (noAudioWarnTimerRef.current) window.clearTimeout(noAudioWarnTimerRef.current)
+    noAudioWarnTimerRef.current = window.setTimeout(() => {
+      noAudioWarnTimerRef.current = null
+      if (!captureOwnerRef.current) return // stopped/discarded meanwhile
       const peak = Math.max(0, ...(levelsRef.current ?? [0]))
       if (peak < 0.02) {
         toast.warning(
@@ -1092,7 +1099,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
           { duration: 8000 },
         )
       }
-    }, 3500)
+    }, 3 * 60_000)
     // Do not force realtime on — respect pre-start preference (hover chip / default)
   }
 
@@ -1104,6 +1111,10 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   const handleStopRecording = useCallback(() => {
     // Keep captureOwnerRef for upload target even if user is viewing another meeting
     const owner = captureOwnerRef.current ?? recordingMeetingId
+    if (noAudioWarnTimerRef.current) {
+      window.clearTimeout(noAudioWarnTimerRef.current)
+      noAudioWarnTimerRef.current = null
+    }
     // Flush live notes immediately so Studio/Summarize does not mount on a stale empty field
     notes.flush(owner)
     // Lock Capture on "Transcribing" UI before realtime save sets status=completed
@@ -1199,6 +1210,10 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   const handleDiscard = async () => {
     const owner = captureOwnerRef.current ?? recordingMeetingId ?? activeMeeting
     if (!owner) return
+    if (noAudioWarnTimerRef.current) {
+      window.clearTimeout(noAudioWarnTimerRef.current)
+      noAudioWarnTimerRef.current = null
+    }
     // Set flag BEFORE stopping recorder so the audioBlob effect skips upload
     discardingRef.current = true
     setPostLiveFileTxMeetingId((mid) => (mid === owner ? null : mid))
