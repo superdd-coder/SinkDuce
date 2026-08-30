@@ -57,6 +57,17 @@ export interface MeetingTab {
   payload_ref: string[]
 }
 
+export interface MeetingBrief {
+  state: "none" | "idle" | "generating" | "ready" | "error"
+  markdown: string
+  error?: string | null
+  generated_at: string
+  group_id?: string | null
+  group_title?: string
+  person_ids: string[]
+  locale?: string
+}
+
 export interface Meeting {
   id: string
   title: string
@@ -82,6 +93,8 @@ export interface Meeting {
   speaker_slots_ms?: number | null
   hot_words_library_id?: string | null
   hot_words_library_ids?: string[]
+  expected_people?: string[]
+  brief?: MeetingBrief | null
   created_at: string
   updated_at: string
   transcript_index_status?: "" | "building" | "ready" | "failed"
@@ -153,10 +166,19 @@ export function meetingHotWordIds(meeting: Pick<Meeting, "hot_words_library_id" 
   return meeting.hot_words_library_id ? [meeting.hot_words_library_id] : []
 }
 
-export const updateMeeting = (id: string, data: Partial<Pick<Meeting, "title" | "speaker_names" | "hot_words_library_id" | "hot_words_library_ids"> & { notes?: string; blueprint?: BlueprintItem[]; tabs?: MeetingTab[] }>) =>
+export const updateMeeting = (id: string, data: Partial<Pick<Meeting, "title" | "speaker_names" | "hot_words_library_id" | "hot_words_library_ids" | "expected_people"> & { notes?: string; blueprint?: BlueprintItem[]; tabs?: MeetingTab[] }>) =>
   request<Meeting>(`/meetings/${id}`, {
     method: "PUT",
     body: JSON.stringify(data),
+  })
+
+export const getMeetingBrief = (id: string) =>
+  request<MeetingBrief>(`/meetings/${id}/brief`)
+
+export const generateMeetingBrief = (id: string, locale = "zh-CN") =>
+  request<MeetingBrief>(`/meetings/${id}/brief/generate`, {
+    method: "POST",
+    body: JSON.stringify({ locale }),
   })
 
 export const deleteMeeting = (id: string) =>

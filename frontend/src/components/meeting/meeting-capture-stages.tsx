@@ -10,6 +10,7 @@ import { HotWordsSelector } from "./hot-words-selector"
 import { LiveCaptureControlCard } from "./live-capture-control-card"
 import { MeetingNotesCard } from "./meeting-notes-card"
 import { LiveSummaryPanel, LiveSummaryTail } from "./live-summary-panel"
+import { PrepareRail } from "./prepare-rail"
 import type { MeetingNotesStatus } from "@/hooks/use-meeting-notes"
 import { useT } from "@/i18n/use-t"
 
@@ -77,56 +78,41 @@ export interface MeetingCaptureStagesProps {
 
 function PrepStage({
   mode,
-  meetingId,
+  meeting,
   notesOpen,
   onToggleNotes,
   notes,
   onNotesChange,
   notesStatus,
+  onMeetingUpdated,
   children,
 }: {
   mode: "empty" | "audio-ready" | "transcribing"
-  meetingId: string
+  meeting: Meeting
   notesOpen: boolean
   onToggleNotes: () => void
   notes: string
   onNotesChange: (value: string) => void
   notesStatus: MeetingNotesStatus
+  onMeetingUpdated: (meeting: Meeting) => void
   children: ReactNode
 }) {
-  const t = useT()
   return (
     <div
       className={cn("pm-meeting-mode-empty", notesOpen && "is-notes-open")}
       data-meeting-mode={mode}
     >
       <div className="pm-meeting-e-main">{children}</div>
-      <aside
-        id={`meeting-notes-rail-${meetingId}`}
-        className="pm-meeting-notes-rail"
-        aria-hidden={!notesOpen}
-      >
-        <div className="pm-meeting-notes-dock">
-          <button
-            type="button"
-            className={cn("pm-meeting-notes-handle", !!notes.trim() && "has-content")}
-            aria-expanded={notesOpen}
-            aria-controls={`meeting-notes-rail-${meetingId}`}
-            aria-label={t("meeting.notesHandle")}
-            onClick={onToggleNotes}
-          >
-            <span className="pm-meeting-notes-handle-label">{t("common.notes")}</span>
-            {!!notes.trim() && <span className="pm-meeting-notes-handle-dot" aria-hidden />}
-          </button>
-          <MeetingNotesCard
-            meetingId={meetingId}
-            value={notes}
-            onChange={onNotesChange}
-            status={notesStatus}
-            placeholder={t("meeting.writeNotesPrep")}
-          />
-        </div>
-      </aside>
+      <PrepareRail
+        meetingId={meeting.id}
+        meeting={meeting}
+        open={notesOpen}
+        onToggle={onToggleNotes}
+        notes={notes}
+        onNotesChange={onNotesChange}
+        notesStatus={notesStatus}
+        onMeetingUpdated={onMeetingUpdated}
+      />
     </div>
   )
 }
@@ -226,12 +212,13 @@ mode === "setup" ? (
                */
               <PrepStage
                 mode="empty"
-                meetingId={meeting.id}
+                meeting={meeting}
                 notesOpen={notesRailOpen}
                 onToggleNotes={onToggleNotesRail}
                 notes={liveNotes}
                 onNotesChange={handleLiveNotesChange}
                 notesStatus={notesStatus}
+                onMeetingUpdated={onPersonAssigned}
               >
                 <div className="pm-meeting-e-stage">
                   <p className="pm-meeting-e-kicker">{t("meeting.newMeeting")}</p>
@@ -348,12 +335,13 @@ mode === "setup" ? (
               /* ═══ Capture · Audio ready (upload / post-live before file-tx) ═══ */
               <PrepStage
                 mode="audio-ready"
-                meetingId={meeting.id}
+                meeting={meeting}
                 notesOpen={notesRailOpen}
                 onToggleNotes={onToggleNotesRail}
                 notes={liveNotes}
                 onNotesChange={handleLiveNotesChange}
                 notesStatus={notesStatus}
+                onMeetingUpdated={onPersonAssigned}
               >
                 <div className="pm-meeting-e-stage pm-meeting-e-stage--wide">
                   <p className="pm-meeting-e-kicker">{t("meeting.audioReady")}</p>
@@ -431,12 +419,13 @@ mode === "setup" ? (
               /* ═══ Capture · File transcription in progress ═══ */
               <PrepStage
                 mode="transcribing"
-                meetingId={meeting.id}
+                meeting={meeting}
                 notesOpen={notesRailOpen}
                 onToggleNotes={onToggleNotesRail}
                 notes={liveNotes}
                 onNotesChange={handleLiveNotesChange}
                 notesStatus={notesStatus}
+                onMeetingUpdated={onPersonAssigned}
               >
                 <div className="pm-meeting-e-stage pm-meeting-e-stage--wide">
                   <p className="pm-meeting-e-kicker">{t("meeting.transcribing")}</p>

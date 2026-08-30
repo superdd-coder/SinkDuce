@@ -97,6 +97,19 @@ class MeetingGroup(BaseModel):
     last_chat_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class MeetingBrief(BaseModel):
+    """Pre-meeting brief artifact, persisted on the meeting itself."""
+
+    state: str = "idle"  # idle | generating | ready | error
+    markdown: str = ""
+    error: str | None = None
+    generated_at: str = ""
+    group_id: str | None = None
+    group_title: str = ""
+    person_ids: list[str] = Field(default_factory=list)
+    locale: str = "zh-CN"
+
+
 class Meeting(BaseModel):
     id: str = ""
     title: str = ""
@@ -124,6 +137,8 @@ class Meeting(BaseModel):
     speaker_slots_ms: int | None = None
     hot_words_library_id: str | None = None
     hot_words_library_ids: list[str] = Field(default_factory=list)
+    expected_people: list[str] = Field(default_factory=list)  # pre-selected attendees
+    brief: MeetingBrief | None = None
     transcript_index_status: str = ""  # "" | building | ready | failed
     transcript_index_error: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

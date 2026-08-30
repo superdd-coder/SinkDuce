@@ -263,7 +263,7 @@
   --pm-ink: #121410;
   --pm-text: #2a2e2a;
   --pm-muted: #6a706a;
-  --pm-faint: #969c96;
+  --pm-faint: #79817b;
   --pm-green: var(--ze-green, #1a5e3d);
   --pm-green-deep: #0f4a2d;
   --pm-green-soft: rgba(26, 94, 61, 0.10);
@@ -288,14 +288,14 @@
   --pm-ff-prose: var(--ff-serif, "Source Serif 4 Variable", Georgia, serif);
   --pm-ease: cubic-bezier(0.22, 1, 0.36, 1);
   /* Collection title slightly larger than chrome (was 22px) */
-  --pm-t-display: 300 26px/1.22 var(--pm-ff-prose);
+  --pm-t-display: 370 26px/1.22 var(--pm-ff-prose);
   /* Overview vertical rhythm: title↔tabs = tabs↔summary stack gaps */
   --pm-ov-gap: 14px;
   --pm-t-title: 400 13px/1.35 var(--pm-ff);
-  --pm-t-body: 300 13px/1.5 var(--pm-ff);
-  --pm-t-label: 400 11px/1.3 var(--pm-ff);
-  --pm-t-meta: 300 11px/1.35 var(--pm-ff);
-  --pm-t-prose: 300 14.5px/1.75 var(--pm-ff-prose);
+  --pm-t-body: 420 13px/1.55 var(--pm-ff);
+  --pm-t-label: 440 11px/1.3 var(--pm-ff);
+  --pm-t-meta: 420 11px/1.35 var(--pm-ff);
+  --pm-t-prose: 420 14.5px/1.75 var(--pm-ff-prose);
   --pm-prose-measure: 58ch;
   --pm-rail-min: 272px;
   /*
@@ -1024,7 +1024,7 @@ li.pm-toast[data-sonner-toast] {
 [data-sonner-toast].pm-toast [data-description] {
   margin: 0 !important;
   font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   font-size: 12px !important;
   line-height: 1.4 !important;
   color: var(--pm-muted, #6a706a) !important;
@@ -2692,7 +2692,7 @@ li.pm-toast[data-sonner-toast] {
 .sinkduce-file-viewer .pdf-shell {
   background: #ffffff !important;
   color: inherit !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
 }
 /* Hard-hide nav chrome even if library still mounts it */
 .sinkduce-file-viewer .pdf-nav-pane,
@@ -2718,14 +2718,14 @@ li.pm-toast[data-sonner-toast] {
   background: transparent !important;
   color: var(--fv-muted) !important;
   font-size: 11px !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
 }
 /* PDF toolbar leftovers (if not fully re-homed) */
 .sinkduce-file-viewer .pdf-toolbar {
   border-color: var(--fv-border) !important;
   background: var(--fv-bg) !important;
   box-shadow: none !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   min-height: 0 !important;
 }
 .sinkduce-file-viewer .pdf-icon-button,
@@ -2733,14 +2733,14 @@ li.pm-toast[data-sonner-toast] {
 .sinkduce-file-viewer .pdf-rotation-meter {
   color: var(--fv-green) !important;
   font-size: 11px !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   border-radius: 4px !important;
 }
 .sinkduce-file-viewer .pdf-page-meter,
 .sinkduce-file-viewer .pdf-page-meter strong {
   color: var(--fv-green) !important;
   font-size: 10px !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   border-radius: 4px !important;
 }
 .sinkduce-file-viewer .pdf-icon-button:hover:not(:disabled),
@@ -2763,7 +2763,7 @@ li.pm-toast[data-sonner-toast] {
 .sinkduce-file-viewer [class*="sheet-tab"],
 .sinkduce-file-viewer [class*="SheetTab"] {
   font-size: 11px !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   letter-spacing: 0.03em !important;
   color: var(--fv-green) !important;
 }
@@ -3215,7 +3215,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 }
 .pm-timeline-panel-meta {
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-faint);
 }
 .pm-timeline-panel-body {
@@ -3341,7 +3341,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   margin-top: 2px;
   min-width: 0;
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-faint);
 }
 .pm-timeline-node-action {
@@ -3850,7 +3850,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   border-radius: var(--pm-r-sm, 8px);
   background: transparent;
   font: var(--pm-t-body);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-text);
   text-align: left;
   cursor: pointer;
@@ -3889,7 +3889,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 .pm-timeline-menu-count {
   margin: 0;
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-faint);
   font-variant-numeric: tabular-nums;
   text-align: right;
@@ -4180,7 +4180,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   border: none;
   border-radius: 999px;
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-muted);
   background: transparent;
   cursor: pointer;
@@ -4480,7 +4480,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   box-shadow: none;
   font: var(--pm-t-meta);
   font-size: 12px;
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-text);
   outline: none;
   transition:
@@ -4632,7 +4632,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   font: var(--pm-t-meta);
   font-size: 12px;
   line-height: 1.35;
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-text);
 }
 /* Count pill */
@@ -4648,7 +4648,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   font: var(--pm-t-meta);
   font-size: 10px;
   line-height: 1;
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-muted);
   background: rgba(18, 20, 16, 0.05);
   font-variant-numeric: tabular-nums;
@@ -4719,7 +4719,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   margin: 0;
   padding: 6px 10px 10px;
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-faint);
 }
 
@@ -4749,7 +4749,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 .pm-timeline-field {
   width: 100%;
   font: var(--pm-t-body);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-text);
   border-radius: var(--pm-r-sm, 8px);
   border: 1px solid color-mix(in srgb, var(--pm-ink) 8%, transparent);
@@ -4772,7 +4772,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   border-radius: var(--pm-r-sm, 8px);
   background: rgba(18, 20, 16, 0.03);
   font: var(--pm-t-body);
-  font-weight: 300;
+  font-weight: 400;
 }
 .pm-timeline-attach-row:hover {
   background: rgba(18, 20, 16, 0.05);
@@ -4814,7 +4814,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   color: var(--pm-on, #e8f0eb);
   padding: 6px 10px;
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   box-shadow: var(--pm-shadow);
   border: none;
   animation: pm-timeline-menu-in 140ms var(--pm-timeline-ease) both;
@@ -4830,7 +4830,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 .pm-timeline-tip-desc {
   margin-top: 2px;
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   color: color-mix(in srgb, #ffffff 80%, transparent);
   line-height: 1.35;
 }
@@ -5063,7 +5063,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 .pm-h-num {
   font-family: var(--pm-ff-prose);
   font-size: 20px;
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1;
   letter-spacing: -0.015em;
   font-variant-numeric: tabular-nums;
@@ -5112,7 +5112,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   --pm-blurb-lh: 1.55;
   --pm-blurb-lines: 3;
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-muted);
   line-height: var(--pm-blurb-lh);
   /* Fixed band height (3 lines) — does not grow with content */
@@ -5146,7 +5146,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   margin: 0;
   font-family: var(--pm-ff-prose);
   font-size: 15px;
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.3;
   letter-spacing: -0.01em;
   color: var(--pm-ink);
@@ -5906,7 +5906,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   margin: 0;
   font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
   font-size: 14px;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--pm-ink, #121410);
@@ -5914,13 +5914,13 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 }
 .pm-shell-brand-em {
   font-style: italic;
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-green, #1a5e3d);
 }
 .pm-shell-tagline {
   font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
   font-size: 11px;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: 0.04em;
   color: var(--pm-muted, #6a706a);
   white-space: nowrap;
@@ -6615,7 +6615,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   min-height: 22px;
   font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif));
   font-size: 10px;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: 0.08em;
   color: var(--pm-faint, #969c96);
 }
@@ -6822,14 +6822,14 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   margin: 0;
   font: var(--pm-t-title, 400 13px/1.35 var(--pm-ff, system-ui, sans-serif));
   font-size: 15px;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: -0.01em;
   color: var(--pm-ink, #121410);
 }
 .pm-shell-update-from {
   margin: 2px 0 0;
   font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif));
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-faint, #969c96);
 }
 .pm-shell-update-actions {
@@ -6866,7 +6866,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   background: none;
   cursor: pointer;
   font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif));
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-faint, #969c96);
   transition: color 140ms ease;
 }
@@ -6933,7 +6933,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 .pm-update-ver-chip-val {
   font: var(--pm-t-title, 400 13px/1.35 var(--pm-ff, system-ui, sans-serif));
   font-size: 14px;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: -0.01em;
   color: var(--pm-ink, #121410);
 }
@@ -6989,7 +6989,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   scrollbar-color: color-mix(in srgb, var(--pm-ink, #121410) 16%, transparent)
     transparent;
   font: var(--pm-t-body, 300 13px/1.5 var(--pm-ff, system-ui, sans-serif));
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.55;
   color: var(--pm-text, #3a3f3a);
   white-space: pre-line;
@@ -6997,7 +6997,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 .pm-update-help {
   margin: 0 0 8px;
   font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif));
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.45;
   color: var(--pm-muted, #6b716b);
 }
@@ -7173,7 +7173,7 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-people-meeting-title {
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 14px;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: -0.015em;
   line-height: 1.35;
   min-width: 0;
@@ -7184,7 +7184,7 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-chat-sess-row.is-active .pm-chat-sess-name,
 .pm-rail-row.is-active .pm-rail-name,
 .pm-settings-hw-lib.is-active .pm-rail-name {
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-green, #1a5e3d);
 }
 
@@ -7467,7 +7467,7 @@ button.pm-rail-new:hover:not(:disabled) {
   padding: 0 !important;
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
   font-size: clamp(18px, 2.2vw, 22px) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   font-style: normal !important;
   letter-spacing: 0.01em !important;
   line-height: 1.25 !important;
@@ -7491,7 +7491,7 @@ button.pm-rail-new:hover:not(:disabled) {
   max-width: 46ch;
   font: var(--pm-t-meta, 300 12px/1.45 var(--pm-ff, system-ui, sans-serif)) !important;
   font-size: 12.5px !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   line-height: 1.45 !important;
   letter-spacing: 0 !important;
   text-transform: none !important;
@@ -7802,7 +7802,7 @@ button.pm-rail-new:hover:not(:disabled) {
   margin-top: 2px !important;
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
   font-size: clamp(20px, 2.1vw, 24px) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   letter-spacing: -0.018em !important;
   line-height: 1.22 !important;
   text-transform: none !important;
@@ -8136,7 +8136,7 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-todo-card-hint {
   margin: 0;
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-faint);
   white-space: nowrap;
 }
@@ -8178,7 +8178,7 @@ button.pm-rail-new:hover:not(:disabled) {
   left: 12px;
   z-index: 1;
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-faint);
 }
 .pm-todo-ddl-input {
@@ -8203,7 +8203,7 @@ button.pm-rail-new:hover:not(:disabled) {
   border-radius: var(--pm-r-sm, 8px);
   background: color-mix(in srgb, var(--pm-canvas) 55%, #ffffff);
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-faint);
 }
 .pm-todo-ddl-clear {
@@ -8218,7 +8218,7 @@ button.pm-rail-new:hover:not(:disabled) {
   border-radius: var(--pm-r-sm, 8px);
   background: var(--pm-green-wash);
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-muted);
   box-shadow: none;
   border: none;
@@ -8955,7 +8955,7 @@ button.pm-rail-new:hover:not(:disabled) {
   padding: 0;
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 15px;
-  font-weight: 300;
+  font-weight: 400;
   font-variation-settings: "wght" 300;
   letter-spacing: -0.02em;
   line-height: 1.35;
@@ -9105,7 +9105,7 @@ button.pm-rail-new:hover:not(:disabled) {
   min-width: 0;
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 14.5px;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: -0.02em;
   line-height: 1.35;
   color: var(--pm-ink, #121410);
@@ -9245,7 +9245,7 @@ button.pm-rail-new:hover:not(:disabled) {
   background: #ffffff;
   box-shadow: var(--pm-shadow-sm);
   font: 300 12.5px/1.4 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   letter-spacing: -0.01em !important;
   color: var(--pm-ink, #121410) !important;
   text-transform: none !important;
@@ -9948,7 +9948,7 @@ button.pm-rail-new:hover:not(:disabled) {
   padding: 14px var(--pm-settings-gutter) 44px;
   font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
   font-size: 13.5px;
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.55;
   color: var(--pm-text);
   -webkit-font-smoothing: antialiased;
@@ -9986,7 +9986,7 @@ button.pm-rail-new:hover:not(:disabled) {
   font: var(--pm-t-display);
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: clamp(24px, 2.8vw, 28px);
-  font-weight: 300;
+  font-weight: 400;
   font-variation-settings: "wght" 300;
   letter-spacing: 0.01em;
   line-height: 1.18;
@@ -9997,7 +9997,7 @@ button.pm-rail-new:hover:not(:disabled) {
   margin: 0;
   max-width: 48ch;
   font: var(--pm-settings-t-body);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-muted);
   line-height: 1.6;
 }
@@ -10017,7 +10017,7 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-settings .pm-select-trigger--sm,
 .pm-settings-dlg .pm-select-trigger--sm {
   font: var(--pm-settings-t-body);
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: 0.005em;
   min-height: 36px;
   padding: 0 12px 0 14px;
@@ -10040,18 +10040,18 @@ button.pm-rail-new:hover:not(:disabled) {
 }
 .pm-settings .pm-select-trigger-label,
 .pm-settings-dlg .pm-select-trigger-label {
-  font-weight: 300;
+  font-weight: 400;
 }
 /* Inputs / meta chrome on this surface */
 .pm-settings [data-slot="input"],
 .pm-settings-dlg [data-slot="input"] {
   font: var(--pm-settings-t-body) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
 }
 .pm-settings .pm-meta,
 .pm-settings-dlg .pm-meta {
   font: var(--pm-settings-t-meta);
-  font-weight: 300;
+  font-weight: 400;
 }
 .pm-settings .pm-field-label,
 .pm-settings-dlg .pm-field-label,
@@ -10183,7 +10183,7 @@ button.pm-rail-new:hover:not(:disabled) {
   font: var(--pm-settings-t-section);
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: clamp(17px, 1.7vw, 19px);
-  font-weight: 300;
+  font-weight: 400;
   font-variation-settings: "wght" 300;
   letter-spacing: -0.01em;
   line-height: 1.25;
@@ -10193,7 +10193,7 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-settings-card-desc {
   margin: 0;
   font: var(--pm-settings-t-body);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-muted);
   line-height: 1.55;
   max-width: 52ch;
@@ -10207,7 +10207,7 @@ button.pm-rail-new:hover:not(:disabled) {
   font: var(--pm-settings-t-sub);
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: clamp(14.5px, 1.35vw, 15.5px);
-  font-weight: 300;
+  font-weight: 400;
   font-variation-settings: "wght" 300;
   letter-spacing: -0.005em;
   line-height: 1.3;
@@ -10300,7 +10300,7 @@ button.pm-rail-new:hover:not(:disabled) {
   font: var(--pm-settings-t-name);
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: clamp(14.5px, 1.35vw, 15.5px);
-  font-weight: 300;
+  font-weight: 400;
   font-variation-settings: "wght" 300;
   letter-spacing: -0.01em;
   line-height: 1.3;
@@ -10340,7 +10340,7 @@ button.pm-rail-new:hover:not(:disabled) {
   padding: 3px 9px;
   border-radius: 999px;
   font: var(--pm-settings-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: 0.01em;
   color: var(--pm-muted);
   background: color-mix(in srgb, var(--pm-ink) 4%, #ffffff);
@@ -10368,7 +10368,7 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-settings-provider-meta {
   margin: 0;
   font: var(--pm-settings-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: 0.01em;
   color: var(--pm-faint);
   overflow: hidden;
@@ -10513,7 +10513,7 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-settings-adv-desc {
   margin: 0;
   font: var(--pm-settings-t-meta, var(--pm-t-meta));
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.5;
   color: var(--pm-faint);
   max-width: 52ch;
@@ -10919,7 +10919,7 @@ button.pm-rail-new:hover:not(:disabled) {
   font: var(--pm-settings-t-name);
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: clamp(14.5px, 1.35vw, 15.5px);
-  font-weight: 300;
+  font-weight: 400;
   font-variation-settings: "wght" 300;
   letter-spacing: -0.01em;
   line-height: 1.3;
@@ -10941,7 +10941,7 @@ button.pm-rail-new:hover:not(:disabled) {
 }
 .pm-settings-conn-inline {
   font: var(--pm-settings-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-ink);
 }
 .pm-settings-conn-snippet {
@@ -10963,7 +10963,7 @@ button.pm-rail-new:hover:not(:disabled) {
   border-radius: 12px;
   background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 70%, #ffffff);
   font: var(--pm-settings-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: 0.01em;
   line-height: 1.55;
   color: var(--pm-ink);
@@ -11055,7 +11055,7 @@ button.pm-rail-new:hover:not(:disabled) {
   --pm-settings-t-body: 300 13.5px/1.55 var(--pm-ff, "Geist Variable", system-ui, sans-serif);
   --pm-settings-t-meta: 300 12px/1.45 var(--pm-ff, "Geist Variable", system-ui, sans-serif);
   font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
-  font-weight: 300;
+  font-weight: 400;
   -webkit-font-smoothing: antialiased;
 }
 .pm-settings-dlg.pm-dialog[data-slot="dialog-content"] {
@@ -11123,7 +11123,7 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-settings-dlg-pref-label {
   margin: 0;
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-muted);
   line-height: 1.4;
   min-width: 0;
@@ -11137,7 +11137,7 @@ button.pm-rail-new:hover:not(:disabled) {
   font: var(--pm-settings-t-sub);
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 14.5px;
-  font-weight: 300;
+  font-weight: 400;
   font-variation-settings: "wght" 300;
   letter-spacing: -0.005em;
   line-height: 1.3;
@@ -11147,7 +11147,7 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-settings-dlg-card-hint {
   margin: 0;
   font: var(--pm-settings-t-meta, var(--pm-t-meta));
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: 0.01em;
   color: var(--pm-faint);
   line-height: 1.5;
@@ -11256,7 +11256,7 @@ button.pm-rail-new:hover:not(:disabled) {
   white-space: nowrap;
   font: var(--pm-t-meta);
   font-size: 12px;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: 0.01em;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   color: inherit;
@@ -11650,7 +11650,7 @@ button.pm-rail-new:hover:not(:disabled) {
   background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 55%, #ffffff) !important;
   border-color: color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent) !important;
   font: var(--pm-t-body) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   letter-spacing: 0.005em;
 }
 .pm-settings-hw-textarea[data-slot="textarea"],
@@ -11663,7 +11663,7 @@ button.pm-rail-new:hover:not(:disabled) {
   background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 55%, #ffffff) !important;
   border-color: color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent) !important;
   font: var(--pm-t-body) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   letter-spacing: 0.005em;
   line-height: 1.45 !important;
 }
@@ -11722,7 +11722,7 @@ button.pm-rail-new:hover:not(:disabled) {
 }
 .pm-settings-hw-autosave {
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--pm-faint, #969c96);
@@ -11809,7 +11809,7 @@ button.pm-rail-new:hover:not(:disabled) {
   padding-left: 8px !important;
   padding-right: 4px !important;
   font: var(--pm-t-body) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   letter-spacing: 0.005em;
 }
 .pm-settings-hw-word-text:focus-visible,
@@ -11868,7 +11868,7 @@ button.pm-rail-new:hover:not(:disabled) {
   height: 24px !important;
   padding: 0 8px 0 10px !important;
   font: var(--pm-t-meta) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   letter-spacing: 0.01em;
   background: #ffffff !important;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pm-ink, #121410) 7%, transparent) !important;
@@ -11914,14 +11914,14 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-settings-hw-words-empty-title {
   margin: 0;
   font: var(--pm-t-body);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-muted, #6b716b);
 }
 .pm-settings-hw-words-empty-hint {
   margin: 0;
   max-width: 16rem;
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.4;
   color: var(--pm-faint, #969c96);
 }
@@ -11960,14 +11960,14 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-settings-hw-empty-title {
   margin: 0;
   font: var(--pm-t-title);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-ink, #121410);
   letter-spacing: -0.01em;
 }
 .pm-settings-hw-empty-hint {
   margin: 0;
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-faint, #969c96);
 }
 
@@ -12216,7 +12216,7 @@ button.pm-rail-new:hover:not(:disabled) {
   padding: 2px 8px 0;
   text-align: center;
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.4;
   color: var(--pm-faint);
   /* one line; ellipsis if ultra-narrow */
@@ -12294,7 +12294,7 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-group-name-input {
   height: 2.25rem !important;
   font: var(--pm-t-body) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   letter-spacing: -0.01em;
 }
 /* Icon picker — compact stack, no spare vertical air */
@@ -12476,7 +12476,7 @@ button.pm-rail-new:hover:not(:disabled) {
   margin: 0;
   flex-shrink: 0;
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.5;
   color: var(--pm-faint);
 }
@@ -12531,7 +12531,7 @@ button.pm-rail-new:hover:not(:disabled) {
   margin: 6px 8px 2px;
   padding-top: 8px;
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-green);
   background: linear-gradient(
     to bottom,
@@ -12559,7 +12559,7 @@ button.pm-rail-new:hover:not(:disabled) {
   padding: 6px 2px;
   margin: 0;
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: 0.01em;
   color: var(--pm-faint);
   cursor: pointer;
@@ -12609,7 +12609,7 @@ button.pm-rail-new:hover:not(:disabled) {
   font: var(--pm-t-meta);
   font-size: 12px;
   line-height: 1.35;
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-text);
   background: #ffffff;
   border: none;
@@ -12648,7 +12648,7 @@ button.pm-rail-new:hover:not(:disabled) {
   height: auto;
   padding: 2px 8px;
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-green, #1a5e3d);
   background: var(--pm-green-wash, rgba(26, 94, 61, 0.06));
   box-shadow: none;
@@ -12737,7 +12737,7 @@ button.pm-rail-new:hover:not(:disabled) {
   font: var(--pm-t-meta);
   font-size: 12px;
   line-height: 1.35;
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-text);
   background: transparent;
   border: none;
@@ -12788,7 +12788,7 @@ button.pm-rail-new:hover:not(:disabled) {
   color: var(--pm-faint);
   font: var(--pm-t-meta);
   font-size: 11px;
-  font-weight: 300;
+  font-weight: 400;
 }
 .pm-select-opt.is-empty:hover {
   background: transparent;
@@ -12833,7 +12833,7 @@ button.pm-rail-new:hover:not(:disabled) {
   font: var(--pm-t-meta);
   font-size: 12px;
   line-height: 1.35;
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-text);
   cursor: pointer;
   text-align: left;
@@ -12979,7 +12979,7 @@ button.pm-rail-new:hover:not(:disabled) {
   background: transparent;
   font: var(--pm-t-meta);
   font-size: 12px;
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-text);
   cursor: pointer;
   transition:
@@ -13143,7 +13143,7 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-workspace [data-slot="dialog-title"] {
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
   font-size: clamp(18px, 2.2vw, 22px) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   letter-spacing: 0.01em !important;
   line-height: 1.25 !important;
   text-transform: uppercase !important;
@@ -13151,7 +13151,7 @@ button.pm-rail-new:hover:not(:disabled) {
 }
 .pm-workspace [data-slot="dialog-title"] .pm-ws-title {
   font: 300 18px/1.25 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   letter-spacing: -0.015em !important;
   text-transform: none !important;
   color: var(--pm-ink) !important;
@@ -13870,7 +13870,7 @@ button.pm-rail-new:hover:not(:disabled) {
 /* Open document name — Source Serif, light (reading title, not chrome) */
 .pm-ws-pane-title {
   font: 300 15px/1.3 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   letter-spacing: -0.01em;
   color: var(--pm-muted);
   min-width: 0;
@@ -14602,7 +14602,7 @@ button.pm-rail-new:hover:not(:disabled) {
   background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 72%, #fff) !important;
   quotes: none !important;
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   font-style: italic !important;
   font-size: 0.97em !important;
   line-height: 1.7 !important;
@@ -14644,7 +14644,7 @@ button.pm-rail-new:hover:not(:disabled) {
   table-layout: auto;
   font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif) !important;
   font-size: 13px !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   line-height: 1.45 !important;
   color: var(--pm-text, #2a2e2a) !important;
   background: #ffffff;
@@ -14680,7 +14680,7 @@ button.pm-rail-new:hover:not(:disabled) {
   background: #ffffff !important;
   color: var(--pm-text, #2a2e2a) !important;
   font: inherit !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   vertical-align: top;
   padding: 8px 12px !important;
   border: none !important;
@@ -14774,7 +14774,7 @@ button.pm-rail-new:hover:not(:disabled) {
   flex: 1 1 auto;
   min-width: 0;
   font: var(--pm-t-body, 300 13px/1.55 var(--pm-ff, system-ui, sans-serif));
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   color: var(--pm-text, #2a2e2a);
 }
 .pm-callout__body > *:first-child {
@@ -14831,7 +14831,7 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-ws-nested .tiptap,
 .pm-ws-nested .prose {
   font: var(--pm-t-prose) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   color: var(--pm-text) !important;
   max-width: none;
 }
@@ -15142,7 +15142,7 @@ button.pm-rail-new:hover:not(:disabled) {
   cursor: default;
   /* Compact rail density — not prose reading size */
   font: var(--pm-t-meta) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   color: var(--pm-text);
   transition: background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
@@ -15152,7 +15152,7 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-ws-log-item .pm-ws-msg-md li,
 .pm-ws-log-item > p {
   font: var(--pm-t-meta) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif) !important;
   line-height: 1.45 !important;
   color: var(--pm-muted) !important;
@@ -15160,7 +15160,7 @@ button.pm-rail-new:hover:not(:disabled) {
 }
 .pm-ws-log-item .pm-ws-badge {
   font: var(--pm-t-meta) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   padding: 1px 6px !important;
 }
 .pm-ws-list-item.is-clickable,
@@ -15389,7 +15389,7 @@ button.pm-rail-new:hover:not(:disabled) {
 /* Message log body — markdown prose (Geist chrome + Serif reading) */
 .pm-ws-msg-md {
   font: var(--pm-t-prose) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   color: var(--pm-text) !important;
   max-width: none !important;
   overflow-wrap: anywhere;
@@ -15541,7 +15541,7 @@ button.pm-rail-new:hover:not(:disabled) {
   margin: 4px 0 0;
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 20px;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: -0.02em;
   line-height: 1.2;
   color: var(--pm-ink, #121410);
@@ -15645,7 +15645,7 @@ button.pm-rail-new:hover:not(:disabled) {
 /* Chunks / summary bullets — reading face (Serif prose), not UI body */
 .pm-ws-prose-item {
   font: var(--pm-t-prose) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   color: var(--pm-text);
   white-space: pre-wrap;
   max-width: none;
@@ -15664,7 +15664,7 @@ button.pm-rail-new:hover:not(:disabled) {
   align-items: center;
   gap: 4px;
   font: var(--pm-t-meta) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   color: var(--pm-muted);
   background: rgba(18, 20, 16, 0.05);
   border: none;
@@ -15679,7 +15679,7 @@ button.pm-rail-new:hover:not(:disabled) {
 /* File / page name in dialog header — Source Serif light */
 .pm-ws-title {
   font: 300 18px/1.25 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   color: var(--pm-ink);
   letter-spacing: -0.015em;
 }
@@ -15854,7 +15854,7 @@ button.pm-ws-path-row {
 }
 .pm-workspace .pm-meta {
   font: var(--pm-t-meta) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
 }
 .pm-workspace .pm-title {
   font: var(--pm-t-title) !important;
@@ -15863,7 +15863,7 @@ button.pm-ws-path-row {
 /* Rename input in note pane — same serif doc title while editing */
 .pm-ws-pane-h input.pm-ws-pane-title {
   font: 300 15px/1.3 var(--pm-ff-prose) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   color: var(--pm-ink);
   white-space: normal;
   overflow: visible;
@@ -16386,7 +16386,7 @@ button.pm-ws-path-row {
   display: block;
   margin-top: 2px;
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-faint);
   line-height: 1.35;
 }
@@ -16410,7 +16410,7 @@ button.pm-ws-path-row {
 }
 .pm-workspace .pm-files-menu-item-desc {
   font: var(--pm-t-meta) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   font-size: 11px !important;
   line-height: 1.35 !important;
 }
@@ -16891,7 +16891,7 @@ button.pm-files-row-edit {
   margin: 2px 0 0 !important;
   max-width: 48ch;
   font: var(--pm-t-meta, 300 12.5px/1.45 var(--pm-ff, system-ui, sans-serif)) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   letter-spacing: 0 !important;
   text-transform: none !important;
   color: var(--pm-muted, #6a706a) !important;
@@ -17179,7 +17179,7 @@ button.pm-files-row-edit {
 .pm-node-id-title {
   margin: 0;
   font: 300 16px/1.3 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: -0.015em;
   text-transform: none;
   color: var(--pm-ink, #121410);
@@ -17221,7 +17221,7 @@ button.pm-files-row-edit {
   /* Same tokens as display .pm-node-id-title — explicit, not inherit */
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 16px;
-  font-weight: 300;
+  font-weight: 400;
   font-style: normal;
   line-height: 1.3;
   letter-spacing: -0.015em;
@@ -17241,7 +17241,7 @@ button.pm-files-row-edit {
 .pm-node-id-title.pm-node-id-title-input::placeholder {
   color: var(--pm-faint, #9a9e96);
   font-family: inherit;
-  font-weight: 300;
+  font-weight: 400;
   opacity: 1;
 }
 /* Vertical tag stack — fixed width so long tags don’t crowd the title */
@@ -17575,7 +17575,7 @@ button.pm-files-row-edit {
 .pm-all-files-sub {
   margin: 6px 0 0;
   font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   color: var(--pm-faint, #969c96) !important;
   letter-spacing: 0;
   text-transform: none;
@@ -17604,7 +17604,7 @@ button.pm-files-row-edit {
 }
 .pm-all-files-coverage .pm-meta {
   font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   color: var(--pm-muted, #6a706a) !important;
   letter-spacing: 0;
   text-transform: none;
@@ -17629,7 +17629,7 @@ button.pm-files-row-edit {
   gap: 8px;
   padding: 40px 16px;
   font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   color: var(--pm-faint, #969c96) !important;
 }
 .pm-all-files-empty .pm-meta {
@@ -17690,7 +17690,7 @@ button.pm-files-row-edit {
   min-width: 4.5rem;
   text-align: right;
   font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   color: var(--pm-faint, #969c96) !important;
 }
 .pm-all-files-def {
@@ -17748,7 +17748,7 @@ button.pm-files-row-edit {
   background: transparent;
   cursor: pointer;
   font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   color: var(--pm-danger, #b42318);
   opacity: 0;
   transition:
@@ -17794,7 +17794,7 @@ button.pm-files-row-edit {
 .pm-all-files-history-count {
   margin-left: auto;
   font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   font-variant-numeric: tabular-nums;
   color: var(--pm-green, #1a5e3d);
   padding: 1px 8px;
@@ -17809,13 +17809,13 @@ button.pm-files-row-edit {
 }
 .pm-all-files-history-list .pm-meta {
   font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   color: var(--pm-muted, #6a706a) !important;
 }
 /* Scoped utility type inside All Files (beats generic .pm-meta/.pm-title) */
 .pm-all-files .pm-meta {
   font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
 }
 .pm-all-files .pm-label {
   font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff, system-ui, sans-serif)) !important;
@@ -17941,7 +17941,7 @@ button.pm-files-row-edit {
   margin: 5px 0 0;
   font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
   font-size: 11.5px;
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.55;
   letter-spacing: 0.005em;
   color: var(--pm-muted, #6a706a);
@@ -18539,7 +18539,7 @@ button.pm-files-row-edit {
 .pm-qc-bubble-text {
   margin: 0;
   font-size: 13px;
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.7;
   font-family: var(--pm-ff, system-ui, sans-serif);
   white-space: pre-wrap;
@@ -18549,7 +18549,7 @@ button.pm-files-row-edit {
 /* Match Chat StreamingAnswerBody host: text-sm leading-[1.8] */
 .pm-qc-answer {
   font-size: 13px;
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.8;
   font-family: var(--pm-ff, system-ui, sans-serif);
   color: var(--pm-ink, #121410);
@@ -18587,7 +18587,7 @@ button.pm-files-row-edit {
 .pm-qc-thinking p {
   margin: 6px 0 0;
   font-size: 11px;
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.5;
   color: var(--pm-faint, #969c96);
   font-style: italic;
@@ -18598,7 +18598,7 @@ button.pm-files-row-edit {
   align-items: center;
   gap: 8px;
   font-size: 11px;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   font-style: italic;
@@ -20174,7 +20174,7 @@ button.pm-files-row-edit {
   outline: none;
   background: transparent;
   font: var(--pm-t-body);
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.45;
   color: var(--pm-ink, #121410);
   transition: border-color 180ms var(--pm-chat-ease);
@@ -20312,7 +20312,7 @@ button.pm-files-row-edit {
   border-bottom: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 9%, transparent);
   text-align: right;
   font: var(--pm-t-prose);
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: -0.01em;
   color: var(--pm-ink, #121410);
   -webkit-font-smoothing: antialiased;
@@ -20332,7 +20332,7 @@ button.pm-files-row-edit {
  */
 .pm-chat-prose {
   font: var(--pm-t-prose);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-text, #2a2e2a);
   max-width: none;
   width: 100%;
@@ -21639,6 +21639,12 @@ button.pm-files-row-edit {
   align-self: center;
   flex: 0 0 auto;
   z-index: 1;
+  /* Center the single vertical line both ways: flex axes follow the
+     vertical writing mode (cross = horizontal, main = vertical). */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   writing-mode: vertical-rl;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -21681,14 +21687,14 @@ button.pm-files-row-edit {
   display: block;
 }
 .pm-meeting-notes-handle-dot {
-  position: absolute;
-  top: 8px;
-  left: 50%;
+  /* In-flow above the label so the dot+text group centers as one unit
+     (absolute pinning left a 19px dead tail below the text). */
+  position: static;
+  order: -1;
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--pm-green, #1a5e3d);
-  transform: translateX(-50%);
 }
 .pm-meeting-notes-rail {
   position: absolute;
@@ -21999,7 +22005,7 @@ button.pm-files-row-edit {
 .pm-meeting-e-title {
   margin: 0 0 10px;
   font-family: var(--pm-ff-serif, "Source Serif 4", Georgia, serif);
-  font-weight: 300;
+  font-weight: 400;
   font-size: 24px;
   letter-spacing: -0.02em;
   color: var(--pm-ink, #121410);
@@ -22007,7 +22013,7 @@ button.pm-files-row-edit {
 .pm-meeting-e-sub {
   margin: 0 0 28px;
   font-size: 13px;
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.55;
   color: var(--pm-muted, #6a706a);
   max-width: 34ch;
@@ -22629,7 +22635,7 @@ button.pm-files-row-edit {
 .pm-ls-topic-text {
   font-family: var(--pm-ff-prose, Georgia, serif);
   font-size: 13.5px;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: -0.01em;
   line-height: 1.4;
   color: var(--pm-ink, #121410);
@@ -22685,7 +22691,7 @@ button.pm-files-row-edit {
   min-width: 0;
   font-family: var(--pm-ff-prose, Georgia, serif);
   font-size: 13.5px;
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.65;
   color: var(--pm-text, #2a2e2a);
 }
@@ -23439,7 +23445,7 @@ button.pm-files-row-edit {
 .pm-meeting-section-card-name {
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 13px;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: -0.01em;
   line-height: 1.3;
   min-width: 0;
@@ -23667,7 +23673,7 @@ button.pm-files-row-edit {
 .pm-meeting-add-section-bp-name {
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 13.5px;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: -0.01em;
   line-height: 1.3;
 }
@@ -24778,7 +24784,7 @@ button.pm-files-row-edit {
   font-size: var(--pm-meeting-title-size, clamp(20px, 2.1vw, 26px));
   letter-spacing: -0.015em;
   color: var(--pm-ink, #121410);
-  font-weight: 300;
+  font-weight: 400;
   line-height: var(--pm-meeting-title-lh, 1.28);
   /* Auto-wrap, max 3 lines then ellipsis */
   white-space: normal;
@@ -24806,7 +24812,7 @@ button.pm-files-row-edit {
   font-size: var(--pm-meeting-title-size, clamp(20px, 2vw, 26px));
   letter-spacing: -0.015em;
   color: var(--pm-ink, #121410);
-  font-weight: 300;
+  font-weight: 400;
   line-height: var(--pm-meeting-title-lh, 1.28);
   background: transparent;
   border: none;
@@ -24964,7 +24970,7 @@ button.pm-files-row-edit {
   min-width: 0;
   font: var(--pm-t-display);
   font-size: var(--pm-meeting-title-size, clamp(20px, 2.1vw, 26px));
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: -0.015em;
   color: var(--pm-ink, #121410);
   line-height: var(--pm-meeting-title-lh, 1.28);
@@ -24986,7 +24992,7 @@ button.pm-files-row-edit {
   margin: 0;
   font: var(--pm-t-display);
   font-size: var(--pm-meeting-title-size, clamp(20px, 2.1vw, 26px));
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: -0.015em;
   color: var(--pm-ink, #121410);
   line-height: var(--pm-meeting-title-lh, 1.28);
@@ -25073,7 +25079,7 @@ button.pm-files-row-edit {
   box-sizing: border-box;
   font: var(--pm-t-body, 300 13px/1.5 var(--pm-ff, system-ui, sans-serif));
   font-size: 13px;
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.55;
   letter-spacing: 0.01em;
   color: var(--pm-muted, #6a706a);
@@ -25238,7 +25244,7 @@ button.pm-files-row-edit {
 .pm-meeting-summary-tiptap {
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 14.5px;
-  font-weight: 300;
+  font-weight: 400;
   font-style: normal;
   font-variation-settings: "wght" 300;
   line-height: 1.75;
@@ -25266,7 +25272,7 @@ button.pm-files-row-edit {
   margin: 1.25em 0 0.5em;
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 1.25em;
-  font-weight: 300;
+  font-weight: 400;
   font-variation-settings: "wght" 300;
   letter-spacing: -0.015em;
   color: var(--pm-ink, #121410);
@@ -25276,7 +25282,7 @@ button.pm-files-row-edit {
   margin: 1.1em 0 0.4em;
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 1.1em;
-  font-weight: 300;
+  font-weight: 400;
   font-variation-settings: "wght" 300;
   letter-spacing: -0.01em;
   color: var(--pm-ink, #121410);
@@ -25318,7 +25324,7 @@ button.pm-files-row-edit {
   margin: 1.25em 0 0.5em;
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 1.25em;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: -0.015em;
   color: var(--pm-ink, #121410);
   line-height: 1.3;
@@ -25327,7 +25333,7 @@ button.pm-files-row-edit {
   margin: 1.1em 0 0.4em;
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 1.1em;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: -0.01em;
   color: var(--pm-ink, #121410);
   line-height: 1.35;
@@ -25732,13 +25738,13 @@ button.pm-files-row-edit {
   padding: 8px 10px !important;
   border-radius: 10px !important;
   font: var(--pm-t-body, 300 13px/1.5 var(--pm-ff, system-ui, sans-serif)) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   letter-spacing: 0.01em;
 }
 .pm-meeting-ingest-menu-name {
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 14px;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: -0.015em;
   line-height: 1.35;
   color: var(--pm-ink, #121410);
@@ -25763,13 +25769,13 @@ button.pm-files-row-edit {
   padding: 0 2px !important;
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
   font-size: 14px !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   letter-spacing: -0.015em !important;
   color: var(--pm-ink, #121410) !important;
 }
 .pm-meeting-ingest-create-input::placeholder {
   color: var(--pm-faint, #969c96);
-  font-weight: 300;
+  font-weight: 400;
 }
 .pm-meeting-ingest-create-input:focus,
 .pm-meeting-ingest-create-input:focus-visible {
@@ -26256,7 +26262,7 @@ button.pm-files-row-edit {
   margin: 0;
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 13px;
-  font-weight: 300;
+  font-weight: 400;
   font-variation-settings: "wght" 300;
   line-height: 1.6;
   letter-spacing: -0.01em;
@@ -26325,7 +26331,7 @@ button.pm-files-row-edit {
   margin: 0;
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 13px;
-  font-weight: 300;
+  font-weight: 400;
   font-variation-settings: "wght" 300;
   line-height: 1.6;
   letter-spacing: -0.01em;
@@ -26526,7 +26532,7 @@ button.pm-files-row-edit {
   font: var(--pm-settings-t-section, 300 18px/1.25 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif));
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: clamp(17px, 1.7vw, 19px);
-  font-weight: 300;
+  font-weight: 400;
   font-variation-settings: "wght" 300;
   letter-spacing: -0.01em;
   line-height: 1.25;
@@ -26536,7 +26542,7 @@ button.pm-files-row-edit {
 .pm-recall-section-desc {
   margin: 0;
   font: var(--pm-settings-t-body, var(--pm-t-body));
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-muted);
   line-height: 1.55;
   max-width: 52ch;
@@ -26564,7 +26570,7 @@ button.pm-files-row-edit {
   padding: 4px 10px !important;
   font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif) !important;
   font-size: 13px !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   line-height: 20px !important;
   color: var(--pm-ink) !important;
   transition:
@@ -26573,7 +26579,7 @@ button.pm-files-row-edit {
 }
 .pm-recall-query::placeholder {
   color: var(--pm-faint) !important;
-  font-weight: 300;
+  font-weight: 400;
   font-style: normal;
 }
 .pm-recall-query:focus-visible {
@@ -26733,7 +26739,7 @@ button.pm-files-row-edit {
   text-transform: none;
   letter-spacing: 0.01em;
   font: var(--pm-t-body);
-  font-weight: 300;
+  font-weight: 400;
 }
 /*
  * Dual word stack — both labels always mounted; .is-active crossfades.
@@ -26838,7 +26844,7 @@ button.pm-files-row-edit {
 .pm-recall-results-count {
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 15px;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: -0.01em;
   color: var(--pm-ink);
 }
@@ -26905,7 +26911,7 @@ button.pm-files-row-edit {
 .pm-recall-rank {
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 22px;
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1;
   letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
@@ -26971,7 +26977,7 @@ button.pm-files-row-edit {
 /* Soft callout — more rounded rail */
 .pm-recall-callout {
   font: var(--pm-t-body);
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.55;
   color: var(--pm-text);
   font-style: italic;
@@ -27090,7 +27096,7 @@ button.pm-files-row-edit {
   min-width: 0;
   margin: 0;
   font: var(--pm-t-body);
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.55;
   color: var(--pm-text);
 }
@@ -27105,7 +27111,7 @@ button.pm-files-row-edit {
   /* Beat parent .pm-ws-prose-item (Source Serif + !important) */
   font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif) !important;
   font-size: 13px !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   line-height: 1.55 !important;
   letter-spacing: 0.005em !important;
   color: var(--pm-text, #3a3f3a) !important;
@@ -27189,7 +27195,7 @@ button.pm-files-row-edit {
   border-spacing: 0;
   font-family: inherit !important;
   font-size: 12.5px !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   font-variant-numeric: tabular-nums;
   color: var(--pm-text) !important;
   margin: 0;
@@ -27216,7 +27222,7 @@ button.pm-files-row-edit {
   vertical-align: top;
   font-family: inherit !important;
   font-size: inherit !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   color: inherit !important;
 }
 .pm-recall-md :where(th:last-child),
@@ -27278,7 +27284,7 @@ img.pm-recall-md-img {
 .pm-ws-prose-item .pm-recall-md {
   font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif) !important;
   font-size: 13px !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   line-height: 1.55 !important;
 }
 /* ── Case / history rows ── */
@@ -27315,7 +27321,7 @@ img.pm-recall-md-img {
   width: 100%;
   color: inherit;
   font: var(--pm-t-body);
-  font-weight: 300;
+  font-weight: 400;
   border-radius: var(--pm-recall-r-sm, 12px);
 }
 .pm-recall-row-main:focus-visible {
@@ -27330,7 +27336,7 @@ img.pm-recall-md-img {
   white-space: nowrap;
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 13.5px;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: -0.005em;
   color: var(--pm-ink);
 }
@@ -27393,7 +27399,7 @@ img.pm-recall-md-img {
 .pm-recall-metric-value {
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: clamp(22px, 2.5vw, 28px);
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
@@ -27456,7 +27462,7 @@ img.pm-recall-md-img {
   margin: 0;
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 19px;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: -0.015em;
   color: var(--pm-ink);
 }
@@ -27464,7 +27470,7 @@ img.pm-recall-md-img {
   margin: 0;
   max-width: 34ch;
   font: var(--pm-t-body);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-muted);
   line-height: 1.6;
 }
@@ -27786,13 +27792,13 @@ img.pm-recall-md-img {
   outline: none;
   background: transparent;
   font: var(--pm-t-body);
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: 0.005em;
   color: var(--pm-ink);
 }
 .pm-people-picker-search input::placeholder {
   color: var(--pm-faint);
-  font-weight: 300;
+  font-weight: 400;
 }
 .pm-people-picker-sec {
   padding: 10px 10px 3px;
@@ -27836,7 +27842,7 @@ img.pm-recall-md-img {
   white-space: nowrap;
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 14px;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: -0.015em;
   line-height: 1.35;
   color: var(--pm-ink, #121410);
@@ -27884,7 +27890,7 @@ img.pm-recall-md-img {
   width: calc(100% - 16px);
   margin: 6px 8px;
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   color: var(--pm-faint);
 }
 .pm-people-picker-note {
@@ -27896,13 +27902,13 @@ img.pm-recall-md-img {
   background: transparent;
   outline: none;
   font: var(--pm-t-body);
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: 0.005em;
   color: var(--pm-ink);
 }
 .pm-people-picker-note::placeholder {
   color: var(--pm-faint);
-  font-weight: 300;
+  font-weight: 400;
 }
 .pm-people-picker-add,
 .pm-people-picker-clear,
@@ -27919,7 +27925,7 @@ img.pm-recall-md-img {
   text-align: left;
   font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
   font-size: 14px;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: -0.015em;
   line-height: 1.35;
   color: var(--pm-ink);
@@ -27973,7 +27979,7 @@ img.pm-recall-md-img {
 .pm-people-picker-manage {
   margin-top: 1px;
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: 0.02em;
   color: var(--pm-faint);
 }
@@ -28033,7 +28039,7 @@ img.pm-recall-md-img {
   display: block;
   margin-top: 2px;
   font: var(--pm-t-meta);
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: 0.03em;
   color: var(--pm-faint, #969c96);
 }
@@ -28248,7 +28254,7 @@ img.pm-recall-md-img {
 .pm-people-shell .pm-settings-hw-input[data-slot="input"],
 .pm-people-shell .pm-settings-hw-main .pm-settings-hw-input {
   font: var(--pm-t-body) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   letter-spacing: 0.005em !important;
 }
 .pm-people-shell .pm-settings-hw-empty-title {
@@ -28258,7 +28264,7 @@ img.pm-recall-md-img {
 .pm-people-shell .pm-settings-hw-empty-hint,
 .pm-people-shell .pm-settings-hw-words-empty-title,
 .pm-people-shell .pm-settings-hw-words-empty-hint {
-  font-weight: 300;
+  font-weight: 400;
 }
 @media (max-width: 820px) {
   .pm-people-fields {
@@ -28272,4 +28278,513 @@ img.pm-recall-md-img {
   .pm-people-pill {
     transition-duration: 1ms !important;
   }
+}
+
+/* ═══ PREPARE rail (attendees · brief · notes) ═══ */
+@keyframes pm-prepare-spin {
+  to { transform: rotate(360deg); }
+}
+.pm-prepare-card .spin,
+.spin {
+  animation: pm-prepare-spin 900ms linear infinite;
+}
+.pm-prepare-card {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.pm-prepare-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 12px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
+}
+.pm-prepare-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  font: 550 12px/1 var(--pm-ff, system-ui, sans-serif);
+  color: color-mix(in srgb, var(--pm-ink, #121410) 45%, transparent);
+  padding: 8px 10px 9px;
+  border-radius: 10px 10px 0 0;
+  cursor: pointer;
+  position: relative;
+  transition: color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-prepare-tab:hover {
+  color: var(--pm-green-deep, #0f4a2d);
+}
+.pm-prepare-tab.is-active {
+  color: var(--pm-green, #1a5e3d);
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 7%, transparent);
+}
+.pm-prepare-tab-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--pm-green, #1a5e3d);
+}
+.pm-prepare-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px;
+}
+/* Notes tab keeps its editor chrome; neutralize the nested card surface. */
+.pm-prepare-card > .pm-prepare-body > .pm-meeting-f-card {
+  flex: 1 1 0;
+  min-height: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+.pm-prepare-hint {
+  margin: 0 0 12px;
+  font: 450 12.5px/1.55 var(--pm-ff, system-ui, sans-serif);
+  color: color-mix(in srgb, var(--pm-ink, #121410) 68%, transparent);
+}
+.pm-prepare-empty {
+  margin: 8px 0;
+  font: 400 12.5px/1.5 var(--pm-ff, system-ui, sans-serif);
+  color: color-mix(in srgb, var(--pm-ink, #121410) 40%, transparent);
+}
+.pm-prepare-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 10px;
+}
+.pm-prepare-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid color-mix(in srgb, var(--pm-green, #1a5e3d) 25%, transparent);
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 6%, transparent);
+  color: var(--pm-green-deep, #0f4a2d);
+  font: 550 12px/1 var(--pm-ff, system-ui, sans-serif);
+  padding: 6px 9px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 140ms var(--pm-ease, ease-out), border-color 140ms var(--pm-ease, ease-out);
+}
+.pm-prepare-chip:hover {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 12%, transparent);
+}
+.pm-prepare-chip:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.pm-prepare-cta {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: none;
+  background: var(--pm-green, #1a5e3d);
+  color: #ffffff;
+  font: 550 13px/1 var(--pm-ff, system-ui, sans-serif);
+  padding: 10px 16px;
+  border-radius: 11px;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(18, 20, 16, 0.08), 0 6px 16px -6px color-mix(in srgb, var(--pm-green, #1a5e3d) 55%, transparent);
+  transition: transform 140ms var(--pm-ease, ease-out), background 140ms var(--pm-ease, ease-out);
+}
+.pm-prepare-cta:hover {
+  background: var(--pm-green-deep, #0f4a2d);
+}
+.pm-prepare-cta:active {
+  transform: scale(0.98);
+}
+.pm-prepare-cta:disabled {
+  opacity: 0.55;
+  cursor: default;
+  transform: none;
+}
+.pm-prepare-brief {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.pm-prepare-brief-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+.pm-prepare-brief-meta {
+  font: 550 11px/1.4 var(--pm-ff, system-ui, sans-serif);
+  letter-spacing: 0.02em;
+  color: color-mix(in srgb, var(--pm-ink, #121410) 50%, transparent);
+}
+.pm-prepare-brief-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 10%, transparent);
+  background: transparent;
+  color: var(--pm-green-deep, #0f4a2d);
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background 140ms var(--pm-ease, ease-out);
+}
+.pm-prepare-brief-refresh:hover {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, transparent);
+}
+.pm-prepare-brief-dirty {
+  margin: 8px 0 0;
+  font: 450 11.5px/1.4 var(--pm-ff, system-ui, sans-serif);
+  color: color-mix(in srgb, var(--pm-ink, #121410) 45%, transparent);
+}
+.pm-prepare-brief-error {
+  margin: 0 0 10px;
+  font: 450 12px/1.5 var(--pm-ff, system-ui, sans-serif);
+  color: #a3412c;
+}
+.pm-prepare-brief-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 6px 0 14px;
+}
+.pm-prepare-brief-skeleton span {
+  height: 12px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--pm-ink, #121410) 7%, transparent);
+  animation: pm-prepare-pulse 1.4s ease-in-out infinite;
+}
+.pm-prepare-brief-skeleton span:nth-child(2) { width: 82%; animation-delay: 0.12s; }
+.pm-prepare-brief-skeleton span:nth-child(3) { animation-delay: 0.24s; }
+.pm-prepare-brief-skeleton span:nth-child(4) { animation-delay: 0.36s; }
+@keyframes pm-prepare-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+.pm-prepare-brief-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font: 450 12px/1.4 var(--pm-ff, system-ui, sans-serif);
+  color: color-mix(in srgb, var(--pm-ink, #121410) 55%, transparent);
+}
+
+/* ═══ People dialog · person profile block ═══ */
+.pm-people-profile {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 4%, #ffffff);
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
+}
+.pm-people-profile-dirty {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #c99327;
+  display: inline-block;
+}
+.pm-people-profile-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 450 11.5px/1 var(--pm-ff, system-ui, sans-serif);
+  color: color-mix(in srgb, var(--pm-ink, #121410) 50%, transparent);
+}
+.pm-people-profile-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid color-mix(in srgb, var(--pm-green, #1a5e3d) 30%, transparent);
+  background: transparent;
+  color: var(--pm-green-deep, #0f4a2d);
+  font: 550 11.5px/1 var(--pm-ff, system-ui, sans-serif);
+  padding: 7px 11px;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background 140ms var(--pm-ease, ease-out);
+}
+.pm-people-profile-refresh:hover {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, transparent);
+}
+.pm-people-profile-refresh:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.pm-people-profile-text {
+  margin: 0;
+  white-space: pre-wrap;
+  font: 400 12.5px/1.6 var(--pm-ff, system-ui, sans-serif);
+  color: var(--pm-ink, #121410);
+}
+.pm-people-profile-meta {
+  margin: 0;
+  font: 450 11px/1.4 var(--pm-ff, system-ui, sans-serif);
+  color: color-mix(in srgb, var(--pm-ink, #121410) 45%, transparent);
+}
+
+/* PREPARE · attendee picker dropdown (SoftMenu, speaker-tab styling) */
+.pm-prepare-picker-anchor {
+  position: relative;
+}
+.pm-prepare-picker-menu {
+  min-width: 280px;
+}
+.pm-prepare-picker-menu .pm-people-picker-row.is-picked,
+.pm-prepare-picker-menu .pm-people-picker-row.is-picked:hover {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 10%, transparent);
+}
+.pm-prepare-picker-menu .pm-people-picker-row.is-picked .pm-people-picker-name {
+  color: var(--pm-green-deep, #0f4a2d);
+}
+.pm-prepare-pick-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--pm-green, #1a5e3d);
+  color: #ffffff;
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--pm-green, #1a5e3d) 45%, transparent);
+}
+.pm-prepare-picker-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
+}
+.pm-prepare-foot-cancel {
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 10%, transparent);
+  background: transparent;
+  color: color-mix(in srgb, var(--pm-ink, #121410) 60%, transparent);
+  font: 550 12px/1 var(--pm-ff, system-ui, sans-serif);
+  padding: 8px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 140ms var(--pm-ease, ease-out);
+}
+.pm-prepare-foot-cancel:hover {
+  background: color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent);
+}
+.pm-prepare-foot-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: var(--pm-green, #1a5e3d);
+  color: #ffffff;
+  font: 550 12px/1 var(--pm-ff, system-ui, sans-serif);
+  padding: 8px 16px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 140ms var(--pm-ease, ease-out), transform 140ms var(--pm-ease, ease-out);
+}
+.pm-prepare-foot-confirm:hover {
+  background: var(--pm-green-deep, #0f4a2d);
+}
+.pm-prepare-foot-confirm:active {
+  transform: scale(0.98);
+}
+.pm-prepare-foot-confirm:disabled {
+  opacity: 0.6;
+  cursor: default;
+  transform: none;
+}
+
+/* PREPARE · brief section cards */
+.pm-brief-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+}
+.pm-brief-sec {
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 7%, transparent);
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 12px 14px;
+}
+.pm-brief-sec.is-attendees {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 3%, #ffffff);
+}
+.pm-brief-sec-h {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font: 600 11px/1 var(--pm-ff, system-ui, sans-serif);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--pm-green, #1a5e3d);
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
+}
+.pm-brief-body p {
+  margin: 4px 0;
+  font: 450 13px/1.65 var(--pm-ff, system-ui, sans-serif);
+  color: color-mix(in srgb, var(--pm-ink, #121410) 94%, transparent);
+}
+.pm-brief-body ul {
+  margin: 4px 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  list-style: none;
+}
+.pm-brief-body li {
+  position: relative;
+  font: 450 13px/1.6 var(--pm-ff, system-ui, sans-serif);
+  color: color-mix(in srgb, var(--pm-ink, #121410) 94%, transparent);
+}
+.pm-brief-body li::before {
+  content: "";
+  position: absolute;
+  left: -11px;
+  top: 0.62em;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 55%, transparent);
+}
+.pm-brief-person {
+  font-weight: 550;
+  color: var(--pm-green-deep, #0f4a2d);
+  margin-top: 8px;
+}
+.pm-brief-person:first-child {
+  margin-top: 0;
+}
+.pm-brief-sub {
+  font-weight: 550;
+  color: color-mix(in srgb, var(--pm-ink, #121410) 75%, transparent);
+}
+.pm-brief-tip {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font: 450 12.5px/1.55 var(--pm-ff, system-ui, sans-serif);
+  color: var(--pm-green-deep, #0f4a2d);
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, transparent);
+  border-radius: 8px;
+  padding: 5px 9px;
+  margin: 3px 0;
+}
+.pm-brief-tip .pm-brief-tip-label {
+  flex: 0 0 auto;
+  font-weight: 550;
+  font-size: 11px;
+}
+
+/* PREPARE · attendee mini profile cards */
+.pm-attendee-profiles {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+.pm-attendee-profile {
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 7%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 3%, #ffffff);
+  padding: 10px 12px;
+}
+.pm-attendee-profile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.pm-attendee-profile-name {
+  font: 550 12.5px/1.2 var(--pm-ff, system-ui, sans-serif);
+  color: var(--pm-ink, #121410);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pm-attendee-profile-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: 450 10.5px/1.2 var(--pm-ff, system-ui, sans-serif);
+  color: color-mix(in srgb, var(--pm-ink, #121410) 45%, transparent);
+  flex: 0 0 auto;
+}
+.pm-attendee-profile-state.is-dirty {
+  color: #c99327;
+}
+.pm-attendee-profile-text {
+  margin: 0;
+  white-space: pre-wrap;
+  font: 450 13px/1.6 var(--pm-ff, system-ui, sans-serif);
+  color: color-mix(in srgb, var(--pm-ink, #121410) 92%, transparent);
+}
+.pm-prepare-picker-menu .pm-people-picker-list {
+  max-height: 280px;
+}
+
+/* Prepare picker: clear selected state (padding was tuned for the speaker
+   tab's play-button rows; the badge needs breathing room at the right edge). */
+.pm-prepare-picker-menu .pm-people-picker-row-main {
+  padding-right: 14px;
+}
+.pm-prepare-picker-menu .pm-people-picker-row.is-picked,
+.pm-prepare-picker-menu .pm-people-picker-row.is-picked:hover {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 13%, transparent);
+  box-shadow: inset 2px 0 0 var(--pm-green, #1a5e3d);
+}
+
+/* PREPARE · smooth tab pane transition + premium reading type */
+.pm-prepare-pane,
+.pm-prepare-body {
+  animation: pm-prepare-pane-in 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes pm-prepare-pane-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-prepare-pane,
+  .pm-prepare-body {
+    animation: none;
+  }
+}
+/* Reading content carries the prose serif; UI chrome stays sans. */
+.pm-brief-body p,
+.pm-brief-body li,
+.pm-attendee-profile-text {
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+}
+.pm-attendee-profile-text {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* Prepare picker: serif 300 names are too thin — nudge for readability */
+.pm-prepare-picker-menu .pm-people-picker-name {
+  font-weight: 420;
 }

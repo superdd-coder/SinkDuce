@@ -117,3 +117,24 @@ export const assignMeetingSpeaker = (
 
 export const commitMeetingSpeakers = (meetingId: string) =>
   request<Meeting>(`/meetings/${meetingId}/speakers/commit`, { method: "POST" })
+
+export interface PersonProfileState {
+  state: "none" | "generating" | "ready"
+  text: string
+  generated_at: string
+  source_count: number
+  dirty: boolean
+}
+
+export const getPersonProfile = (personId: string) =>
+  request<PersonProfileState>(`/speakers/${personId}/profile`)
+
+export const regeneratePersonProfile = (
+  personId: string,
+  locale = "zh-CN",
+  force = true,
+) =>
+  request<PersonProfileState>(`/speakers/${personId}/profile/regenerate`, {
+    method: "POST",
+    body: JSON.stringify({ locale, force }),
+  })

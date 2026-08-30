@@ -10,6 +10,7 @@ export function MeetingNotesCard({
   onChange,
   status,
   placeholder,
+  label,
   idleMeta,
   minHeight = "200px",
   showToolbar,
@@ -20,6 +21,7 @@ export function MeetingNotesCard({
   onChange: (value: string) => void
   status: MeetingNotesStatus
   placeholder: string
+  label?: string
   idleMeta?: string
   minHeight?: string
   showToolbar?: boolean
@@ -33,7 +35,7 @@ export function MeetingNotesCard({
   return (
     <div className="pm-meeting-f-card">
       <div className="pm-meeting-f-card-h">
-        <span className="pm-meeting-f-card-label">{t("common.notes")}</span>
+        <span className="pm-meeting-f-card-label">{label ?? t("common.notes")}</span>
         <span className="pm-meeting-f-card-meta">{meta}</span>
       </div>
       <div className="pm-meeting-f-card-body pm-meeting-f-notes">

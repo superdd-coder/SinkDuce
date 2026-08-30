@@ -4,6 +4,7 @@ import logging
 
 from fastapi import APIRouter, Body, HTTPException
 
+from src.speakers import profile as profile_domain
 from src.speakers import service, store
 
 logger = logging.getLogger("speakers")
@@ -126,6 +127,22 @@ async def delete_speaker(person_id: str):
             logger.warning("Failed to unbind person %s from meeting %s", person_id, row.meeting_id, exc_info=True)
     store.delete_person(person_id)
     return {"ok": True}
+
+
+@router.get("/speakers/{person_id}/profile")
+async def get_person_profile(person_id: str):
+    if store.get_person(person_id) is None:
+        raise HTTPException(404, "Person not found")
+    return profile_domain.profile_state(person_id)
+
+
+@router.post("/speakers/{person_id}/profile/regenerate")
+async def regenerate_person_profile(person_id: str, body: dict = Body(default=None)):
+    if store.get_person(person_id) is None:
+        raise HTTPException(404, "Person not found")
+    locale = ((body or {}).get("locale") or "zh-CN").strip() or "zh-CN"
+    force = bool((body or {}).get("force", True))
+    return profile_domain.start_regenerate(person_id, locale=locale, force=force)
 
 
 @router.get("/speakers/{person_id}/preview")
