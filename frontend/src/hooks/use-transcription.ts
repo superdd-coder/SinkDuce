@@ -1,6 +1,10 @@
 import { useRef, useState, useCallback } from "react"
 import { toast } from "sonner"
-import { saveMeetingTranscript, type TranscriptSegment } from "@/api/client"
+import {
+  saveMeetingTranscript,
+  type LiveSummaryState,
+  type TranscriptSegment,
+} from "@/api/client"
 
 export interface TranscriptionState {
   isConnected: boolean
@@ -8,6 +12,10 @@ export interface TranscriptionState {
   segments: TranscriptSegment[]
   currentPartial: string
   error: string | null
+  liveSummaryEnabled: boolean
+  liveSummaryState: LiveSummaryState | null
+  liveSummaryEngine: string
+  liveSummaryError: string | null
 }
 
 interface InternalSegment extends TranscriptSegment {
@@ -27,6 +35,10 @@ export function useTranscription(meetingId: string | null) {
     segments: [],
     currentPartial: "",
     error: null,
+    liveSummaryEnabled: false,
+    liveSummaryState: null,
+    liveSummaryEngine: "idle",
+    liveSummaryError: null,
   })
 
   const segmentMapRef = useRef<Map<string, InternalSegment>>(new Map())
@@ -38,6 +50,8 @@ export function useTranscription(meetingId: string | null) {
 
   /** User wants live captions (set true in start, false in stop) */
   const wantLiveRef = useRef(false)
+  /** User wants the in-meeting live summary (survives reconnects) */
+  const wantLiveSummaryRef = useRef(false)
   /** Suppress reconnect / isTranscribing clear when we intentionally close */
   const intentionalCloseRef = useRef(false)
   /** Language hints for reconnect */
@@ -76,7 +90,12 @@ export function useTranscription(meetingId: string | null) {
       segments: [],
       currentPartial: "",
       error: null,
+      liveSummaryEnabled: false,
+      liveSummaryState: null,
+      liveSummaryEngine: "idle",
+      liveSummaryError: null,
     })
+    wantLiveSummaryRef.current = false
   }
 
   const onFinalizedRef = useRef<((segments: TranscriptSegment[]) => void) | null>(null)
@@ -183,6 +202,36 @@ export function useTranscription(meetingId: string | null) {
         }
         if (data.type === "ready") {
           console.log("[RealtimeTranscription] Session ready", data.message)
+          // Re-send the live-summary intent after a reconnect (idempotent
+          // server-side; the engine may have survived on its own thread).
+          if (wantLiveSummaryRef.current) {
+            try {
+              ws.send(JSON.stringify({ action: "live_summary", enabled: true }))
+            } catch {
+              /* ignore */
+            }
+          }
+          return
+        }
+        if (data.type === "live_summary") {
+          setState((prev) => ({
+            ...prev,
+            liveSummaryState: data.state ?? null,
+            liveSummaryError: null,
+          }))
+          return
+        }
+        if (data.type === "live_summary_status") {
+          setState((prev) => ({
+            ...prev,
+            liveSummaryEngine: data.engine ?? "idle",
+          }))
+          return
+        }
+        if (data.type === "live_summary_error") {
+          console.warn("[RealtimeTranscription] Live summary error:", data.message)
+          setState((prev) => ({ ...prev, liveSummaryError: data.message ?? "error" }))
+          toast.error(`Live summary: ${data.message ?? "unavailable"}`)
           return
         }
         if (data.type === "transcript") {
@@ -294,6 +343,9 @@ export function useTranscription(meetingId: string | null) {
     (languageHints?: string[]) => {
       sessionCounterRef.current += 1
       wantLiveRef.current = true
+      // Live summary is on by default each session (the ready handler sends
+      // the enable action once the WS is up); the user can still turn it off.
+      wantLiveSummaryRef.current = true
       engineToastedRef.current = false
       reconnectAttemptRef.current = 0
 
@@ -303,13 +355,15 @@ export function useTranscription(meetingId: string | null) {
       for (const [key, seg] of segmentMapRef.current) {
         if (seg.__partial) segmentMapRef.current.delete(key)
       }
-      setState({
+      setState((prev) => ({
+        ...prev,
         isConnected: false,
         isTranscribing: true,
         segments: existingFinals.map(({ __key, __partial, ...rest }) => rest),
         currentPartial: "",
         error: null,
-      })
+        liveSummaryEnabled: true,
+      }))
       connect(languageHints)
     },
     [connect],
@@ -332,12 +386,17 @@ export function useTranscription(meetingId: string | null) {
       if (discard) {
         segmentMapRef.current.clear()
         sessionCounterRef.current = 0
+        wantLiveSummaryRef.current = false
         setState({
           isConnected: false,
           isTranscribing: false,
           segments: [],
           currentPartial: "",
           error: null,
+          liveSummaryEnabled: false,
+          liveSummaryState: null,
+          liveSummaryEngine: "idle",
+          liveSummaryError: null,
         })
         disconnect({ intentional: true })
         return
@@ -411,6 +470,30 @@ export function useTranscription(meetingId: string | null) {
     setState((prev) => ({ ...prev, segments }))
   }, [])
 
+  const setLiveSummaryEnabled = useCallback((enabled: boolean) => {
+    wantLiveSummaryRef.current = enabled
+    setState((prev) => ({ ...prev, liveSummaryEnabled: enabled }))
+    const ws = wsRef.current
+    if (ws?.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({ action: "live_summary", enabled }))
+      } catch (err) {
+        console.warn("[RealtimeTranscription] Failed to send live_summary:", err)
+      }
+    }
+  }, [])
+
+  const resetLiveSummary = useCallback(() => {
+    const ws = wsRef.current
+    if (ws?.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({ action: "live_summary_reset" }))
+      } catch (err) {
+        console.warn("[RealtimeTranscription] Failed to send live_summary_reset:", err)
+      }
+    }
+  }, [])
+
   return {
     ...state,
     startTranscription,
@@ -418,6 +501,8 @@ export function useTranscription(meetingId: string | null) {
     sendAudioData,
     setSegments,
     setOnFinalized,
+    setLiveSummaryEnabled,
+    resetLiveSummary,
     durationRef,
   }
 }

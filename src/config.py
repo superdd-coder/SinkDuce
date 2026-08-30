@@ -221,6 +221,7 @@ class EnrichmentConfig(BaseModel):
     max_parallel_context: int = 50
     enrichment_model: str = ""  # Library LLM: "providerId|modelName"; "" = default card
     meeting_model: str = ""     # Meeting Summary: "providerId|modelName"; "" = default card
+    live_summary_model: str = ""  # In-meeting live summary; "" = follow meeting_model
     agentic_query_model: str = ""  # Agentic/Direct/recall/variants/keywords; "" = default card
     note_distill_model: str = ""   # Note distillation; "" = default card
     meeting_thinking: bool = False  # meeting summary thinking (off by default)

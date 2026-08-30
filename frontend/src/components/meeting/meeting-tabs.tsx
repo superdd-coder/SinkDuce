@@ -36,9 +36,10 @@ import {
   uploadMeetingImage,
   allocateSection, deleteSectionAllocation, createCollection,
   generateSectionDescription, getSummaryTranslations, getActiveTranslations,
-  getTask, getSectionTodoCandidates,
+  getTask, getSectionTodoCandidates, getLiveSummary,
   type Meeting, type MeetingTab, type ExtractReceipt,
   type TranscriptSegment, type MeetingTodoCandidate,
+  type LiveSummaryState,
 } from "@/api/client"
 import { listChains } from "@/api/file-mgmt"
 import type { Chain } from "@/types/file-mgmt"
@@ -61,6 +62,7 @@ import { useTranslationStream, startTranslationStream } from "@/hooks/use-transl
 import { toast } from "sonner"
 import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
 import { TranscriptTab, SpeakersTab } from "./transcript-panel"
+import { LiveSummaryPanel } from "./live-summary-panel"
 import { SummaryTranslateControl } from "./summary-translate-control"
 import {
   SummaryMarkdownViewer,
@@ -1840,6 +1842,18 @@ export function MeetingTabs({
   // Has summary if any tab has content available (.md file or streaming)
   const hasSummary = !!(tabs.some(t => (t.type === "section" || t.tab_id === "tab_general") && t.md_file_path))
   const [mainTab, setMainTab] = useState(hasSummary ? "summary" : "notes")
+  // Persisted in-meeting live summary (read-only third tab when present)
+  const [liveSummary, setLiveSummary] = useState<LiveSummaryState | null | undefined>(undefined)
+  useEffect(() => {
+    let alive = true
+    getLiveSummary(meetingId)
+      .then((r) => { if (alive) setLiveSummary(r.state) })
+      .catch(() => { if (alive) setLiveSummary(null) })
+    return () => { alive = false }
+  }, [meetingId])
+  const hasLiveSummary =
+    !!liveSummary &&
+    (liveSummary.round > 0 || (liveSummary.entries?.length ?? 0) > 0)
 
   // Prefer Summary while generating or once content exists — never force Notes
   // mid-generation (that hid the stream + fence and left a bare Summarize CTA).
@@ -3001,6 +3015,9 @@ export function MeetingTabs({
             <TabsTrigger value="summary" disabled={!hasSummary && !hasTranscript}>
               {t("common.summary")}
             </TabsTrigger>
+            {hasLiveSummary && (
+              <TabsTrigger value="live">{t("meeting.liveSummaryTab")}</TabsTrigger>
+            )}
             <TabsTrigger value="notes">{t("common.notes")}</TabsTrigger>
           </TabsList>
         </Tabs>
@@ -3345,6 +3362,21 @@ export function MeetingTabs({
             placeholder={t("meeting.writeNotesPh")}
             onImageUpload={handleNotesImageUpload}
             onEditorReady={(ed) => setNotesEditor(ed as Editor)}
+          />
+        </div>
+      </div>
+
+      {/* ── Live Summary Tab (persisted in-meeting artifact, read-only) ── */}
+      <div className={cn(
+        "transition-opacity duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
+        mainTab === "live" ? "flex flex-col opacity-100" : "hidden",
+      )}>
+        <div className="pm-meeting-live-summary-static">
+          <LiveSummaryPanel
+            state={liveSummary ?? null}
+            error={null}
+            paused={false}
+            speakerNames={speakerNames}
           />
         </div>
       </div>

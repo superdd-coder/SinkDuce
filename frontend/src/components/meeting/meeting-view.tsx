@@ -944,15 +944,18 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   // When recording stops, upload audio then auto-trigger file transcription
   // Target is always the capture owner (not necessarily the meeting currently on screen).
   useEffect(() => {
+    // A pending Discard consumes the blob regardless of owner resolution —
+    // handleDiscard nulls captureOwnerRef before the ~800ms-late blob lands,
+    // so gating this branch on ownerId left discardingRef stuck true and the
+    // NEXT recording's auto file-transcription was silently swallowed.
+    if (recorder.audioBlob && discardingRef.current) {
+      discardingRef.current = false
+      captureOwnerRef.current = null
+      recorder.reset()
+      return
+    }
     const ownerId = captureOwnerRef.current
     if (recorder.audioBlob && ownerId) {
-      // Skip upload if user clicked Discard
-      if (discardingRef.current) {
-        discardingRef.current = false
-        captureOwnerRef.current = null
-        recorder.reset()
-        return
-      }
       const blobType = recorder.audioBlob.type || "audio/wav"
       const ext = blobType.includes("wav")
         ? "wav"
@@ -1213,6 +1216,11 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       fetchMeetings()
     } catch (err) {
       toast.error(t("meeting.discardFailed", { error: formatApiError(err, t) }))
+    } finally {
+      // Deterministic flag clear — an empty recording produces no blob, so
+      // the audioBlob effect may never run the discard branch.
+      discardingRef.current = false
+      recorder.reset()
     }
   }
 
@@ -1744,6 +1752,12 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                 handleDiscard={handleDiscard}
                 liveSegments={transcription.segments}
                 livePartial={transcription.currentPartial}
+                liveSummaryEnabled={transcription.liveSummaryEnabled}
+                liveSummaryState={transcription.liveSummaryState}
+                liveSummaryError={transcription.liveSummaryError}
+                liveSummaryEngine={transcription.liveSummaryEngine}
+                onToggleLiveSummary={transcription.setLiveSummaryEnabled}
+                onResetLiveSummary={transcription.resetLiveSummary}
                 handleSegmentClick={handleSegmentClick}
                 liveNotes={notes.draft}
                 handleLiveNotesChange={notes.change}

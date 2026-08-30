@@ -1,13 +1,15 @@
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react"
-import { Loader2, Mic, Play, Sparkles, Square, Upload, Users } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
+import { Loader2, Mic, Play, RotateCcw, Sparkles, Square, Upload, Users } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { type Meeting, type TranscriptSegment, type LanguageHintOption } from "@/api/client"
+import { type Meeting, type TranscriptSegment, type LanguageHintOption, type LiveSummaryState } from "@/api/client"
 import { TranscriptTab, SpeakersTab } from "./transcript-panel"
 import { CaptureMiniPlayer, type CaptureMiniPlayerHandle } from "./capture-mini-player"
 import { LanguageHintsSelector } from "./language-hints-selector"
 import { HotWordsSelector } from "./hot-words-selector"
 import { LiveCaptureControlCard } from "./live-capture-control-card"
 import { MeetingNotesCard } from "./meeting-notes-card"
+import { LiveSummaryPanel, LiveSummaryTail } from "./live-summary-panel"
 import type { MeetingNotesStatus } from "@/hooks/use-meeting-notes"
 import { useT } from "@/i18n/use-t"
 
@@ -57,6 +59,12 @@ export interface MeetingCaptureStagesProps {
   handleDiscard: () => void | Promise<void>
   liveSegments: TranscriptSegment[]
   livePartial: string
+  liveSummaryEnabled: boolean
+  liveSummaryState: LiveSummaryState | null
+  liveSummaryError: string | null
+  liveSummaryEngine: string
+  onToggleLiveSummary: (enabled: boolean) => void
+  onResetLiveSummary: () => void
   handleSegmentClick: (start: number, end?: number) => void
   liveNotes: string
   handleLiveNotesChange: (value: string) => void
@@ -168,6 +176,12 @@ export function MeetingCaptureStages(p: MeetingCaptureStagesProps) {
     handleDiscard,
     liveSegments,
     livePartial,
+    liveSummaryEnabled,
+    liveSummaryState,
+    liveSummaryError,
+    liveSummaryEngine,
+    onToggleLiveSummary,
+    onResetLiveSummary,
     handleSegmentClick,
     liveNotes,
     handleLiveNotesChange,
@@ -177,6 +191,18 @@ export function MeetingCaptureStages(p: MeetingCaptureStagesProps) {
     pauseRecording,
     resumeRecording,
   } = p
+  const summaryAvailable = realtimeEnabled && hasRealtimeProvider
+  const [liveTab, setLiveTab] = useState<"transcript" | "summary">("transcript")
+  const liveTabMountedRef = useRef(false)
+  useEffect(() => {
+    // Flip to the summary view when the USER turns it on — skip the first
+    // run so the auto-enable at recording start keeps the transcript view.
+    if (!liveTabMountedRef.current) {
+      liveTabMountedRef.current = true
+      return
+    }
+    if (liveSummaryEnabled) setLiveTab("summary")
+  }, [liveSummaryEnabled])
   const recorder = {
     error: p.recorderError,
     levels: recorderLevels,
@@ -657,20 +683,100 @@ mode === "setup" ? (
                 <div className="pm-meeting-f-grid">
                   <div className="pm-meeting-f-card">
                     <div className="pm-meeting-f-card-h">
-                      <span className="pm-meeting-f-card-label">{t("meeting.liveTranscript")}</span>
-                      <span className="pm-meeting-f-card-meta">
-                        {realtimeEnabled && hasRealtimeProvider ? t("meeting.liveCaptionsMeta") : t("meeting.autoScroll")}
-                      </span>
+                      {summaryAvailable ? (
+                        <div className="pm-live-tabs" role="tablist">
+                          <button
+                            type="button"
+                            role="tab"
+                            aria-selected={liveTab === "transcript"}
+                            className={cn("pm-live-tab", liveTab === "transcript" && "is-active")}
+                            onClick={() => setLiveTab("transcript")}
+                          >
+                            {t("meeting.liveTranscript")}
+                          </button>
+                          <button
+                            type="button"
+                            role="tab"
+                            aria-selected={liveTab === "summary"}
+                            className={cn("pm-live-tab", liveTab === "summary" && "is-active")}
+                            onClick={() => setLiveTab("summary")}
+                          >
+                            {t("meeting.liveSummaryTab")}
+                            {liveSummaryEngine === "running" && (
+                              <span className="pm-live-tab-pulse" aria-hidden />
+                            )}
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="pm-meeting-f-card-label">{t("meeting.liveTranscript")}</span>
+                      )}
+                      {liveTab === "summary" && summaryAvailable ? (
+                        <span className="pm-meeting-f-card-meta pm-live-head-meta">
+                          <button
+                            type="button"
+                            className="pm-live-summary-toggle"
+                            onClick={() => onToggleLiveSummary(!liveSummaryEnabled)}
+                            title={
+                              liveSummaryEnabled
+                                ? t("meeting.liveSummaryOffClick")
+                                : t("meeting.liveSummaryOnClick")
+                            }
+                          >
+                            <span
+                              className={cn(
+                                "pm-live-summary-dot",
+                                liveSummaryEnabled && "is-on",
+                              )}
+                              aria-hidden
+                            />
+                            {liveSummaryEnabled
+                              ? t("meeting.liveSummaryOn")
+                              : t("meeting.liveSummaryOff")}
+                          </button>
+                          {liveSummaryEnabled && (
+                            <button
+                              type="button"
+                              className="pm-live-summary-reset"
+                              onClick={onResetLiveSummary}
+                              title={t("meeting.liveSummaryReset")}
+                            >
+                              <RotateCcw className="size-3" />
+                            </button>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="pm-meeting-f-card-meta">
+                          {realtimeEnabled && hasRealtimeProvider
+                            ? t("meeting.liveCaptionsMeta")
+                            : t("meeting.autoScroll")}
+                        </span>
+                      )}
                     </div>
                     <div className="pm-meeting-f-card-body">
-                      <TranscriptTab
-                        segments={transcription.segments}
-                        partialText={transcription.currentPartial}
-                        onSegmentClick={handleSegmentClick}
-                        speakerNames={meeting.speaker_names ?? {}}
-                        showSearch={false}
-                        followLive
-                      />
+                      {liveTab === "summary" && summaryAvailable ? (
+                        <div className="pm-live-summary-wrap">
+                          <LiveSummaryPanel
+                            state={liveSummaryState}
+                            error={liveSummaryError}
+                            paused={liveSummaryEnabled && !realtimeEnabled}
+                            speakerNames={meeting.speaker_names ?? {}}
+                          />
+                          <LiveSummaryTail
+                            segments={transcription.segments}
+                            partial={transcription.currentPartial}
+                            tailFromT={liveSummaryState?.tail_from_t ?? 0}
+                          />
+                        </div>
+                      ) : (
+                        <TranscriptTab
+                          segments={transcription.segments}
+                          partialText={transcription.currentPartial}
+                          onSegmentClick={handleSegmentClick}
+                          speakerNames={meeting.speaker_names ?? {}}
+                          showSearch={false}
+                          followLive
+                        />
+                      )}
                     </div>
                   </div>
                   <MeetingNotesCard

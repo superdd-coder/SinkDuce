@@ -421,6 +421,36 @@ export function streamSectionGenerate(
 export const getMeetingTranscript = (id: string) =>
   request<{ segments: TranscriptSegment[] }>(`/meetings/${id}/transcript`)
 
+// ── Live summary (in-meeting incremental state) ──
+
+export interface LiveSummaryEntry {
+  id: string
+  kind: string // point | decision | question | action
+  text: string
+  speaker?: string | null
+  t: number
+  status: string // active | resolved
+}
+
+export interface LiveSummaryTopic {
+  text: string
+  since: number
+  closed: boolean
+}
+
+export interface LiveSummaryState {
+  entries: LiveSummaryEntry[]
+  topic: LiveSummaryTopic | null
+  compacted_upto?: string
+  tail_from_t: number
+  round: number
+  engine: string // idle | running
+  updated_at: string
+}
+
+export const getLiveSummary = (id: string) =>
+  request<{ state: LiveSummaryState | null }>(`/meetings/${id}/live-summary`)
+
 export const saveMeetingTranscript = (
   id: string,
   payload: { segments: TranscriptSegment[]; text?: string },

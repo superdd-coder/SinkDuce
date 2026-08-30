@@ -59,16 +59,17 @@ def _todo_extract_lock(meeting_id: str, tab_id: str) -> threading.Lock:
         return lock
 
 
-def _resolve_meeting_llm() -> "LLMProvider":
+def _resolve_meeting_llm(ref: str | None = None) -> "LLMProvider":
     """Resolve the LLM for meeting summary (blueprint/tagger/summarizer).
 
-    Priority: meeting_model config → default LLM provider.
+    Priority: ``ref`` (or meeting_model config when ref is None/empty) →
+    default LLM provider.
     """
     from src.config import get_config
     from src.providers.llm import create_llm_for_provider
 
     cfg = get_config()
-    meeting_model = cfg.enrichment.meeting_model
+    meeting_model = ref or cfg.enrichment.meeting_model
     if meeting_model and cfg.llm.providers:
         # meeting_model format: "providerId|modelName" or just "providerId"
         parts = meeting_model.split("|", 1)

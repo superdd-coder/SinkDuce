@@ -351,7 +351,9 @@ function SimpleProviderDialog<T extends { id: string }>({
         if (f.type === "number") data[f.key] = parseInt(v) || 0
         else data[f.key] = v
       }
-      data[checkboxField] = form[checkboxField] === "true"
+      // CREATE may set the exclusive flag; EDIT leaves it untouched so saving
+      // an edit can never silently move (or drop) the default/active flag.
+      if (!provider) data[checkboxField] = form[checkboxField] === "true"
       if (provider) await onUpdate(provider.id, data)
       else await onCreate(data)
       toast.success(provider ? t("settings.updated") : t("common.created"))
@@ -457,17 +459,29 @@ function SimpleProviderDialog<T extends { id: string }>({
                 <p className="pm-settings-dlg-pref-label">
                   {t("settings.preferWhenMultiple")}
                 </p>
-                <button
-                  type="button"
-                  className={cn("pm-field-chip", form[checkboxField] === "true" && "is-on")}
-                  aria-pressed={form[checkboxField] === "true"}
-                  onClick={() =>
-                    set(checkboxField, form[checkboxField] === "true" ? "false" : "true")
-                  }
-                >
-                  <Star className="h-3 w-3" strokeWidth={1.75} />
-                  {form[checkboxField] === "true" ? t("common.default") : resolvedCheckboxLabel}
-                </button>
+                {provider ? (
+                  // Edit: the exclusive flag is state, not an action — show it
+                  // as a static badge; switching default/active stays on the
+                  // card's dedicated button.
+                  form[checkboxField] === "true" && (
+                    <span className="pm-field-chip is-on is-static">
+                      <Star className="h-3 w-3" strokeWidth={1.75} />
+                      {t("common.default")}
+                    </span>
+                  )
+                ) : (
+                  <button
+                    type="button"
+                    className={cn("pm-field-chip", form[checkboxField] === "true" && "is-on")}
+                    aria-pressed={form[checkboxField] === "true"}
+                    onClick={() =>
+                      set(checkboxField, form[checkboxField] === "true" ? "false" : "true")
+                    }
+                  >
+                    <Star className="h-3 w-3" strokeWidth={1.75} />
+                    {form[checkboxField] === "true" ? t("common.default") : resolvedCheckboxLabel}
+                  </button>
+                )}
               </div>
             </section>
           </div>
@@ -667,6 +681,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
   const [dirTopK,setDirTopK]=useState("20");const [dirRerankTopK,setDirRerankTopK]=useState("5");const [dirSearchMode,setDirSearchMode]=useState("hybrid");const [dirRerankEnabled,setDirRerankEnabled]=useState(true);const [dirMinScore,setDirMinScore]=useState("25")
   const [enrichMaxParallel,setEnrichMaxParallel]=useState("50");const [enrichModel,setEnrichModel]=useState("")
   const [meetingModel,setMeetingModel]=useState("")
+  const [liveSummaryModel,setLiveSummaryModel]=useState("")
   const [agenticQueryModel,setAgenticQueryModel]=useState("")
   const [noteDistillModel,setNoteDistillModel]=useState("")
   const [showAdvanced,setShowAdvanced]=useState(false)
@@ -938,6 +953,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
     if (typeof e.max_parallel_context === "number") setEnrichMaxParallel(String(e.max_parallel_context))
     if (typeof e.enrichment_model === "string") setEnrichModel(e.enrichment_model)
     if (typeof e.meeting_model === "string") setMeetingModel(e.meeting_model)
+    if (typeof e.live_summary_model === "string") setLiveSummaryModel(e.live_summary_model)
     if (typeof e.agentic_query_model === "string") setAgenticQueryModel(e.agentic_query_model)
     if (typeof e.note_distill_model === "string") setNoteDistillModel(e.note_distill_model)
   }
@@ -971,6 +987,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         if (!e) return
         if (typeof e.enrichment_model === "string" && e.enrichment_model) setEnrichModel(e.enrichment_model)
         if (typeof e.meeting_model === "string" && e.meeting_model) setMeetingModel(e.meeting_model)
+        if (typeof e.live_summary_model === "string" && e.live_summary_model) setLiveSummaryModel(e.live_summary_model)
         if (typeof e.agentic_query_model === "string" && e.agentic_query_model) setAgenticQueryModel(e.agentic_query_model)
         if (typeof e.note_distill_model === "string" && e.note_distill_model) setNoteDistillModel(e.note_distill_model)
       })
@@ -1320,6 +1337,32 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                                     meeting_model: v,
                                   })
                                   toast.success(t("settings.meetingModelUpdated"))
+                                } catch {
+                                  toast.error(t("settings.failedToUpdate"))
+                                }
+                              }}
+                              options={meetingModelOptions}
+                              placeholder={t("common.default")}
+                            />
+                          )}
+                        </div>
+
+                        <div className="pm-settings-model-field">
+                          <FieldLabel>{t("settings.liveSummaryModel")}</FieldLabel>
+                          {meetingModelOptions.length <= 1 ? (
+                            <div className="pm-settings-empty">
+                              <p className="pm-meta">{t("settings.noLlmProviders")}</p>
+                            </div>
+                          ) : (
+                            <DropdownSelect
+                              value={coerceSlotValue(liveSummaryModel, meetingModelOptions)}
+                              onChange={async (v) => {
+                                setLiveSummaryModel(v)
+                                try {
+                                  await updateConfig("enrichment", {
+                                    live_summary_model: v,
+                                  })
+                                  toast.success(t("settings.liveSummaryModelUpdated"))
                                 } catch {
                                   toast.error(t("settings.failedToUpdate"))
                                 }

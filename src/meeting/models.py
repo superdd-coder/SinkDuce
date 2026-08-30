@@ -51,6 +51,38 @@ class TranscriptionResult(BaseModel):
     language: str | None = None
 
 
+class LiveSummaryEntry(BaseModel):
+    id: str  # globally unique, monotonic ("e1", "e2", ...); survives compaction
+    kind: str  # point | decision | question | action
+    text: str
+    speaker: str | None = None
+    t: float = 0.0  # meeting-time seconds when the entry was created
+    status: str = "active"  # active | resolved
+
+
+class LiveSummaryTopic(BaseModel):
+    text: str
+    since: float = 0.0
+    closed: bool = False
+
+
+class LiveSummaryState(BaseModel):
+    """Server-owned state of the in-meeting live summary.
+
+    Persisted to ``live_summary.json`` and pushed to the client as the
+    WS snapshot. The LLM never sees or writes this whole object — it only
+    returns validated ops against it.
+    """
+
+    entries: list[LiveSummaryEntry] = Field(default_factory=list)
+    topic: LiveSummaryTopic | None = None
+    compacted_upto: str = ""  # watermark: entries up to this id were tidied
+    tail_from_t: float = 0.0  # transcript seconds covered by the last round
+    round: int = 0
+    engine: str = "idle"  # idle | running
+    updated_at: str = ""
+
+
 class MeetingGroupMember(BaseModel):
     meeting_id: str
     n: int
