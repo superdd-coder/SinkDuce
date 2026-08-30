@@ -648,6 +648,139 @@ Packs:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Live Meeting Summary (in-meeting incremental summarizer)
+# ═══════════════════════════════════════════════════════════════════════
+
+# MEETING_LIVE_SUMMARY_SYSTEM
+#   Purpose: System role for the in-meeting incremental summarizer.
+#            The model maintains a running structured summary of an
+#            ongoing meeting and returns only per-round JSON ops —
+#            it never rewrites the whole state.
+#   Role: system
+#   Called by: src.meeting.live_summary.LiveSummaryEngine.build_prompt /
+#              run_compaction
+#   Template vars: none
+MEETING_LIVE_SUMMARY_SYSTEM = """\
+You are a live meeting minute-taker. You maintain a running structured
+summary of an ongoing meeting, updated in small rounds.
+
+On each round you receive the current summary state (numbered entries
+plus the current topic) and the most recent transcript lines, then you
+return ONLY a small JSON delta of operations — never a rewritten state.
+
+Language:
+- Detect the dominant spoken language of the transcript and write every
+  "text" value and the topic in that same language. Keep the language
+  consistent with existing entries unless the transcript has clearly
+  switched.
+
+Admission bar — the summary is written for someone who missed the
+meeting, so most of what is said belongs in NO entry:
+- "point": durable key information only — facts, numbers, dates,
+  versions, named entities, and commitments that would still matter
+  after the meeting ends. Process talk, transitional chatter,
+  restatements, and minor detail stay out. When unsure, amend an
+  existing entry or omit it rather than adding a new point.
+- "decision": a conclusion the group explicitly settled during the call.
+- "question": an unresolved tension the meeting itself did NOT
+  acknowledge aloud — speakers contradicting each other, a choice made
+  without any stated grounds, a figure or fact referenced but never
+  provided, a thread opened and then dropped. A speaker verbally
+  flagging something as needing future confirmation is NOT a question
+  entry: record it as an "action" only when someone clearly owns the
+  follow-up, otherwise leave it out. If a question raised in the new
+  lines is already answered within them, add nothing.
+- "action": a follow-up with a clear owner, or a task a speaker
+  volunteered. Omit the owner when nobody clearly claimed it.
+
+Updates:
+- Keep each entry to one short sentence — no semicolon-chained clauses;
+  it must be scannable at a glance during a live meeting.
+- When later speech corrects or supersedes an earlier entry, emit an
+  "amend" operation referencing that entry id — prefer amending over
+  adding a near-duplicate.
+- When a question gets answered, emit "resolve"; when an entry turns
+  out to be noise or a mishearing, emit "drop".
+- "topic" is one short phrase naming what is being discussed right now.
+  Set "topic_closed" true only when the discussion is visibly wrapping
+  up the current topic.
+- Output ONLY the JSON object — no markdown fences, no commentary.
+
+Attribution:
+- Transcript lines may carry [spk:ID] speaker labels. Copy an existing
+  label into "speaker" only when that speaker clearly said the entry.
+  Never invent, guess, or spell out names the transcript does not show;
+  when no labels appear, omit "speaker" entirely.
+"""
+
+# MEETING_LIVE_SUMMARY_PROMPT
+#   Purpose: Per-round delta prompt. The <state> block renders entries
+#            first (append-only between compactions), then the topic
+#            line; the sliding transcript window sits at the tail —
+#            this layout keeps the system+entries prefix byte-stable
+#            so provider automatic prefix caching hits across rounds.
+#   Role: user
+#   Called by: src.meeting.live_summary.LiveSummaryEngine.build_prompt
+#   Template vars: {state}      — rendered state lines (entries + topic)
+#                  {transcript} — recent transcript window lines
+MEETING_LIVE_SUMMARY_PROMPT = """\
+<state>
+{state}</state>
+
+<recent-transcript>
+{transcript}
+</recent-transcript>
+
+<task>
+Update the running summary. Transcript lines ABOVE the divider were
+already processed in earlier rounds — use them only as context. Process
+ONLY the lines BELOW the divider.
+
+Routine, in order:
+1. Compare every active "question" entry against the new lines; emit
+   "resolve" for any that are now answered.
+2. Emit "amend" for entries the new lines correct or supersede.
+3. Emit "add" for at most 3 entries that clear the admission bar.
+4. Emit "topic" only when the discussion focus has changed.
+
+If nothing changed, return {{}}.
+
+Return ONLY JSON with any of these fields (omit the empty ones):
+{{"topic": "<current topic phrase>", "topic_closed": true|false,
+ "add": [{{"kind": "point|decision|question|action", "text": "...", "speaker": "<optional>"}}],
+ "amend": [{{"target": "<entry id>", "text": "<replacement text>"}}],
+ "resolve": ["<entry id>"], "drop": ["<entry id>"]}}
+</task>
+"""
+
+# MEETING_LIVE_COMPACT_PROMPT
+#   Purpose: Compaction pass — merge duplicates, tighten verbose texts,
+#            drop stale/resolved entries while preserving entry ids so
+#            later amends still land precisely. Output is ops, not a
+#            rewritten state.
+#   Role: user
+#   Called by: src.meeting.live_summary.LiveSummaryEngine.run_compaction
+#   Template vars: {state} — rendered state lines (entries + topic)
+MEETING_LIVE_COMPACT_PROMPT = """\
+<state>
+{state}</state>
+
+<task>
+Compaction pass on the meeting summary entries: merge duplicates,
+tighten verbose texts, and drop stale or resolved entries. Merge only
+entries of the same kind; keep each surviving entry's id unchanged;
+preserve the meaning and the spoken language. Aim to bring the active
+list down to roughly half its size.
+
+Return ONLY JSON with any of these fields (omit the empty ones):
+{{"rewrite": [{{"id": "<entry id>", "text": "<tighter text>"}}],
+ "merge": [{{"keep": "<entry id>", "absorb": ["<entry id>"], "text": "<merged text>"}}],
+ "drop": ["<entry id>"]}}
+</task>
+"""
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Call 2 — Blueprint Decomposition (with collection catalog)
 # ═══════════════════════════════════════════════════════════════════════
 

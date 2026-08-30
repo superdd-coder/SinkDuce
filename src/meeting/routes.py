@@ -13,6 +13,7 @@ from fastapi import APIRouter, Body, File, HTTPException, Request, UploadFile, W
 from fastapi.responses import FileResponse, StreamingResponse
 
 from src.meeting import store
+from src.meeting import live_summary as live_summary_mod
 from src.meeting.models import MeetingMode, MeetingStatus, ProcessingState, GenerationState, TranscriptSegment, TranscriptionResult
 from src.meeting.service import meeting_service
 from src.tasks.task_manager import task_manager
@@ -284,6 +285,7 @@ async def delete_meeting(meeting_id: str):
     meeting = store.get_meeting(meeting_id)
     if meeting:
         meeting_service.cleanup_meeting_allocations(meeting)
+    live_summary_mod.drop_engine(meeting_id)
     deleted = store.delete_meeting(meeting_id)
     if not deleted:
         logger.warning("[DELETE] Meeting %s NOT FOUND", meeting_id)
@@ -297,6 +299,7 @@ async def delete_meeting(meeting_id: str):
 async def discard_meeting_recording(meeting_id: str):
     """Discard all recording data: stop recording, delete audio + transcript, reset to 'created'."""
     logger.info("[DISCARD] Meeting %s", meeting_id)
+    live_summary_mod.drop_engine(meeting_id)
     try:
         meeting = store.discard_recording(meeting_id)
     except FileNotFoundError as exc:
@@ -792,6 +795,15 @@ async def get_meeting_tasks(meeting_id: str):
     return {"tasks": meeting_tasks, "pending": pending, "processing": processing}
 
 
+@router.get("/meetings/{meeting_id}/live-summary")
+async def get_live_summary(meeting_id: str):
+    """Persisted in-meeting live summary snapshot (state is None if never enabled)."""
+    meeting = store.get_meeting(meeting_id)
+    if not meeting:
+        raise HTTPException(404, "Meeting not found")
+    return {"state": store.get_live_summary(meeting_id)}
+
+
 @router.websocket("/meetings/{meeting_id}/realtime-transcribe")
 async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
     print(f"[REALTIME-WS] >>> handler entered, meeting={meeting_id}", flush=True)
@@ -848,8 +860,26 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
         except Exception:
             pass  # client disconnected, ignore
 
+    def _push_summary(snapshot: dict):
+        # Engine thread → event loop: ship a full live-summary snapshot.
+        if main_loop.is_closed():
+            return
+        main_loop.call_soon_threadsafe(
+            asyncio.create_task, _safe_send({"type": "live_summary", "state": snapshot})
+        )
+
     def on_segment(segment, is_final, key):
         try:
+            if is_final:
+                eng = live_summary_mod.get_engine(meeting_id)
+                if eng is not None and eng.state.engine == "running":
+                    eng.ingest_segment(
+                        segment.start,
+                        segment.end,
+                        segment.text,
+                        speaker_id=segment.speaker_id,
+                        key=str(key) if key is not None else None,
+                    )
             payload = {
                 "type": "transcript",
                 "key": str(key) if key is not None else None,
@@ -894,6 +924,16 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
         print(f"[REALTIME-WS] >>> provider.start() returned, entering receive loop", flush=True)
         await websocket.send_json({"type": "ready", "message": "realtime session ready"})
 
+        # Reconnect resume: an already-running live-summary engine re-sends
+        # its status + latest snapshot so a refreshed client catches up.
+        existing_engine = live_summary_mod.get_engine(meeting_id)
+        if existing_engine is not None and existing_engine.state.engine == "running":
+            existing_engine.on_update = _push_summary
+            await _safe_send({"type": "live_summary_status", "engine": "running"})
+            await _safe_send(
+                {"type": "live_summary", "state": existing_engine.snapshot()}
+            )
+
         client_requested_stop = False
         pcm_frames = 0
         pcm_bytes = 0
@@ -913,6 +953,38 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
                     print(f"[REALTIME-WS] >>> client sent stop signal", flush=True)
                     client_requested_stop = True
                     break
+                if payload.get("action") == "live_summary":
+                    enabled = bool(payload.get("enabled"))
+                    try:
+                        eng = live_summary_mod.ensure_engine(
+                            meeting_id,
+                            llm_factory=live_summary_mod.resolve_live_summary_llm,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "[REALTIME-WS] Live summary LLM unavailable: %s", exc
+                        )
+                        await _safe_send(
+                            {"type": "live_summary_error", "message": str(exc)}
+                        )
+                        continue
+                    eng.on_update = _push_summary
+                    if enabled:
+                        eng.start()
+                        await _safe_send(
+                            {"type": "live_summary_status", "engine": "running"}
+                        )
+                    else:
+                        eng.stop()
+                        await _safe_send(
+                            {"type": "live_summary_status", "engine": "idle"}
+                        )
+                    continue
+                if payload.get("action") == "live_summary_reset":
+                    eng = live_summary_mod.get_engine(meeting_id)
+                    if eng is not None:
+                        eng.reset()
+                    continue
                 # Unknown text message — ignore.
                 continue
             if "bytes" in message:
@@ -946,6 +1018,11 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
             await provider.stop()
             provider_already_stopped = True
             await asyncio.sleep(2.0)
+            # Recording stopped → squeeze one final summary round (to_thread:
+            # LLM latency must not block the event loop).
+            stopped_engine = live_summary_mod.get_engine(meeting_id)
+            if stopped_engine is not None and stopped_engine.state.engine == "running":
+                await asyncio.to_thread(stopped_engine.finalize)
     except WebSocketDisconnect:
         print(f"[REALTIME-WS] >>> client disconnected for meeting {meeting_id}", flush=True)
         logger.info("[REALTIME-WS] Client disconnected for meeting %s", meeting_id)

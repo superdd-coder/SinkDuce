@@ -413,6 +413,31 @@ def _load_transcript_dict(path: Path) -> dict | None:
     return _read_json(path)
 
 
+# ── Live summary (in-meeting incremental state) ───────────────────────
+
+
+def live_summary_path(meeting_id: str) -> Path:
+    return _meeting_dir(meeting_id) / "live_summary.json"
+
+
+def save_live_summary(meeting_id: str, state: dict) -> None:
+    """Persist the LiveSummaryState snapshot written after each engine round."""
+    meeting = get_meeting(meeting_id)
+    if meeting is None:
+        raise FileNotFoundError(f"Meeting {meeting_id} not found")
+    _write_json(live_summary_path(meeting_id), state)
+
+
+def get_live_summary(meeting_id: str) -> dict | None:
+    """Return the persisted LiveSummaryState dict, or None if never written."""
+    data = _read_cached(live_summary_path(meeting_id), _read_json)
+    if data is None:
+        return None
+    import copy
+
+    return copy.deepcopy(data)
+
+
 # ── Pipeline data (sentences, chunks, section markdown) ───────────────
 
 
@@ -590,6 +615,12 @@ def discard_recording(meeting_id: str) -> Meeting:
         if p.exists():
             p.unlink()
             logger.info("[DISCARD] Deleted transcript %s for meeting %s", p, meeting_id)
+
+    # 2b. Delete live summary artifact from the discarded recording
+    ls_path = live_summary_path(meeting_id)
+    if ls_path.exists():
+        ls_path.unlink()
+        logger.info("[DISCARD] Deleted live summary for meeting %s", meeting_id)
 
     # 3. Delete pipeline data (sentences, section mds)
     try:

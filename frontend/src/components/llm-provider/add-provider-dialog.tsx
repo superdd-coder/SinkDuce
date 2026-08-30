@@ -143,18 +143,21 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
     }
     setSaving(true)
     try {
-      const data = {
+      const base = {
         name: form.name.trim(),
         provider: form.provider,
         model: form.default_model || form.selected_models[0],
         base_url: form.base_url,
         api_key: form.api_key || undefined,
-        is_default: form.is_default,
         function_call_model_ids: form.function_call_model_ids,
         selected_models: form.selected_models,
         default_model: form.default_model || form.selected_models[0],
         visual_model_ids: form.visual_model_ids,
       }
+      // CREATE may set default; EDIT never touches it — otherwise every edit
+      // of the default card would re-assert default and re-run the
+      // default_chat_model side effect below, hijacking the chat model slot.
+      const data = provider ? base : { ...base, is_default: form.is_default }
       let savedId = provider?.id || ""
       if (provider) {
         await updateLLMProvider(provider.id, data)
@@ -164,7 +167,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
         savedId = created?.id || ""
         toast.success(t("settings.providerCreated"))
       }
-      if (form.is_default && form.function_call_model_ids.length > 0) {
+      if (!provider && form.is_default && form.function_call_model_ids.length > 0) {
         const chatModel = form.default_model || form.function_call_model_ids[0]
         await updateConfig("default_chat_model", {
           default_chat_model: savedId ? `${savedId}|${chatModel}` : chatModel,
@@ -316,15 +319,26 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
               </div>
               <div className="pm-settings-dlg-pref">
                 <p className="pm-settings-dlg-pref-label">{t("settings.preferNewChats")}</p>
-                <button
-                  type="button"
-                  className={cn("pm-field-chip", form.is_default && "is-on")}
-                  aria-pressed={form.is_default}
-                  onClick={() => set("is_default", !form.is_default)}
-                >
-                  <Star className="h-3 w-3" strokeWidth={1.75} />
-                  {form.is_default ? t("common.default") : t("settings.setAsDefault")}
-                </button>
+                {provider ? (
+                  // Edit: default is state, not an action — static badge only.
+                  // Switching default stays on the card's dedicated button.
+                  form.is_default && (
+                    <span className="pm-field-chip is-on is-static">
+                      <Star className="h-3 w-3" strokeWidth={1.75} />
+                      {t("common.default")}
+                    </span>
+                  )
+                ) : (
+                  <button
+                    type="button"
+                    className={cn("pm-field-chip", form.is_default && "is-on")}
+                    aria-pressed={form.is_default}
+                    onClick={() => set("is_default", !form.is_default)}
+                  >
+                    <Star className="h-3 w-3" strokeWidth={1.75} />
+                    {form.is_default ? t("common.default") : t("settings.setAsDefault")}
+                  </button>
+                )}
               </div>
             </section>
 
