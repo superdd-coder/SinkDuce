@@ -78,7 +78,23 @@ def bundled_model_dir() -> Path:
     )
 
 
-def _make_engine():
+# Threads per engine at a given pool size. A lone engine serves the common
+# small file (≤10 images) and gets 3 threads so it is not pinned to one core.
+# The full pool stays near the old budget (Docker 3×1, desktop 3×2) so three
+# engines do not thrash ~6 CPUs.
+_DOCKER_THREADS = {1: 3, 2: 2, 3: 1}
+_DESKTOP_THREADS = {1: 3, 2: 2, 3: 2}
+
+
+def intra_op_threads(engine_count: int, desktop: bool | None = None) -> int:
+    """ONNX intra-op threads per engine at the given pool size."""
+    if desktop is None:
+        desktop = _desktop_ocr()
+    table = _DESKTOP_THREADS if desktop else _DOCKER_THREADS
+    return table.get(min(engine_count, OCR_ENGINE_COUNT), 1)
+
+
+def _make_engine(engine_count: int = 1):
     from rapidocr import RapidOCR
 
     model_dir = bundled_model_dir()
@@ -90,11 +106,7 @@ def _make_engine():
             "Rec.model_path": str(model_dir / _REC),
             "Cls.model_path": str(model_dir / _CLS),
             "Global.max_side_len": OCR_MAX_SIDE,
-            # 3 engines × 1 thread keeps Docker's ~6 CPUs from thrashing.
-            # Docker: 1 thread × 3 engines. Desktop: a bit more per engine.
-            "EngineConfig.onnxruntime.intra_op_num_threads": (
-                2 if _desktop_ocr() else 1
-            ),
+            "EngineConfig.onnxruntime.intra_op_num_threads": intra_op_threads(engine_count),
             "EngineConfig.onnxruntime.inter_op_num_threads": 1,
         }
     )
@@ -152,7 +164,7 @@ def _grow_to_target() -> None:
             _created += 1
             n = _created
             pending = _pending
-        engine = _make_engine()
+        engine = _make_engine(n)
         pool.put(engine)
         logger.info(
             "[OCR] RapidOCR grew to %d/%d engines (backlog=%d)",

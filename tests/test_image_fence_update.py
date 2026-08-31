@@ -164,7 +164,7 @@ def test_ocr_pool_starts_with_one_and_reuses_sequentially(monkeypatch):
     _reset_ocr_pool()
     made = {"n": 0}
 
-    def _fake():
+    def _fake(engine_count=1):
         made["n"] += 1
         return object()
 
@@ -185,7 +185,7 @@ def test_ocr_pool_stays_at_one_for_ten_queued(monkeypatch):
     _reset_ocr_pool()
     made = {"n": 0}
 
-    def _fake():
+    def _fake(engine_count=1):
         made["n"] += 1
         return object()
 
@@ -205,7 +205,7 @@ def test_ocr_pool_grows_on_backlog_tiers_not_waiters(monkeypatch):
     _reset_ocr_pool()
     made = {"n": 0}
 
-    def _fake():
+    def _fake(engine_count=1):
         made["n"] += 1
         return object()
 
@@ -247,7 +247,7 @@ def test_ocr_pool_shrinks_extras_after_idle(monkeypatch):
     monkeypatch.setattr(rapid_ocr, "OCR_SHRINK_IDLE_SEC", 0.05)
     made = {"n": 0}
 
-    def _fake():
+    def _fake(engine_count=1):
         made["n"] += 1
         return object()
 
@@ -272,7 +272,7 @@ def test_ocr_classify_scales_workers_to_backlog(monkeypatch):
     from src.parsers.image_utils import ocr_classify_document_images
 
     _reset_ocr_pool()
-    monkeypatch.setattr(rapid_ocr, "_make_engine", lambda: object())
+    monkeypatch.setattr(rapid_ocr, "_make_engine", lambda engine_count=1: object())
     monkeypatch.setattr(rapid_ocr, "bundled_model_dir", lambda: "/tmp")
     seen = {"workers": None}
 

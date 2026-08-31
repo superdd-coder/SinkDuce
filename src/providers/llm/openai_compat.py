@@ -232,12 +232,17 @@ class OpenAICompatLLM(LLMProvider):
         # Chat uses a 1800s client timeout. One Vision hang must not occupy
         # an ingest worker / limiter slot for that long.
         client = self._client.with_options(timeout=httpx.Timeout(90, connect=15))
-        response = client.chat.completions.create(
+        kwargs = dict(
             model=self._model,
             messages=messages,
             temperature=0.1,
             max_tokens=1024,
         )
+        # Describing an image never benefits from thinking: reasoning tokens
+        # sit in front of every one-line answer and multiply per-image
+        # latency (measured qwen3.7-flash 30.6s → 7.4s with it off).
+        self._apply_thinking_kwargs(kwargs, thinking=False)
+        response = client.chat.completions.create(**kwargs)
         if not response.choices:
             return ""
         return _strip_think(response.choices[0].message.content or "")
