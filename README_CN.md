@@ -23,6 +23,8 @@ LLM、Embedding 与语音转写既可使用云端 API，也可接入 **本地模
 
 **Spark** 采集 → **Sink** 沉淀 → **Educe** 调用。
 
+**v1.3.0：** **PREPARE** — 参会人侧写与一页式会前简报；录制中的**实时纪要**与**实时翻译**（双语字幕）；跨后续会议的**会议群聊**；**中英双语界面**。
+
 **v1.2.0：** macOS 桌面（Apple Silicon DMG）与 Docker 镜像同一 GitHub Release；**说话人匹配** — 人入库一次，之后的会议会建议同一名字。
 
 ---
@@ -31,7 +33,7 @@ LLM、Embedding 与语音转写既可使用云端 API，也可接入 **本地模
 
 ### macOS（Apple Silicon）
 
-1. 在 [v1.2.0 Release](https://github.com/superdd-coder/sinkduce/releases/tag/v1.2.0) 下载 **[SinkDuce-macos-arm64-v1.2.0.dmg](https://github.com/superdd-coder/sinkduce/releases/download/v1.2.0/SinkDuce-macos-arm64-v1.2.0.dmg)**。
+1. 在 [v1.3.0 Release](https://github.com/superdd-coder/sinkduce/releases/tag/v1.3.0) 下载 **[SinkDuce-macos-arm64-v1.3.0.dmg](https://github.com/superdd-coder/sinkduce/releases/download/v1.3.0/SinkDuce-macos-arm64-v1.3.0.dmg)**。
 2. 打开磁盘映像，把 **SinkDuce** 拖进 Applications。
 3. 首次打开：右键 → **打开**（ad-hoc 签名，Gatekeeper 可能提示）。
 4. 升级后请 **Cmd+Q 再开**——点红灯只是藏到菜单栏。
@@ -71,6 +73,10 @@ git pull && docker compose pull && docker compose up -d
 
 **会议：** 麦克风 + 系统声混录，或上传音频；可暂停、弃录。转写可用**本地 ONNX** 或云端 ASR。得到总览总结，以及按你现有 Collection 拆开的 **Blueprint 章节**；改完再入库。点总结句可跳回转写时间点并播音频。总结支持翻译和导出。
 
+**会前（PREPARE）：** 预选参会人、写议程；SinkDuce 从历史会议沉淀**人物侧写**，并围绕你的议程合成**一页简报** — 谁参会、待办、上次的进展。
+
+**会中：** 实时字幕，加**实时纪要**（要点 / 决策 / 待澄清 / 行动项边说边出）与**实时翻译** — 端到端同传模型输出双语字幕，录制中可随时开关或换目标语言，采集不中断。
+
 **说话人匹配（v1.2.0）：** 维护一份人物库。会后会建议是谁在说话，不必每次重命名。
 
 **Notes：** 每个 Collection 里的 Tiptap 编辑器（自动保存）。分屏编辑，蒸馏成引用、源变更后传播、一键入库。可以和会议总结并排打开。
@@ -83,7 +89,7 @@ git pull && docker compose pull && docker compose up -d
 
 **Library** 是对应资料的工作界面：
 
-- **文件夹** — 浏览、版本、归档、多选、文件预览。
+- **文件夹** — 浏览、版本、移动 / 归档、列表或网格视图、文件预览。
 - **时间线** — 用链和节点看工作怎么演进；可挂文件、消息、待办。
 
 重要来源标 **Definitive**，参与集合总览和**冲突**对照。切分感知句子和 Markdown 标题；可选父子块和上下文增强。
@@ -91,6 +97,8 @@ git pull && docker compose pull && docker compose up -d
 ### Educe — 调用
 
 **Chat：** 勾选一个或多个 Collection，本轮可换模型；流式回答，思考 / 检索步骤可见。来源可从片段点到文档再到原文件。复杂问题走 Agentic，简单问题走直接检索。可选**联网搜索**，检索前会先问你。
+
+**会议对话：** 在会议里直接追问 — Quick Chat 可检索该会议转写；**群聊**可跨一系列后续会议，引用可回指每场会。
 
 Library / 会议旁有 **Quick Chat**。要评测召回用 **Recall**。同一套记忆通过 **MCP** 对外，不锁在网页里。
 
@@ -101,11 +109,13 @@ Library / 会议旁有 **Quick Chat**。要评测召回用 **Recall**。同一�
 | 领域 | 你能做什么 |
 |------|------------|
 | **会议** | 混录或上传 → 转写（本地或云）→ 总结 + 按主题拆章 → 入库。句级回跳、说话人、热词、语言提示、翻译 / 导出。**跨会议说话人匹配**。 |
+| **PREPARE** | 预选参会人、写议程；历史会议沉淀**人物侧写**；**一页式会前简报**（参会人 + 待办 + 上次回顾）。 |
+| **会中实时** | 实时字幕 + **实时纪要**（要点 / 决策 / 行动项）；**实时翻译**双语字幕，录制中可开关、可换语言。 |
 | **Notes** | 所见即所得编辑（Markdown、表格、图片、任务）。蒸馏、传播引用、入库（图片做 OCR 和视觉描述）。 |
-| **Library** | 文件夹、版本、时间线（链 / 节点）、消息、智能待办。Definitive、集合总览、冲突对照。 |
+| **Library** | 文件夹、版本、时间线（链 / 节点）、消息、智能待办。移动 / 归档、列表或网格视图。Definitive、集合总览、冲突对照。 |
 | **入库** | 常见办公 / 网页格式 + OCR；可选 MinerU。图片会生成检索用描述。 |
-| **Chat** | 跨库提问、可见步骤、三层来源、对话内换模型。可选、需确认的联网搜索。Quick Chat + Recall。 |
-| **配置** | DashScope / OpenRouter 一键配置。Chat / Vision / 会议总结可分模型。Settings 内下载本地 ONNX 语音。 |
+| **Chat** | 跨库提问、可见步骤、三层来源、对话内换模型。可选、需确认的联网搜索。Quick Chat + Recall、跨后续会议的**会议群聊**。 |
+| **配置** | DashScope / OpenRouter 一键配置。Chat / Vision / 会议总结可分模型。Settings 内下载本地 ONNX 语音。中英双语界面。 |
 | **MCP** | 同一进程 56 个工具 — 库、文件、检索、会议、笔记、热词、任务。 |
 
 ---

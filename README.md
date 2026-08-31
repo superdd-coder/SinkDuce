@@ -23,6 +23,8 @@ LLM, embedding, and speech can use cloud APIs or **local models** (Ollama, LM St
 
 **Spark** (capture) → **Sink** (organize) → **Educe** (reason).
 
+**v1.3.0:** **PREPARE** — attendee profiles + a one-page pre-meeting brief; **live summary** and **live translation** (bilingual captions) while recording; **meeting group chat** across follow-ups; **zh-CN / English UI**.
+
 **v1.2.0:** macOS desktop (Apple Silicon DMG) on the same GitHub Release as the Docker image; **speaker matching** — enroll a person once, later meetings suggest the same name.
 
 ---
@@ -31,7 +33,7 @@ LLM, embedding, and speech can use cloud APIs or **local models** (Ollama, LM St
 
 ### macOS (Apple Silicon)
 
-1. Download **[SinkDuce-macos-arm64-v1.2.0.dmg](https://github.com/superdd-coder/sinkduce/releases/download/v1.2.0/SinkDuce-macos-arm64-v1.2.0.dmg)** from the [v1.2.0 Release](https://github.com/superdd-coder/sinkduce/releases/tag/v1.2.0).
+1. Download **[SinkDuce-macos-arm64-v1.3.0.dmg](https://github.com/superdd-coder/sinkduce/releases/download/v1.3.0/SinkDuce-macos-arm64-v1.3.0.dmg)** from the [v1.3.0 Release](https://github.com/superdd-coder/sinkduce/releases/tag/v1.3.0).
 2. Open the disk image and drag **SinkDuce** into Applications.
 3. First launch: right-click → **Open** (ad-hoc signed; Gatekeeper may warn).
 4. After an update: **Cmd+Q** then reopen — the red window button only hides to the menu bar.
@@ -71,6 +73,10 @@ git pull && docker compose pull && docker compose up -d
 
 **Meetings:** mix-record mic + system audio, or upload a file; pause and discard are supported. Transcribe with **local ONNX** or cloud ASR. You get a general summary and **Blueprint sections** aligned with your Collections; edit, then ingest. Click a summary sentence to jump to the transcript and play audio. Summaries can be translated and exported.
 
+**Before the meeting (PREPARE):** pre-select attendees and jot the agenda; SinkDuce distills a **person profile** from every past meeting and synthesizes a **one-page brief** around your agenda — who is joining, open todos, and what happened last time.
+
+**During the meeting:** realtime captions, plus a **live summary** (key points / decisions / questions / action items updated as you talk) and **live translation** — bilingual captions via an end-to-end simultaneous-translation model; toggle it or switch target language mid-recording without interrupting capture.
+
 **Speaker matching (v1.2.0):** keep a people library. After a meeting, the app suggests who is talking so you do not rename speakers every time.
 
 **Notes:** Tiptap editor per Collection (auto-save). Dual-pane editing, distill a note into a citation, propagate when the source changes, one-click ingest. Open a meeting summary beside a note in the same workspace.
@@ -83,7 +89,7 @@ Everything lives in a **Collection**, isolated by project or theme.
 
 **Library** is the working surface for that material:
 
-- **Folders** — browse, versions, archive, multi-select, file preview.
+- **Folders** — browse, versions, move / archive, list or grid view, file preview.
 - **Timeline** — chains and nodes for how work evolves; attach files, messages, and todos.
 
 Mark **Definitive** sources for collection overviews and **conflict** compare (side-by-side). Chunking is sentence- and Markdown-aware; parent-child chunks and contextual enrichment are optional.
@@ -91,6 +97,8 @@ Mark **Definitive** sources for collection overviews and **conflict** compare (s
 ### Educe — reason
 
 **Chat:** pick one or more Collections, switch model per turn, streamed answers with a thinking / retrieval timeline. Open sources from snippet → document → original file. Complex questions use an agentic path; simpler ones a direct retrieve. Optional **web search** only after you confirm.
+
+**Meeting chat:** ask follow-up questions right inside a meeting — Quick Chat looks up its transcript, and a **group chat** spans a series of follow-up meetings with citations back to each one.
 
 **Quick Chat** sits next to Library or a meeting. **Recall** is there if you want to evaluate retrieval. The same memory is exposed as **MCP** so it is not locked in the web UI.
 
@@ -101,11 +109,13 @@ Mark **Definitive** sources for collection overviews and **conflict** compare (s
 | Area | What you get |
 |------|----------------|
 | **Meetings** | Mix-record or upload → transcribe (local or cloud) → summary + topic sections → ingest. Sentence-level jump-back, speakers, hot words, language hints, translate / export. **Speaker matching** across meetings. |
+| **PREPARE** | Pre-select attendees, write the agenda; **person profiles** distilled from past meetings; **one-page pre-meeting brief** (attendees + open todos + last-time recap). |
+| **Live meeting** | Realtime captions with **live summary** (points / decisions / actions) and **live translation** — bilingual captions, toggled or re-targeted mid-recording. |
 | **Notes** | WYSIWYG editor (Markdown, tables, images, tasks). Distill, propagate citations, ingest (OCR + vision on images). |
-| **Library** | Folders, versions, timeline (chains / nodes), messages, smart todos. Definitive flag, collection overview, conflict compare. |
+| **Library** | Folders, versions, timeline (chains / nodes), messages, smart todos. Move / archive, list or grid view. Definitive flag, collection overview, conflict compare. |
 | **Ingest** | Common office / web formats + OCR; optional MinerU. Images described for search. |
-| **Chat** | Multi-collection Q&A, visible steps, 3-layer sources, in-chat model switch. Optional confirmed web search. Quick Chat + Recall. |
-| **Setup** | OneShot for DashScope / OpenRouter. Separate models for chat, vision, and meeting summary. Local ONNX ASR download in Settings. |
+| **Chat** | Multi-collection Q&A, visible steps, 3-layer sources, in-chat model switch. Optional confirmed web search. Quick Chat + Recall, **meeting group chat** across follow-ups. |
+| **Setup** | OneShot for DashScope / OpenRouter. Separate models for chat, vision, and meeting summary. Local ONNX ASR download in Settings. zh-CN / English UI. |
 | **MCP** | 56 tools on the same process — collections, files, search, meetings, notes, hot words, tasks. |
 
 ---
