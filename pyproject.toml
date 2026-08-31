@@ -1,6 +1,6 @@
 [project]
 name = "sinkduce"
-version = "1.3.0"
+version = "1.3.1"
 description = "One-click deployable RAG Agent system"
 license = { text = "AGPL-3.0-or-later" }
 requires-python = ">=3.11,<3.13"

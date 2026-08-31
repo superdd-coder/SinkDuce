@@ -33,7 +33,7 @@ LLM、Embedding 与语音转写既可使用云端 API，也可接入 **本地模
 
 ### macOS（Apple Silicon）
 
-1. 在 [v1.3.0 Release](https://github.com/superdd-coder/sinkduce/releases/tag/v1.3.0) 下载 **[SinkDuce-macos-arm64-v1.3.0.dmg](https://github.com/superdd-coder/sinkduce/releases/download/v1.3.0/SinkDuce-macos-arm64-v1.3.0.dmg)**。
+1. 在 [v1.3.1 Release](https://github.com/superdd-coder/sinkduce/releases/tag/v1.3.1) 下载 **[SinkDuce-macos-arm64-v1.3.1.dmg](https://github.com/superdd-coder/sinkduce/releases/download/v1.3.1/SinkDuce-macos-arm64-v1.3.1.dmg)**。
 2. 打开磁盘映像，把 **SinkDuce** 拖进 Applications。
 3. 首次打开：右键 → **打开**（ad-hoc 签名，Gatekeeper 可能提示）。
 4. 升级后请 **Cmd+Q 再开**——点红灯只是藏到菜单栏。
