@@ -162,10 +162,12 @@ export function LiveSummaryPanel({
 export function LiveSummaryTail({
   segments,
   partial,
+  partialTranslation,
   tailFromT,
 }: {
   segments: TranscriptSegment[]
   partial: string
+  partialTranslation?: string
   tailFromT: number
 }) {
   const t = useT()
@@ -179,9 +181,22 @@ export function LiveSummaryTail({
       </span>
       <div className="pm-ls-tail-lines">
         {tail.map((s, i) => (
-          <p key={`${s.start}-${i}`}>{s.text}</p>
+          <p key={`${s.start}-${i}`}>
+            {s.text}
+            {s.translation ? (
+              <span className="pm-ls-tail-translation" dir="auto">
+                {" "}
+                {s.translation}
+              </span>
+            ) : null}
+          </p>
         ))}
-        {partial ? <p className="pm-ls-tail-partial">{partial}</p> : null}
+        {partial ? (
+          <p className="pm-ls-tail-partial">
+            {partial}
+            {partialTranslation ? ` ${partialTranslation}` : ""}
+          </p>
+        ) : null}
       </div>
     </div>
   )

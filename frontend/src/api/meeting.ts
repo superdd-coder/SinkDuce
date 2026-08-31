@@ -19,6 +19,8 @@ export interface TranscriptSegment {
   speaker_id?: string
   sentence_id?: string
   section_tags?: string[]
+  /** Live-translate target text (bilingual captions). */
+  translation?: string | null
 }
 
 // ── Meeting v2 types ──

@@ -17,7 +17,7 @@ class _FakeRealtimeProvider:
         self.frames = 0
         self.on_segment = None
 
-    async def start(self, on_segment, hot_words=None, language_hints=None):
+    async def start(self, on_segment, hot_words=None, language_hints=None, translation_target=None):
         self.on_segment = on_segment
 
     async def send_frame(self, data):

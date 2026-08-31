@@ -293,6 +293,8 @@ export interface TranscriptionProvider {
   is_active: boolean
   models_downloaded?: boolean
   language_hints_config?: LanguageHintOption[]
+  /** DashScope LiveTranslate dedicated workspace (optional). */
+  workspace_id?: string
 }
 
 // File transcription providers
@@ -391,6 +393,8 @@ export interface ActiveProviderSideInfo {
   model?: string | null
   /** Registry display name for UI captions */
   display_name?: string | null
+  /** Live bilingual captions available (LiveTranslate / DashScope key). */
+  supports_realtime_translation?: boolean
 }
 
 export interface ActiveProviderInfo {

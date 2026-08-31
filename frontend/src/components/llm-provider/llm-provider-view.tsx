@@ -1125,6 +1125,21 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         { key: "api_key", label: t("settings.apiKey"), type: "password", placeholder: "sk-..." },
       ]
     }
+    if (adapter === "dashscope_livetranslate_realtime") {
+      return [
+        ...rtTransFields,
+        {
+          key: "model",
+          label: t("library.model"),
+          options: [
+            { value: "qwen3.5-livetranslate-flash-realtime", label: "qwen3.5-livetranslate-flash-realtime (recommended)" },
+            { value: "qwen3-livetranslate-flash-realtime", label: "qwen3-livetranslate-flash-realtime (legacy)" },
+          ],
+        },
+        { key: "api_key", label: t("settings.apiKey"), type: "password", placeholder: "sk-..." },
+        { key: "workspace_id", label: t("settings.workspaceId"), placeholder: "llm-xxxxxxxx (optional)" },
+      ]
+    }
     return [
       ...rtTransFields,
       { key: "api_key", label: t("settings.apiKey"), type: "password", placeholder: "sk-..." },

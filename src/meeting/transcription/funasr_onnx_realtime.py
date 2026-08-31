@@ -95,7 +95,9 @@ class FunASROnnxRealtimeTranscription(RealtimeTranscriptionProvider):
         on_segment: Callable[[TranscriptSegment, bool, Any], None],
         hot_words: list | None = None,
         language_hints: list[str] | None = None,
+        translation_target: str | None = None,
     ) -> None:
+        # translation_target is ignored: local ASR has no translation mode.
         self._on_segment = on_segment
         self._param_dict = {"cache": {}, "is_final": False}
         self._buffer = bytearray()

@@ -187,6 +187,7 @@ class DashScopeRealtimeTranscription(RealtimeTranscriptionProvider):
         on_segment: Callable[[TranscriptSegment, bool, Any], None],
         hot_words: list | None = None,
         language_hints: list[str] | None = None,
+        translation_target: str | None = None,
     ) -> None:
         """Start a real-time transcription session.
 
@@ -198,6 +199,8 @@ class DashScopeRealtimeTranscription(RealtimeTranscriptionProvider):
             hot_words: Optional list of HotWordItem dicts.
             language_hints: Optional language hints (e.g. ["zh", "en"]).
                 Fun-ASR realtime uses only the first hint.
+            translation_target: Ignored — plain ASR adapter. Live translation
+                is handled by ``DashScopeLiveTranslateRealtime``.
         """
         dashscope.api_key = self._api_key
         dashscope.base_websocket_api_url = self._base_ws_url
