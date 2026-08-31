@@ -13,6 +13,7 @@ from src.meeting.transcription.registry import (
 # Importing adapter modules triggers their @register decorators.
 # Local ASR is ONNX-only (funasr-onnx + onnxruntime). No PyTorch FunASR adapters.
 from src.meeting.transcription import dashscope_file  # noqa: F401
+from src.meeting.transcription import dashscope_livetranslate_realtime  # noqa: F401
 from src.meeting.transcription import dashscope_realtime  # noqa: F401
 from src.meeting.transcription import funasr_onnx_file  # noqa: F401
 from src.meeting.transcription import funasr_onnx_realtime  # noqa: F401

@@ -600,6 +600,106 @@ class MeetingService(
             "model": cfg.model,
         }
 
+    # -- Realtime translation (LiveTranslate) --------------------------------
+
+    _LIVE_TRANSLATE_ADAPTER = "dashscope_livetranslate_realtime"
+
+    def _resolve_translation_provider_cfg(self):
+        """Config for the LiveTranslate session, or None when unavailable.
+
+        A provider explicitly configured with the LiveTranslate adapter wins
+        (holds its own api key / model / workspace). Otherwise the session is
+        synthesized from the active DashScope realtime provider's API key —
+        plain-ASR users get translation without extra Settings work.
+        """
+        from src.config import TranscriptionProviderConfig
+        from src.meeting.transcription import resolve_realtime_adapter
+
+        config = get_config()
+        providers = list(config.transcription.realtime_providers or [])
+        explicit = [
+            p
+            for p in providers
+            if resolve_realtime_adapter(p.adapter or "")
+            == self._LIVE_TRANSLATE_ADAPTER
+        ]
+        if explicit:
+            return next((p for p in explicit if p.is_active), explicit[0])
+
+        active = config.transcription.active_realtime_provider
+        if active is None:
+            active = config.transcription.get_local_realtime_provider()
+        adapter = resolve_realtime_adapter((active.adapter or "")) if active else ""
+        if adapter.startswith("dashscope") and (active.api_key or "").strip():
+            return TranscriptionProviderConfig(
+                id="auto-livetranslate",
+                name="DashScope LiveTranslate (auto)",
+                adapter=self._LIVE_TRANSLATE_ADAPTER,
+                api_key=active.api_key,
+                workspace_id=getattr(active, "workspace_id", None),
+            )
+        return None
+
+    def get_realtime_translation_provider(self) -> RealtimeTranscriptionProvider:
+        """LiveTranslate provider for meetings that request a target language.
+
+        Raises ValueError when no DashScope key is reachable from config.
+        """
+        cfg = self._resolve_translation_provider_cfg()
+        if cfg is None:
+            raise ValueError(
+                "Realtime translation requires a DashScope API key: set a "
+                "DashScope realtime provider as Default in Settings, or add "
+                "a LiveTranslate provider."
+            )
+        from src.meeting.transcription.dashscope_livetranslate_realtime import (
+            resolve_live_translate_model,
+        )
+        from src.providers.cache import invalidate as cache_invalidate
+        from src.providers.cache import peek as cache_peek
+
+        expected_model = resolve_live_translate_model(cfg.model)
+        key_suffix = cfg.api_key[-6:] if cfg.api_key else "nokey"
+        cache_key = f"rt_trans_lt:{cfg.id}:{key_suffix}"
+        cached = cache_peek(cache_key)
+        if cached is not None and (
+            not self._provider_matches_adapter(cached, cfg.adapter)
+            or getattr(cached, "_model", None) != expected_model
+        ):
+            # Provider edited in Settings (model swap etc.) — the generic
+            # `rt_trans:<id>` invalidation misses this key, so drop it here.
+            logger.warning(
+                "Dropping stale LiveTranslate provider cache %s", cache_key
+            )
+            cache_invalidate(cache_key)
+        return cached_provider(
+            cache_key,
+            lambda: create_realtime_transcription_provider(cfg),
+        )
+
+    def get_realtime_translation_provider_meta(self) -> dict:
+        """Lightweight LiveTranslate identity + availability (no instance)."""
+        cfg = self._resolve_translation_provider_cfg()
+        if cfg is None:
+            return {
+                "id": None,
+                "adapter": self._LIVE_TRANSLATE_ADAPTER,
+                "name": None,
+                "model": None,
+                "supports_realtime_translation": False,
+            }
+        from src.meeting.transcription.dashscope_livetranslate_realtime import (
+            _DEFAULT_LIVE_TRANSLATE_MODEL,
+        )
+
+        return {
+            "id": cfg.id,
+            "adapter": self._LIVE_TRANSLATE_ADAPTER,
+            "name": cfg.name,
+            "model": cfg.model or _DEFAULT_LIVE_TRANSLATE_MODEL,
+            "supports_realtime_translation": True,
+        }
+
     # -- Summary generation (v3 Blueprint) ----------------------------------
 
 

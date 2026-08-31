@@ -254,6 +254,11 @@ class TranscriptionProviderConfig(BaseModel):
     base_url: str | None = None
     model: str | None = None
     is_active: bool = False
+    # --- Optional: DashScope LiveTranslate dedicated workspace ---
+    # When set, the realtime translation session targets
+    # wss://{workspace_id}.<region>.maas.aliyuncs.com/api-ws/v1/realtime
+    # instead of the shared dashscope endpoint.
+    workspace_id: str | None = None
     # --- Optional fields for local FunASR providers ---
     device: str | None = None          # "cpu" | "cuda" | "mps"
     vad_model: str | None = None       # VAD model name (default: fsmn-vad)

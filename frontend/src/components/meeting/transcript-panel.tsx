@@ -16,6 +16,7 @@ interface TranscriptPanelProps {
   onToggle: () => void
   segments: TranscriptSegment[]
   partialText?: string
+  partialTranslation?: string
   onSegmentClick?: (startTime: number, endTime?: number) => void
   focusRef?: { id: string; ts: number } | null
   activeSectionTag?: string
@@ -32,6 +33,7 @@ export function TranscriptPanel({
   onToggle,
   segments,
   partialText,
+  partialTranslation,
   onSegmentClick,
   focusRef,
   activeSectionTag,
@@ -86,6 +88,7 @@ export function TranscriptPanel({
             <TranscriptTab
               segments={segments}
               partialText={partialText}
+              partialTranslation={partialTranslation}
               onSegmentClick={onSegmentClick}
               focusRef={focusRef}
               activeSectionTag={activeSectionTag}
@@ -139,6 +142,7 @@ function scrollSegmentIntoView(
 export function TranscriptTab({
   segments,
   partialText,
+  partialTranslation,
   onSegmentClick,
   focusRef,
   activeSectionTag,
@@ -151,6 +155,8 @@ export function TranscriptTab({
 }: {
   segments: TranscriptSegment[]
   partialText?: string
+  /** Live-translate partial paired with partialText (bilingual captions). */
+  partialTranslation?: string
   onSegmentClick?: (startTime: number, endTime?: number) => void
   focusRef?: { id: string; ts: number } | null
   activeSectionTag?: string
@@ -426,6 +432,11 @@ export function TranscriptTab({
                 <p className="pm-meeting-seg-body">
                   {highlight(seg.text)}
                 </p>
+                {seg.translation && (
+                  <p className="pm-meeting-seg-translation" dir="auto">
+                    {highlight(seg.translation)}
+                  </p>
+                )}
               </div>
             )
           })}
@@ -440,6 +451,11 @@ export function TranscriptTab({
                 {t("common.live")}
               </div>
               <p className="pm-meeting-seg-partial-text">{partialText}</p>
+              {partialTranslation && (
+                <p className="pm-meeting-seg-translation" dir="auto">
+                  {partialTranslation}
+                </p>
+              )}
             </div>
           )}
         </div>

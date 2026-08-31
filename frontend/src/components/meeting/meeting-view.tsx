@@ -36,6 +36,10 @@ import {
   type MeetingQcSpinPhase,
 } from "./meeting-quick-chat"
 import { DEFAULT_LANGUAGE_HINTS } from "./language-hints-selector"
+import {
+  DEFAULT_TRANSLATION_TARGET,
+  TRANSLATION_TARGET_LANGUAGES,
+} from "./translation-selector"
 import { clipLanguageHints } from "@/lib/language-hints"
 import { startStream as startBlueprintStream } from "@/hooks/use-blueprint-stream"
 import { type CaptureMiniPlayerHandle } from "./capture-mini-player"
@@ -159,6 +163,16 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   /** Which model path the language selector is bound to right now */
   const languagePathRef = useRef<"rt" | "file">("rt")
   const [languageHints, setLanguageHints] = useState<string[]>([...DEFAULT_LANGUAGE_HINTS])
+
+  // Live bilingual captions (DashScope LiveTranslate) — realtime-only
+  const [supportsTranslation, setSupportsTranslation] = useState(false)
+  const [translationEnabled, setTranslationEnabled] = useState(false)
+  const [translationTarget, setTranslationTarget] = useState<string>(DEFAULT_TRANSLATION_TARGET)
+  const perMeetingTranslation = useRef<Map<string, { enabled: boolean; target: string }>>(new Map())
+  const translationEnabledRef = useRef(false)
+  translationEnabledRef.current = translationEnabled
+  const translationTargetRef = useRef<string>(DEFAULT_TRANSLATION_TARGET)
+  translationTargetRef.current = translationTarget
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft] = useState("")
   const [audioVersion, setAudioVersion] = useState(0)
@@ -519,6 +533,64 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     }
   }
 
+  // Per-meeting live-translation prefs (enabled + target language).
+  // While recording, changes hot-swap the engine via a graceful reconnect
+  // (audio recording itself is never interrupted — it is a separate PCM
+  // consumer); before recording they only update state for the next session.
+  const updateTranslationEnabled = useCallback(
+    (v: boolean) => {
+      setTranslationEnabled(v)
+      // Sync the ref NOW — the paired target callback may have just updated
+      // it in the same tick (first-enable flow: pick language → enable).
+      translationEnabledRef.current = v
+      if (activeMeeting) {
+        perMeetingTranslation.current.set(activeMeeting, {
+          enabled: v,
+          target: translationTargetRef.current,
+        })
+      }
+      if (transcription.isTranscribing) {
+        toast.message(t("meeting.liveTranslationSwitching"))
+        transcription.reconfigureTranslation(v ? translationTargetRef.current : null)
+      }
+    },
+    [activeMeeting, transcription.isTranscribing, transcription.reconfigureTranslation, t],
+  )
+  const updateTranslationTarget = useCallback(
+    (code: string) => {
+      const valid = TRANSLATION_TARGET_LANGUAGES.some((l) => l.code === code)
+      const next = valid ? code : DEFAULT_TRANSLATION_TARGET
+      setTranslationTarget(next)
+      // Sync immediately so a same-tick enable callback reads the new value.
+      translationTargetRef.current = next
+      if (activeMeeting) {
+        perMeetingTranslation.current.set(activeMeeting, {
+          enabled: translationEnabledRef.current,
+          target: next,
+        })
+      }
+      // Engine swap only when translation is (or just stays) on — a bare
+      // language pick while OFF must not reconnect; the enable callback
+      // right after it connects with this fresh target.
+      if (transcription.isTranscribing && translationEnabledRef.current) {
+        toast.message(t("meeting.liveTranslationSwitching"))
+        transcription.reconfigureTranslation(next)
+      }
+    },
+    [activeMeeting, transcription.isTranscribing, transcription.reconfigureTranslation, t],
+  )
+
+  // Restore translation prefs when switching meetings
+  useEffect(() => {
+    if (!activeMeeting) return
+    const stored = perMeetingTranslation.current.get(activeMeeting)
+    if (stored) {
+      setTranslationEnabled(stored.enabled && supportsTranslation)
+      setTranslationTarget(stored.target)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeMeeting])
+
   /**
    * Language options follow the path-appropriate default model:
    * - Setup / live capture → active **realtime** model
@@ -543,6 +615,10 @@ export function MeetingView({ active = true }: { active?: boolean }) {
         languagePathRef.current = useRt ? "rt" : "file"
         setFileSupportsHotWords(!!info.file?.supports_hot_words)
         setRtSupportsHotWords(!!info.realtime?.supports_hot_words)
+        // Live bilingual captions are a realtime capability.
+        const rtTranslation = !!info.realtime?.supports_realtime_translation
+        setSupportsTranslation(rtTranslation)
+        if (!rtTranslation) setTranslationEnabled(false)
         const side = useRt ? info.realtime : info.file
         const maxHints = Math.max(1, side?.max_language_hints ?? 1)
         setMaxLanguageHints(maxHints)
@@ -588,7 +664,10 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     const shouldTranscribe = recorder.isRecording && realtimeEnabled
 
     if (shouldTranscribe && !isTranscribingRef.current) {
-      startTranscriptionRef.current(languageHintsRef.current)
+      const target = translationEnabledRef.current
+        ? translationTargetRef.current
+        : undefined
+      startTranscriptionRef.current(languageHintsRef.current, target)
     } else if (!shouldTranscribe && isTranscribingRef.current) {
       stopTranscriptionRef.current()
     }
@@ -1730,6 +1809,11 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                 updateLanguageHints={updateLanguageHints}
                 supportedLanguageHints={supportedLanguageHints}
                 maxLanguageHints={maxLanguageHints}
+                supportsTranslation={supportsTranslation}
+                translationEnabled={translationEnabled}
+                translationTarget={translationTarget}
+                setTranslationEnabled={updateTranslationEnabled}
+                setTranslationTarget={updateTranslationTarget}
                 activeHotWordsSupported={activeHotWordsSupported}
                 handleSelectHotWordsLibraries={handleSelectHotWordsLibraries}
                 emptyUploadRef={emptyUploadRef}
@@ -1767,6 +1851,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                 handleDiscard={handleDiscard}
                 liveSegments={transcription.segments}
                 livePartial={transcription.currentPartial}
+                livePartialTranslation={transcription.currentPartialTranslation}
                 liveSummaryEnabled={transcription.liveSummaryEnabled}
                 liveSummaryState={transcription.liveSummaryState}
                 liveSummaryError={transcription.liveSummaryError}

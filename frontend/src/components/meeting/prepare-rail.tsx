@@ -120,7 +120,8 @@ export function PrepareRail({
                 value={notes}
                 onChange={onNotesChange}
                 status={notesStatus}
-                label={t("meeting.prepareTabNotes")}
+                /* The tab above already says "Agenda" — no card title. */
+                label={null}
                 placeholder={t("meeting.prepareAgendaPlaceholder")}
               />
             )}

@@ -61,6 +61,7 @@ class RealtimeTranscriptionProvider(ABC):
         on_segment: Callable[[TranscriptSegment, bool, Any], None],
         hot_words: list | None = None,
         language_hints: list[str] | None = None,
+        translation_target: str | None = None,
     ) -> None:
         """Start the realtime transcription session.
 
@@ -71,6 +72,9 @@ class RealtimeTranscriptionProvider(ABC):
                         deduplicate updates for the same sentence.
             hot_words: Optional list of HotWordItem dicts.
             language_hints: Optional language hints (e.g. ["zh", "en"]).
+            translation_target: Optional target language code for live
+                        translation. Plain-ASR adapters ignore this; only
+                        translation-capable adapters (LiveTranslate) use it.
         """
         ...
 

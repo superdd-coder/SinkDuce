@@ -23,6 +23,12 @@ export interface MeetingCaptureStagesProps {
   updateLanguageHints: (next: string[]) => void
   supportedLanguageHints: LanguageHintOption[]
   maxLanguageHints: number
+  /** Live bilingual captions available (DashScope key / LiveTranslate). */
+  supportsTranslation: boolean
+  translationEnabled: boolean
+  translationTarget: string
+  setTranslationEnabled: (v: boolean) => void
+  setTranslationTarget: (code: string) => void
   activeHotWordsSupported: boolean
   handleSelectHotWordsLibraries: (ids: string[]) => void
   emptyUploadRef: RefObject<HTMLInputElement | null>
@@ -60,6 +66,7 @@ export interface MeetingCaptureStagesProps {
   handleDiscard: () => void | Promise<void>
   liveSegments: TranscriptSegment[]
   livePartial: string
+  livePartialTranslation: string
   liveSummaryEnabled: boolean
   liveSummaryState: LiveSummaryState | null
   liveSummaryError: string | null
@@ -162,6 +169,7 @@ export function MeetingCaptureStages(p: MeetingCaptureStagesProps) {
     handleDiscard,
     liveSegments,
     livePartial,
+    livePartialTranslation,
     liveSummaryEnabled,
     liveSummaryState,
     liveSummaryError,
@@ -200,6 +208,7 @@ export function MeetingCaptureStages(p: MeetingCaptureStagesProps) {
   const transcription = {
     segments: liveSegments,
     currentPartial: livePartial,
+    currentPartialTranslation: livePartialTranslation,
   }
 
   return (
@@ -664,6 +673,11 @@ mode === "setup" ? (
                   hasRealtimeProvider={hasRealtimeProvider}
                   realtimeEnabled={realtimeEnabled}
                   onToggleRealtime={() => setRealtimeEnabled((v) => !v)}
+                  supportsTranslation={p.supportsTranslation}
+                  translationEnabled={p.translationEnabled}
+                  translationTarget={p.translationTarget}
+                  onTranslationEnabled={p.setTranslationEnabled}
+                  onTranslationTarget={p.setTranslationTarget}
                   onPause={recorder.pauseRecording}
                   onResume={recorder.resumeRecording}
                   onStop={handleStopRecording}
@@ -753,6 +767,7 @@ mode === "setup" ? (
                           <LiveSummaryTail
                             segments={transcription.segments}
                             partial={transcription.currentPartial}
+                            partialTranslation={transcription.currentPartialTranslation}
                             tailFromT={liveSummaryState?.tail_from_t ?? 0}
                           />
                         </div>
@@ -760,6 +775,7 @@ mode === "setup" ? (
                         <TranscriptTab
                           segments={transcription.segments}
                           partialText={transcription.currentPartial}
+                          partialTranslation={transcription.currentPartialTranslation}
                           onSegmentClick={handleSegmentClick}
                           speakerNames={meeting.speaker_names ?? {}}
                           showSearch={false}

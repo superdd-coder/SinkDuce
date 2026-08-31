@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import { useT } from "@/i18n/use-t"
+import { TranslationSelector } from "./translation-selector"
 
 export interface LiveCaptureControlCardProps {
   /** May be empty/undefined after HMR — UI falls back to flat bars. */
@@ -25,6 +26,12 @@ export interface LiveCaptureControlCardProps {
   hasRealtimeProvider: boolean
   realtimeEnabled: boolean
   onToggleRealtime: () => void
+  /** Live bilingual captions availability + current state. */
+  supportsTranslation?: boolean
+  translationEnabled?: boolean
+  translationTarget?: string
+  onTranslationEnabled?: (v: boolean) => void
+  onTranslationTarget?: (code: string) => void
   onPause: () => void
   onResume: () => void
   onStop: () => void
@@ -38,6 +45,11 @@ export function LiveCaptureControlCard({
   hasRealtimeProvider,
   realtimeEnabled,
   onToggleRealtime,
+  supportsTranslation = false,
+  translationEnabled = false,
+  translationTarget = "en",
+  onTranslationEnabled,
+  onTranslationTarget,
   onPause,
   onResume,
   onStop,
@@ -99,6 +111,15 @@ export function LiveCaptureControlCard({
             />
             {t("meeting.liveCaptions")}
           </Button>
+        )}
+
+        {supportsTranslation && onTranslationEnabled && onTranslationTarget && (
+          <TranslationSelector
+            enabled={translationEnabled}
+            target={translationTarget}
+            onEnabledChange={onTranslationEnabled}
+            onTargetChange={onTranslationTarget}
+          />
         )}
 
         <Button

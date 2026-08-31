@@ -43,6 +43,8 @@ class TranscriptSegment(BaseModel):
     end: float
     text: str
     speaker_id: str | None = None
+    # Live-translate target text (bilingual captions); None for plain ASR.
+    translation: str | None = None
 
 
 class TranscriptionResult(BaseModel):

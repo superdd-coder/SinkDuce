@@ -572,17 +572,32 @@ async def get_active_provider_info():
     if rt_cfg is None:
         rt_cfg = config.transcription.get_local_realtime_provider()
 
+    realtime_info = _info(
+        rt_cfg,
+        realtime_transcription_registry,
+        resolve_adapter=resolve_realtime_adapter,
+    )
+    # Live bilingual captions: available when a LiveTranslate provider is
+    # configured, or the active realtime provider is DashScope (API key
+    # re-used for the synthesized translation session).
+    supports_translation = any(
+        resolve_realtime_adapter(p.adapter or "") == "dashscope_livetranslate_realtime"
+        for p in (config.transcription.realtime_providers or [])
+    )
+    if not supports_translation and rt_cfg is not None:
+        adapter_name = resolve_realtime_adapter(rt_cfg.adapter or "")
+        supports_translation = adapter_name.startswith("dashscope") and bool(
+            (rt_cfg.api_key or "").strip()
+        )
+    realtime_info["supports_realtime_translation"] = supports_translation
+
     return {
         "file": _info(
             file_cfg,
             file_transcription_registry,
             resolve_adapter=resolve_file_adapter,
         ),
-        "realtime": _info(
-            rt_cfg,
-            realtime_transcription_registry,
-            resolve_adapter=resolve_realtime_adapter,
-        ),
+        "realtime": realtime_info,
     }
 
 
@@ -840,12 +855,20 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
     # and cannot use asyncio.get_event_loop() there.
     main_loop = asyncio.get_running_loop()
 
-    meta = meeting_service.get_active_realtime_provider_meta()
+    translation_target = websocket.query_params.get("translation_target") or None
+    if translation_target:
+        translation_target = translation_target.strip() or None
+
+    if translation_target:
+        meta = meeting_service.get_realtime_translation_provider_meta()
+    else:
+        meta = meeting_service.get_active_realtime_provider_meta()
     logger.info(
-        "[REALTIME-WS] Config active realtime: id=%s adapter=%s model=%s",
+        "[REALTIME-WS] Config active realtime: id=%s adapter=%s model=%s translation=%s",
         meta.get("id"),
         meta.get("adapter"),
         meta.get("model"),
+        translation_target,
     )
     # Tell client which engine will be used (before possibly slow local load)
     await websocket.send_json(
@@ -858,7 +881,17 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
         }
     )
 
-    provider = meeting_service.get_active_realtime_provider()
+    provider = None
+    if translation_target:
+        try:
+            provider = meeting_service.get_realtime_translation_provider()
+        except Exception as exc:
+            logger.warning("[REALTIME-WS] Translation provider unavailable: %s", exc)
+            await websocket.send_json({"error": str(exc)})
+            await websocket.close()
+            return
+    else:
+        provider = meeting_service.get_active_realtime_provider()
     if not provider:
         print("[REALTIME-WS] >>> NO PROVIDER CONFIGURED", flush=True)
         logger.warning("[REALTIME-WS] No active realtime transcription provider")
@@ -911,6 +944,7 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
                 "end": segment.end,
                 "text": segment.text,
                 "speaker_id": segment.speaker_id,
+                "translation": getattr(segment, "translation", None),
                 "is_final": is_final,
             }
             main_loop.call_soon_threadsafe(
@@ -944,7 +978,12 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
                 logger.info("[REALTIME-WS] Loaded %d hot words for meeting %s", len(hot_words), meeting_id)
 
         print(f"[REALTIME-WS] >>> calling provider.start()", flush=True)
-        await provider.start(on_segment, hot_words=hot_words, language_hints=language_hints)
+        await provider.start(
+            on_segment,
+            hot_words=hot_words,
+            language_hints=language_hints,
+            translation_target=translation_target,
+        )
         print(f"[REALTIME-WS] >>> provider.start() returned, entering receive loop", flush=True)
         await websocket.send_json({"type": "ready", "message": "realtime session ready"})
 

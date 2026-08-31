@@ -11,6 +11,8 @@ export interface TranscriptionState {
   isTranscribing: boolean
   segments: TranscriptSegment[]
   currentPartial: string
+  /** Live-translate partial for the same block as currentPartial. */
+  currentPartialTranslation: string
   error: string | null
   liveSummaryEnabled: boolean
   liveSummaryState: LiveSummaryState | null
@@ -34,6 +36,7 @@ export function useTranscription(meetingId: string | null) {
     isTranscribing: false,
     segments: [],
     currentPartial: "",
+    currentPartialTranslation: "",
     error: null,
     liveSummaryEnabled: false,
     liveSummaryState: null,
@@ -56,11 +59,18 @@ export function useTranscription(meetingId: string | null) {
   const intentionalCloseRef = useRef(false)
   /** Language hints for reconnect */
   const languageHintsRef = useRef<string[] | undefined>(undefined)
+  /** Translation target for reconnect (live bilingual captions) */
+  const translationTargetRef = useRef<string | null>(null)
   /** Toast engine label only once per live session */
   const engineToastedRef = useRef(false)
   /** Reconnect attempts while recording */
   const reconnectAttemptRef = useRef(0)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Engine/target swap: stop-flush → intentional close → reconnect */
+  const switchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** True while an engine swap is in its flush window — suppresses the
+   * onclose auto-reconnect so the swap timer is the only one reconnecting. */
+  const engineSwitchingRef = useRef(false)
   /** Monotonic id so stale WS handlers no-op */
   const connGenRef = useRef(0)
 
@@ -76,6 +86,10 @@ export function useTranscription(meetingId: string | null) {
       clearTimeout(reconnectTimerRef.current)
       reconnectTimerRef.current = null
     }
+    if (switchTimerRef.current) {
+      clearTimeout(switchTimerRef.current)
+      switchTimerRef.current = null
+    }
     if (wsRef.current) {
       try {
         wsRef.current.close()
@@ -89,6 +103,7 @@ export function useTranscription(meetingId: string | null) {
       isTranscribing: false,
       segments: [],
       currentPartial: "",
+      currentPartialTranslation: "",
       error: null,
       liveSummaryEnabled: false,
       liveSummaryState: null,
@@ -120,10 +135,11 @@ export function useTranscription(meetingId: string | null) {
     }
   }, [])
 
-  const connect = useCallback((languageHints?: string[]) => {
+  const connect = useCallback((languageHints?: string[], translationTarget?: string | null) => {
     if (!meetingIdRef.current) return
 
     languageHintsRef.current = languageHints
+    translationTargetRef.current = translationTarget ?? null
     // Tear down previous socket without treating it as "user stopped"
     intentionalCloseRef.current = true
     if (wsRef.current) {
@@ -141,12 +157,14 @@ export function useTranscription(meetingId: string | null) {
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
     let wsUrl = `${protocol}//${window.location.host}/api/meetings/${meetingIdRef.current}/realtime-transcribe`
+    const params: string[] = []
     if (languageHints && languageHints.length > 0) {
-      const params = languageHints
-        .map((h) => `language_hints=${encodeURIComponent(h)}`)
-        .join("&")
-      wsUrl += `?${params}`
+      for (const h of languageHints) params.push(`language_hints=${encodeURIComponent(h)}`)
     }
+    if (translationTarget) {
+      params.push(`translation_target=${encodeURIComponent(translationTarget)}`)
+    }
+    if (params.length > 0) wsUrl += `?${params.join("&")}`
 
     const offset = durationRef.current
     const session = sessionCounterRef.current
@@ -191,9 +209,11 @@ export function useTranscription(meetingId: string | null) {
             engineToastedRef.current = true
             const label = adapter.startsWith("funasr_onnx")
               ? `Local FunASR ONNX${model ? ` (${model})` : ""}`
-              : adapter.includes("dashscope")
-                ? `DashScope cloud${model ? ` (${model})` : ""}`
-                : `${data.name || adapter}${model ? ` · ${model}` : ""}`
+              : adapter.includes("livetranslate")
+                ? `DashScope LiveTranslate${model ? ` (${model})` : ""}`
+                : adapter.includes("dashscope")
+                  ? `DashScope cloud${model ? ` (${model})` : ""}`
+                  : `${data.name || adapter}${model ? ` · ${model}` : ""}`
             toast.message("Realtime transcription", {
               description: `Engine: ${label}`,
             })
@@ -244,6 +264,7 @@ export function useTranscription(meetingId: string | null) {
             end: (data.end ?? 0) + offset,
             text: data.text ?? "",
             speaker_id: data.speaker_id,
+            translation: data.translation ?? undefined,
             __key: key,
             __partial: !data.is_final,
           }
@@ -258,11 +279,13 @@ export function useTranscription(meetingId: string | null) {
             .filter((s) => s.__partial)
             .sort((a, b) => b.start - a.start)
           const partialText = partialEntries[0]?.text ?? ""
+          const partialTranslation = partialEntries[0]?.translation ?? ""
 
           setState((prev) => ({
             ...prev,
             segments: finals,
             currentPartial: partialText,
+            currentPartialTranslation: partialTranslation,
           }))
         }
       } catch (err) {
@@ -295,7 +318,12 @@ export function useTranscription(meetingId: string | null) {
       // Drop ref only if this is still the active socket
       if (wsRef.current === ws) wsRef.current = null
 
-      setState((prev) => ({ ...prev, isConnected: false, currentPartial: "" }))
+      setState((prev) => ({
+        ...prev,
+        isConnected: false,
+        currentPartial: "",
+        currentPartialTranslation: "",
+      }))
 
       // Intentional stop: do not reconnect and do not clear isTranscribing here
       // (stopTranscription already sets isTranscribing false).
@@ -303,6 +331,9 @@ export function useTranscription(meetingId: string | null) {
         intentionalCloseRef.current = false
         return
       }
+
+      // Engine swap owns reconnection during its flush window
+      if (engineSwitchingRef.current) return
 
       // Unexpected close while user still wants live captions → quiet reconnect
       if (wantLiveRef.current) {
@@ -328,7 +359,7 @@ export function useTranscription(meetingId: string | null) {
         reconnectTimerRef.current = setTimeout(() => {
           reconnectTimerRef.current = null
           if (wantLiveRef.current && meetingIdRef.current) {
-            connect(languageHintsRef.current)
+            connect(languageHintsRef.current, translationTargetRef.current)
           }
         }, delay)
         return
@@ -340,9 +371,10 @@ export function useTranscription(meetingId: string | null) {
   }, [])
 
   const startTranscription = useCallback(
-    (languageHints?: string[]) => {
+    (languageHints?: string[], translationTarget?: string | null) => {
       sessionCounterRef.current += 1
       wantLiveRef.current = true
+      engineSwitchingRef.current = false
       // Live summary is on by default each session (the ready handler sends
       // the enable action once the WS is up); the user can still turn it off.
       wantLiveSummaryRef.current = true
@@ -361,10 +393,11 @@ export function useTranscription(meetingId: string | null) {
         isTranscribing: true,
         segments: existingFinals.map(({ __key, __partial, ...rest }) => rest),
         currentPartial: "",
+        currentPartialTranslation: "",
         error: null,
         liveSummaryEnabled: true,
       }))
-      connect(languageHints)
+      connect(languageHints, translationTarget)
     },
     [connect],
   )
@@ -378,9 +411,14 @@ export function useTranscription(meetingId: string | null) {
       )
 
       wantLiveRef.current = false
+      engineSwitchingRef.current = false
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current)
         reconnectTimerRef.current = null
+      }
+      if (switchTimerRef.current) {
+        clearTimeout(switchTimerRef.current)
+        switchTimerRef.current = null
       }
 
       if (discard) {
@@ -392,6 +430,7 @@ export function useTranscription(meetingId: string | null) {
           isTranscribing: false,
           segments: [],
           currentPartial: "",
+          currentPartialTranslation: "",
           error: null,
           liveSummaryEnabled: false,
           liveSummaryState: null,
@@ -413,6 +452,7 @@ export function useTranscription(meetingId: string | null) {
         isTranscribing: false,
         segments: finals,
         currentPartial: "",
+        currentPartialTranslation: "",
       }))
 
       if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -470,6 +510,48 @@ export function useTranscription(meetingId: string | null) {
     setState((prev) => ({ ...prev, segments }))
   }, [])
 
+  /**
+   * Swap the transcription engine mid-session (toggle live translation or
+   * change its target language) via a graceful reconnect: ask the server to
+   * flush the tail segment ("stop" action → LiveTranslate end_session), then
+   * intentionally close and reconnect with the new params. Finals already
+   * received are kept; audio recording is a separate PCM consumer and is
+   * never interrupted. Pass null to return to the plain ASR engine.
+   */
+  const reconfigureTranslation = useCallback(
+    (translationTarget: string | null) => {
+      translationTargetRef.current = translationTarget
+      const ws = wsRef.current
+      if (!ws || ws.readyState !== WebSocket.OPEN || !wantLiveRef.current) {
+        // Not in a live session — the next startTranscription picks the ref up.
+        return
+      }
+      try {
+        ws.send(JSON.stringify({ action: "stop" }))
+      } catch {
+        /* socket already dying — the swap timer below reconnects */
+      }
+      engineSwitchingRef.current = true
+      if (switchTimerRef.current) clearTimeout(switchTimerRef.current)
+      switchTimerRef.current = setTimeout(() => {
+        switchTimerRef.current = null
+        engineSwitchingRef.current = false
+        if (!wantLiveRef.current || !meetingIdRef.current) return
+        // Isolate dedup key spaces between engines (numeric sentence ids
+        // restart at 0 across plain-ASR sessions).
+        sessionCounterRef.current += 1
+        disconnect({ intentional: true })
+        setState((prev) => ({
+          ...prev,
+          currentPartial: "",
+          currentPartialTranslation: "",
+        }))
+        connect(languageHintsRef.current, translationTargetRef.current)
+      }, 2200)
+    },
+    [connect, disconnect],
+  )
+
   const setLiveSummaryEnabled = useCallback((enabled: boolean) => {
     wantLiveSummaryRef.current = enabled
     setState((prev) => ({ ...prev, liveSummaryEnabled: enabled }))
@@ -503,6 +585,7 @@ export function useTranscription(meetingId: string | null) {
     setOnFinalized,
     setLiveSummaryEnabled,
     resetLiveSummary,
+    reconfigureTranslation,
     durationRef,
   }
 }
