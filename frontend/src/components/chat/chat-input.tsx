@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, type KeyboardEvent } from "react"
 import { createPortal } from "react-dom"
 import { useShallow } from "zustand/react/shallow"
-import { ChevronRight, Globe, Sparkles } from "lucide-react"
+import { ArrowUp, ChevronDown, ChevronRight, Globe } from "lucide-react"
 import { useAppStore } from "@/stores/app-store"
 import { useStreamChat } from "@/hooks/use-stream"
 import { uploadFiles } from "@/api/client"
@@ -214,13 +214,54 @@ export function ChatInput() {
     <div
       ref={composerRef}
       className={cn(
-        "pm-chat-composer sk-input-frame",
+        "pm-chat-composer",
         isStreaming && "is-streaming",
       )}
     >
-      {/* Toolbar — collection · Think · Web · model */}
+      {/* Input — single quiet line on top, tools docked below (ChatGPT-style) */}
+      <div className="pm-chat-composer-field">
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          accept=".pdf,.txt,.md,.docx,.xlsx,.pptx"
+          className="hidden"
+          onChange={handleFileAttach}
+        />
+        <textarea
+          ref={textareaRef}
+          className="pm-chat-composer-textarea"
+          placeholder={t("chat.askPlaceholder")}
+          rows={1}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          onCompositionStart={() => imeGuardRef.current.onCompositionStart()}
+          onCompositionEnd={() => {
+            imeGuardRef.current.onCompositionEnd()
+            requestAnimationFrame(() => imeGuardRef.current.clearJustEnded())
+          }}
+          disabled={isStreaming}
+        />
+        {isStreaming && (
+          <span className="sk-stream-cursor absolute right-1 bottom-2" aria-hidden />
+        )}
+      </div>
+
+      {/* Tool row — web toggle · collections · spacer · model · thinking · send */}
       <div className="pm-chat-composer-tools">
-        {/* Collection selector — original diamond + green wipe, rounded shell */}
+        {/* Web search — icon-only toggle, lights up green when on */}
+        <button
+          type="button"
+          className={cn("pm-chat-tool-icon", webSearch && "is-on")}
+          onClick={toggleWebSearch}
+          title={webSearch ? t("chat.webOn") : t("chat.webOff")}
+          aria-pressed={webSearch}
+        >
+          <Globe className="size-4" strokeWidth={1.75} />
+        </button>
+
+        {/* Collections — ghost pill, portal menu unchanged */}
         <div className="relative shrink-0" ref={collectionMenuRef}>
           <button
             type="button"
@@ -230,7 +271,7 @@ export function ChatInput() {
               setMenuTick((t) => t + 1)
             }}
             className={cn(
-              "pm-chat-tool-chip pm-chat-tool-chip--wipe pm-chat-tool-chip--collections",
+              "pm-chat-tool-chip",
               selectedCollections.length > 0 && "is-on",
               showCollections && "is-menu-open",
             )}
@@ -242,7 +283,7 @@ export function ChatInput() {
               </span>
               <span className="pm-chat-tool-chip-label-text">{collectionLabel}</span>
             </span>
-            <span className="pm-chat-tool-chip-wipe" aria-hidden />
+            <ChevronDown className="size-3 opacity-60" strokeWidth={1.75} />
           </button>
           {createPortal(
             <div
@@ -290,49 +331,9 @@ export function ChatInput() {
           )}
         </div>
 
-        <span className="pm-chat-tool-sep" aria-hidden />
+        <span className="flex-1" />
 
-        {/* Think — flow layers always mounted; .is-on fades in (no hard cut) */}
-        <button
-          type="button"
-          className={cn(
-            "pm-chat-tool-chip pm-chat-tool-chip--flow",
-            thinking && "is-on",
-          )}
-          onClick={() => setThinking(!thinking)}
-          title={
-            thinking
-              ? t("chat.thinkOn")
-              : t("chat.thinkOff")
-          }
-        >
-          <Sparkles className="size-3" />
-          {t("chat.think")}
-        </button>
-
-        <span className="pm-chat-tool-sep" aria-hidden />
-
-        {/* Web — same enter/exit flow fade as Think */}
-        <button
-          type="button"
-          className={cn(
-            "pm-chat-tool-chip pm-chat-tool-chip--flow",
-            webSearch && "is-on",
-          )}
-          onClick={toggleWebSearch}
-          title={
-            webSearch
-              ? t("chat.webOn")
-              : t("chat.webOff")
-          }
-        >
-          <Globe className="size-3" />
-          {t("chat.web")}
-        </button>
-
-        <span className="pm-chat-tool-sep" aria-hidden />
-
-        {/* Provider / model cascade — original wipe + slide-in models, rounded premium */}
+        {/* Provider / model cascade — two-level menu unchanged */}
         <div className="relative shrink-0" ref={providerMenuRef}>
           <button
             type="button"
@@ -343,7 +344,7 @@ export function ChatInput() {
               setMenuTick((t) => t + 1)
             }}
             className={cn(
-              "pm-chat-tool-chip pm-chat-tool-chip--wipe",
+              "pm-chat-tool-chip",
               activeProvider && "is-on",
               showProviderMenu && "is-menu-open",
             )}
@@ -351,7 +352,7 @@ export function ChatInput() {
             <span className="pm-chat-tool-chip-label truncate max-w-[9rem]">
               {modelLabel}
             </span>
-            <span className="pm-chat-tool-chip-wipe" aria-hidden />
+            <ChevronDown className="size-3 opacity-60" strokeWidth={1.75} />
           </button>
           {createPortal(
             <div
@@ -482,44 +483,25 @@ export function ChatInput() {
             document.body,
           )}
         </div>
-      </div>
 
-      {/* Input + send on one row — keeps card short (QC-like density) */}
-      <div className="pm-chat-composer-main">
-        <input
-          ref={fileRef}
-          type="file"
-          multiple
-          accept=".pdf,.txt,.md,.docx,.xlsx,.pptx"
-          className="hidden"
-          onChange={handleFileAttach}
-        />
-        <div className="pm-chat-composer-field">
-          <textarea
-            ref={textareaRef}
-            className="pm-chat-composer-textarea"
-            placeholder={t("chat.askPlaceholder")}
-            rows={1}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onCompositionStart={() => imeGuardRef.current.onCompositionStart()}
-            onCompositionEnd={() => {
-              imeGuardRef.current.onCompositionEnd()
-              requestAnimationFrame(() => imeGuardRef.current.clearJustEnded())
-            }}
-            disabled={isStreaming}
-          />
-          {isStreaming && (
-            <span className="sk-stream-cursor absolute right-1 bottom-2" aria-hidden />
-          )}
-        </div>
+        {/* Thinking — simple click toggle */}
+        <button
+          type="button"
+          className={cn("pm-chat-tool-chip", thinking && "is-on")}
+          onClick={() => setThinking(!thinking)}
+          title={thinking ? t("chat.thinkOn") : t("chat.thinkOff")}
+          aria-pressed={thinking}
+        >
+          <span className="pm-chat-tool-chip-label">{t("chat.think")}</span>
+        </button>
+
+        {/* Send — circular green, matches the approved composer design */}
         {isStreaming ? (
           <Button
             type="button"
             variant="ghost"
             size="xs"
-            className="pm-chat-composer-send shrink-0"
+            className="pm-chat-composer-cancel shrink-0"
             onClick={stopGeneration}
           >
             {t("common.cancel")}
@@ -528,31 +510,15 @@ export function ChatInput() {
           <Button
             type="button"
             variant="default"
-            size="xs"
             className="pm-chat-composer-send shrink-0"
             onClick={handleSend}
             disabled={!input.trim()}
+            aria-label={t("common.send")}
           >
-            {t("common.send")}
-            <svg
-              width="11"
-              height="11"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              aria-hidden
-            >
-              <line x1="5" y1="12" x2="19" y2="12" />
-              <polyline points="12 5 19 12 12 19" />
-            </svg>
+            <ArrowUp className="size-4" strokeWidth={2} />
           </Button>
         )}
       </div>
-
-      <p className="pm-chat-composer-disclaimer">
-        {t("chat.disclaimer")}
-      </p>
     </div>
   )
 }

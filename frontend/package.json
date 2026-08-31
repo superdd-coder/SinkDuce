@@ -20,7 +20,7 @@
     "@file-viewer/renderer-text": "2.2.5",
     "@file-viewer/vite-plugin": "2.2.5",
     "@fontsource-variable/geist": "^5.2.9",
-    "@fontsource-variable/source-serif-4": "^5.2.9",
+    "@fontsource-variable/newsreader": "^5.3.0",
     "@tailwindcss/vite": "^4.3.0",
     "@tiptap/core": "^3.27.0",
     "@tiptap/extension-color": "^3.27.0",
