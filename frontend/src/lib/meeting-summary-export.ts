@@ -85,7 +85,7 @@ export function exportSummaryAsPdf(opts: {
   <style>
     @page { margin: 18mm 16mm; }
     body {
-      font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+      font-family: "Newsreader", Georgia, "Times New Roman", serif;
       font-size: 12pt;
       line-height: 1.55;
       color: #1a1c1a;

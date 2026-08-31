@@ -2,7 +2,7 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
-@import "@fontsource-variable/source-serif-4";
+@import "@fontsource-variable/newsreader";
 
 /* ── Text selection · Design System v3.1 ── */
 ::selection {
@@ -150,7 +150,7 @@
 @theme inline {
   --font-heading: var(--font-sans);
   --font-sans: 'Geist Variable', sans-serif;
-  --font-serif: 'Source Serif 4 Variable', Georgia, serif;
+  --font-serif: 'Newsreader Variable', Georgia, serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
   /* ── Semantic font roles ── */
   --font-display: var(--font-serif);
@@ -285,17 +285,20 @@
   --pm-r: 16px;       /* matrix / rail cards / soft panels */
   --pm-r-lg: 20px;    /* stage + Quick Chat float */
   --pm-ff: var(--ff-sans, "Geist Variable", system-ui, sans-serif);
-  --pm-ff-prose: var(--ff-serif, "Source Serif 4 Variable", Georgia, serif);
+  --pm-ff-prose: var(--ff-serif, "Newsreader Variable", Georgia, serif);
   --pm-ease: cubic-bezier(0.22, 1, 0.36, 1);
   /* Collection title slightly larger than chrome (was 22px) */
-  --pm-t-display: 370 26px/1.22 var(--pm-ff-prose);
+  --pm-t-display: 400 23px/1.25 var(--pm-ff-prose);
   /* Overview vertical rhythm: title↔tabs = tabs↔summary stack gaps */
   --pm-ov-gap: 14px;
   --pm-t-title: 400 13px/1.35 var(--pm-ff);
   --pm-t-body: 420 13px/1.55 var(--pm-ff);
   --pm-t-label: 440 11px/1.3 var(--pm-ff);
   --pm-t-meta: 420 11px/1.35 var(--pm-ff);
-  --pm-t-prose: 420 14.5px/1.75 var(--pm-ff-prose);
+  --pm-t-prose: 400 16px/1.7 var(--pm-ff-prose);
+  /* Newsreader recipe: softened ink for serif display/prose (88-92%) */
+  --pm-ink-display: color-mix(in srgb, var(--pm-ink, #121410) 90%, transparent);
+  --pm-ink-prose: color-mix(in srgb, var(--pm-text, #2a2e2a) 92%, transparent);
   --pm-prose-measure: 58ch;
   --pm-rail-min: 272px;
   /*
@@ -1265,23 +1268,18 @@ li.pm-toast[data-sonner-toast] {
 
 .distill-block__body {
   padding: 4px 16px 14px;
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
-  font-size: 13.5px;
-  font-weight: 400;
-  line-height: 1.6;
-  color: var(--pm-text, #2c2e2a);
+  font: var(--pm-t-prose);
+  color: var(--pm-ink-prose);
 }
 /* Tighten prose rhythm inside the card */
 .distill-block__body.prose {
-  font-size: 13.5px;
-  line-height: 1.6;
-  color: var(--pm-text, #2c2e2a);
+  color: var(--pm-ink-prose);
 }
 .distill-block__body.prose h1,
 .distill-block__body.prose h2,
 .distill-block__body.prose h3,
 .distill-block__body.prose h4 {
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-weight: 500;
   color: var(--pm-ink, #121410);
   letter-spacing: -0.01em;
@@ -2827,7 +2825,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 
 :root {
   /* ── Family stacks ── */
-  --ff-serif: 'Source Serif 4 Variable', 'Source Serif 4', Georgia, serif;
+  --ff-serif: 'Newsreader Variable', 'Newsreader', Georgia, serif;
   --ff-sans:  'Geist Variable', 'Geist', system-ui, -apple-system, sans-serif;
   --ff-mono:  ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
 
@@ -3692,7 +3690,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   max-width: calc(var(--pm-sug-max) - 52px);
   flex: 0 1 auto;
   /* Premium prose face — larger, light, quiet tracking */
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: 14.5px;
   font-weight: 400;
   letter-spacing: -0.015em;
@@ -4870,7 +4868,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   margin: 0;
   font: var(--pm-t-display);
   letter-spacing: -0.015em;
-  color: var(--pm-ink);
+  color: var(--pm-ink-display);
 }
 .pm-title {
   font: var(--pm-t-title);
@@ -4878,7 +4876,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 }
 .pm-prose {
   font: var(--pm-t-prose);
-  color: var(--pm-text);
+  color: var(--pm-ink-prose);
   max-width: var(--pm-prose-measure);
 }
 .pm-prose strong {
@@ -5155,7 +5153,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 /* Summary body — identical horizontal measure as .pm-blurb */
 .pm-summary-body {
   font: var(--pm-t-prose);
-  color: var(--pm-text);
+  color: var(--pm-ink-prose);
 }
 .pm-summary-body strong {
   font-weight: 600;
@@ -7107,7 +7105,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 16px 14px 12px;
+  padding: 18px 16px 14px;
   flex-shrink: 0;
   border-bottom: none;
 }
@@ -7166,18 +7164,18 @@ button.pm-rail-new:hover:not(:disabled) {
   cursor: default;
 }
 
-/* List primary name — Source Serif 300 (Collections language for all rails) */
+/* List primary name — Newsreader 400 (Collections language for all rails) */
 .pm-rail-name,
 .pm-shell-col-name,
 .pm-chat-sess-name,
 .pm-people-meeting-title {
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
-  font-size: 14px;
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
+  font-size: 15px;
   font-weight: 400;
-  letter-spacing: -0.015em;
-  line-height: 1.35;
+  letter-spacing: 0.002em;
+  line-height: 1.4;
   min-width: 0;
-  color: var(--pm-ink, #121410);
+  color: color-mix(in srgb, var(--pm-ink, #121410) 88%, transparent);
   -webkit-font-smoothing: antialiased;
 }
 .pm-shell-col-row.is-active .pm-shell-col-name,
@@ -7465,7 +7463,7 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-dialog [data-slot="dialog-title"] {
   margin: 0 !important;
   padding: 0 !important;
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif) !important;
   font-size: clamp(18px, 2.2vw, 22px) !important;
   font-weight: 400 !important;
   font-style: normal !important;
@@ -7800,7 +7798,7 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-node-preview-rail .pm-node-preview-title,
 .pm-node-preview-rail [data-slot="dialog-title"].pm-node-preview-title {
   margin-top: 2px !important;
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif) !important;
   font-size: clamp(20px, 2.1vw, 24px) !important;
   font-weight: 400 !important;
   letter-spacing: -0.018em !important;
@@ -8745,7 +8743,7 @@ button.pm-rail-new:hover:not(:disabled) {
   overflow-y: auto;
   overflow-anchor: none;
   font: var(--pm-t-prose);
-  color: var(--pm-text);
+  color: var(--pm-ink-prose);
 }
 .pm-add-node-md-host .ProseMirror > *:first-child {
   margin-top: 0;
@@ -8836,7 +8834,7 @@ button.pm-rail-new:hover:not(:disabled) {
   max-height: none;
   overflow: visible;
   padding: 4px 2px 12px !important;
-  font: var(--pm-t-prose, 300 14.5px/1.75 "Source Serif 4 Variable", Georgia, serif) !important;
+  font: var(--pm-t-prose, 300 14.5px/1.75 "Newsreader Variable", Georgia, serif) !important;
   color: var(--pm-text, #2c2e2a);
   box-sizing: border-box;
 }
@@ -8953,10 +8951,10 @@ button.pm-rail-new:hover:not(:disabled) {
   min-width: 0;
   margin: 0;
   padding: 0;
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: 15px;
   font-weight: 400;
-  font-variation-settings: "wght" 300;
+  font-variation-settings: "wght" 400;
   letter-spacing: -0.02em;
   line-height: 1.35;
   color: var(--pm-ink, #121410);
@@ -9103,7 +9101,7 @@ button.pm-rail-new:hover:not(:disabled) {
 }
 .pm-meeting-pick-name {
   min-width: 0;
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: 14.5px;
   font-weight: 400;
   letter-spacing: -0.02em;
@@ -9244,7 +9242,7 @@ button.pm-rail-new:hover:not(:disabled) {
   border-radius: var(--pm-r-sm, 10px);
   background: #ffffff;
   box-shadow: var(--pm-shadow-sm);
-  font: 300 12.5px/1.4 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
+  font: 300 12.5px/1.4 var(--pm-ff-prose, "Newsreader Variable", Georgia, serif) !important;
   font-weight: 400 !important;
   letter-spacing: -0.01em !important;
   color: var(--pm-ink, #121410) !important;
@@ -9926,10 +9924,10 @@ button.pm-rail-new:hover:not(:disabled) {
  * Layout: stage → section soft-float cards · dialog canvas → nested white cards.
  *
  * Type ladder (SPEC families · ENGINEERING §3.3):
- *   page title     → Source Serif 300  · display
- *   section title  → Source Serif 300  · Models / Embedding / …
- *   subhead        → Source Serif 300  · File transcription / Enrichment / More
- *   provider name  → Source Serif 300  · tile identity
+ *   page title     → Newsreader 400  · display
+ *   section title  → Newsreader 400  · Models / Embedding / …
+ *   subhead        → Newsreader 400  · File transcription / Enrichment / More
+ *   provider name  → Newsreader 400  · tile identity
  *   body / desc    → Geist 300
  *   field label    → Geist 400 label
  *   meta / url     → Geist 300 meta
@@ -9937,9 +9935,9 @@ button.pm-rail-new:hover:not(:disabled) {
  */
 .pm-settings {
   --pm-settings-gutter: 20px;
-  --pm-settings-t-section: 300 18px/1.25 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
-  --pm-settings-t-sub: 300 15px/1.3 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
-  --pm-settings-t-name: 300 15px/1.3 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  --pm-settings-t-section: 300 18px/1.25 var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
+  --pm-settings-t-sub: 300 15px/1.3 var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
+  --pm-settings-t-name: 300 15px/1.3 var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   --pm-settings-t-body: 300 13.5px/1.55 var(--pm-ff, "Geist Variable", system-ui, sans-serif);
   --pm-settings-t-meta: 300 12px/1.45 var(--pm-ff, "Geist Variable", system-ui, sans-serif);
   height: 100%;
@@ -9984,14 +9982,14 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-settings-page-title {
   margin: 0;
   font: var(--pm-t-display);
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: clamp(24px, 2.8vw, 28px);
   font-weight: 400;
-  font-variation-settings: "wght" 300;
+  font-variation-settings: "wght" 400;
   letter-spacing: 0.01em;
   line-height: 1.18;
   text-transform: none;
-  color: var(--pm-ink);
+  color: var(--pm-ink-display);
 }
 .pm-settings-page-desc {
   margin: 0;
@@ -10176,15 +10174,15 @@ button.pm-rail-new:hover:not(:disabled) {
 }
 /*
  * Section titles (Models · Embedding · Rerank …) —
- * Source Serif 300 display-lite · same family as page title / collection names.
+ * Newsreader 400 display-lite · same family as page title / collection names.
  */
 .pm-settings-card-kicker {
   margin: 0;
   font: var(--pm-settings-t-section);
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: clamp(17px, 1.7vw, 19px);
   font-weight: 400;
-  font-variation-settings: "wght" 300;
+  font-variation-settings: "wght" 400;
   letter-spacing: -0.01em;
   line-height: 1.25;
   text-transform: none;
@@ -10200,15 +10198,15 @@ button.pm-rail-new:hover:not(:disabled) {
 }
 /*
  * Nested subheads (File transcription · Realtime · Enrichment · More fold) —
- * Source Serif 300 one step below section titles; never uppercase Geist chrome.
+ * Newsreader 400 one step below section titles; never uppercase Geist chrome.
  */
 .pm-settings-subhead {
   margin: 0;
   font: var(--pm-settings-t-sub);
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: clamp(14.5px, 1.35vw, 15.5px);
   font-weight: 400;
-  font-variation-settings: "wght" 300;
+  font-variation-settings: "wght" 400;
   letter-spacing: -0.005em;
   line-height: 1.3;
   text-transform: none;
@@ -10298,10 +10296,10 @@ button.pm-rail-new:hover:not(:disabled) {
 }
 .pm-settings-provider-name {
   font: var(--pm-settings-t-name);
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: clamp(14.5px, 1.35vw, 15.5px);
   font-weight: 400;
-  font-variation-settings: "wght" 300;
+  font-variation-settings: "wght" 400;
   letter-spacing: -0.01em;
   line-height: 1.3;
   text-transform: none;
@@ -10917,10 +10915,10 @@ button.pm-rail-new:hover:not(:disabled) {
 }
 .pm-settings-conn-value {
   font: var(--pm-settings-t-name);
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: clamp(14.5px, 1.35vw, 15.5px);
   font-weight: 400;
-  font-variation-settings: "wght" 300;
+  font-variation-settings: "wght" 400;
   letter-spacing: -0.01em;
   line-height: 1.3;
   color: var(--pm-ink);
@@ -11049,9 +11047,9 @@ button.pm-rail-new:hover:not(:disabled) {
  * Type vars re-declared (dialogs portal outside .pm-settings).
  */
 .pm-settings-dlg {
-  --pm-settings-t-section: 300 18px/1.25 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
-  --pm-settings-t-sub: 300 15px/1.3 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
-  --pm-settings-t-name: 300 15px/1.3 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  --pm-settings-t-section: 300 18px/1.25 var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
+  --pm-settings-t-sub: 300 15px/1.3 var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
+  --pm-settings-t-name: 300 15px/1.3 var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   --pm-settings-t-body: 300 13.5px/1.55 var(--pm-ff, "Geist Variable", system-ui, sans-serif);
   --pm-settings-t-meta: 300 12px/1.45 var(--pm-ff, "Geist Variable", system-ui, sans-serif);
   font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
@@ -11135,10 +11133,10 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-settings-dlg-card-kicker {
   margin: 0;
   font: var(--pm-settings-t-sub);
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: 14.5px;
   font-weight: 400;
-  font-variation-settings: "wght" 300;
+  font-variation-settings: "wght" 400;
   letter-spacing: -0.005em;
   line-height: 1.3;
   text-transform: none;
@@ -13121,7 +13119,7 @@ button.pm-rail-new:hover:not(:disabled) {
    Soft float shell already via .pm-dialog; this is inner chrome.
    Type map (SPEC §2):
      chrome (tab/btn/list/meta) → Geist  · label/title/body/meta
-     页标题 / 文档名 / 长文        → Source Serif · display-lite / prose
+     页标题 / 文档名 / 长文        → Newsreader · display-lite / prose
    ═══════════════════════════════════════════════════════════════════ */
 
 .pm-workspace {
@@ -13141,7 +13139,7 @@ button.pm-rail-new:hover:not(:disabled) {
  * - File detail may wrap .pm-ws-title (document name) → serif, sentence case
  */
 .pm-workspace [data-slot="dialog-title"] {
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif) !important;
   font-size: clamp(18px, 2.2vw, 22px) !important;
   font-weight: 400 !important;
   letter-spacing: 0.01em !important;
@@ -13150,7 +13148,7 @@ button.pm-rail-new:hover:not(:disabled) {
   color: var(--pm-ink) !important;
 }
 .pm-workspace [data-slot="dialog-title"] .pm-ws-title {
-  font: 300 18px/1.25 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
+  font: 300 18px/1.25 var(--pm-ff-prose, "Newsreader Variable", Georgia, serif) !important;
   font-weight: 400 !important;
   letter-spacing: -0.015em !important;
   text-transform: none !important;
@@ -13867,9 +13865,9 @@ button.pm-rail-new:hover:not(:disabled) {
   /* Very light green wash — quieter than the old full band, still readable */
   background: color-mix(in srgb, var(--pm-green) 4.5%, transparent);
 }
-/* Open document name — Source Serif, light (reading title, not chrome) */
+/* Open document name — Newsreader, light (reading title, not chrome) */
 .pm-ws-pane-title {
-  font: 300 15px/1.3 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
+  font: 300 15px/1.3 var(--pm-ff-prose, "Newsreader Variable", Georgia, serif) !important;
   font-weight: 400 !important;
   letter-spacing: -0.01em;
   color: var(--pm-muted);
@@ -14601,7 +14599,7 @@ button.pm-rail-new:hover:not(:disabled) {
   border-radius: 0 14px 14px 0;
   background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 72%, #fff) !important;
   quotes: none !important;
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif) !important;
   font-weight: 400 !important;
   font-style: italic !important;
   font-size: 0.97em !important;
@@ -14824,7 +14822,7 @@ button.pm-rail-new:hover:not(:disabled) {
   color: var(--pm-danger, #b42318);
 }
 
-/* Long reading — Source Serif prose (overrides Dialog text-sm + editor defaults) */
+/* Long reading — Newsreader prose (overrides Dialog text-sm + editor defaults) */
 .pm-ws-editor .ProseMirror,
 .pm-ws-editor [data-slot="editor"],
 .pm-ws-nested .ProseMirror,
@@ -14832,7 +14830,7 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-ws-nested .prose {
   font: var(--pm-t-prose) !important;
   font-weight: 400 !important;
-  color: var(--pm-text) !important;
+  color: var(--pm-ink-prose);
   max-width: none;
 }
 .pm-ws-editor .ProseMirror p,
@@ -15390,7 +15388,7 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-ws-msg-md {
   font: var(--pm-t-prose) !important;
   font-weight: 400 !important;
-  color: var(--pm-text) !important;
+  color: var(--pm-ink-prose);
   max-width: none !important;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -15539,7 +15537,7 @@ button.pm-rail-new:hover:not(:disabled) {
 }
 .pm-chunk-inspect-title {
   margin: 4px 0 0;
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: 20px;
   font-weight: 400;
   letter-spacing: -0.02em;
@@ -15599,7 +15597,7 @@ button.pm-rail-new:hover:not(:disabled) {
   white-space: nowrap;
 }
 .pm-chunk-inspect-row.is-block dd {
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: 13px;
   font-weight: 400;
   line-height: 1.45;
@@ -15646,7 +15644,7 @@ button.pm-rail-new:hover:not(:disabled) {
 .pm-ws-prose-item {
   font: var(--pm-t-prose) !important;
   font-weight: 400 !important;
-  color: var(--pm-text);
+  color: var(--pm-ink-prose);
   white-space: pre-wrap;
   max-width: none;
 }
@@ -15676,9 +15674,9 @@ button.pm-rail-new:hover:not(:disabled) {
   color: var(--pm-green);
   background: var(--pm-green-soft);
 }
-/* File / page name in dialog header — Source Serif light */
+/* File / page name in dialog header — Newsreader light */
 .pm-ws-title {
-  font: 300 18px/1.25 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
+  font: 300 18px/1.25 var(--pm-ff-prose, "Newsreader Variable", Georgia, serif) !important;
   font-weight: 400 !important;
   color: var(--pm-ink);
   letter-spacing: -0.015em;
@@ -17178,7 +17176,7 @@ button.pm-files-row-edit {
 }
 .pm-node-id-title {
   margin: 0;
-  font: 300 16px/1.3 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font: 300 16px/1.3 var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-weight: 400;
   letter-spacing: -0.015em;
   text-transform: none;
@@ -17219,7 +17217,7 @@ button.pm-files-row-edit {
   word-break: break-word;
   overflow-wrap: anywhere;
   /* Same tokens as display .pm-node-id-title — explicit, not inherit */
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: 16px;
   font-weight: 400;
   font-style: normal;
@@ -17451,7 +17449,7 @@ button.pm-files-row-edit {
   min-height: 0;
   overflow-y: auto;
   padding: 12px 16px 20px !important;
-  font: var(--pm-t-prose, 300 14px/1.55 "Source Serif 4 Variable", Georgia, serif) !important;
+  font: var(--pm-t-prose, 300 14px/1.55 "Newsreader Variable", Georgia, serif) !important;
   color: var(--pm-text, #2c2e2a);
 }
 @media (prefers-reduced-motion: reduce) {
@@ -19185,6 +19183,134 @@ button.pm-files-row-edit {
   color: var(--pm-green, #1a5e3d);
 }
 
+/*
+ * Live translation selector — hover dropdown (in-recording button).
+ * Same card recipe as Premium UI v1 cells: warm-white face lighter than
+ * the stage, inset top highlight for thickness, no border — separation
+ * comes entirely from layered light. Green accent for the active language.
+ */
+.pm-lt-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.pm-lt-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 46;
+  min-width: 268px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  border-radius: 16px;
+  /* Soft white card on cream stage — lighter than stage, never gray */
+  background: color-mix(in srgb, #ffffff 82%, var(--pm-surface, #fdfbf7));
+  border: none;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.95) inset,
+    0 2px 6px rgba(18, 20, 16, 0.04),
+    0 12px 32px -8px rgba(18, 20, 16, 0.14),
+    0 32px 80px -16px rgba(18, 20, 16, 0.12);
+  transform-origin: 90% 0%;
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+}
+.pm-lt-menu.is-emerging {
+  animation: pm-lt-in 260ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) both;
+}
+.pm-lt-menu.is-retracting {
+  animation: pm-lt-out 150ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  pointer-events: none;
+}
+@keyframes pm-lt-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes pm-lt-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-5px) scale(0.985);
+  }
+}
+.pm-lt-menu-label {
+  grid-column: 1 / -1;
+  display: block;
+  padding: 2px 10px 8px;
+  font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff, system-ui, sans-serif));
+  font-size: 10.5px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--pm-text, #2a2e2a) 46%, transparent);
+}
+.pm-lt-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  font-family: var(--pm-ff, system-ui, sans-serif);
+  font-size: 12.5px;
+  font-weight: 450;
+  line-height: 1.35;
+  color: var(--pm-text, #2a2e2a);
+  transition:
+    background 160ms ease,
+    color 160ms ease;
+  -webkit-font-smoothing: antialiased;
+}
+.pm-lt-item:hover {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 7%, transparent);
+}
+.pm-lt-item.is-on {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 12%, transparent);
+  color: var(--pm-green, #1a5e3d);
+  font-weight: 500;
+}
+.pm-lt-item-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pm-lt-item-code {
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  color: color-mix(in srgb, var(--pm-text, #2a2e2a) 44%, transparent);
+}
+.pm-lt-item.is-on .pm-lt-item-code {
+  color: color-mix(in srgb, var(--pm-green, #1a5e3d) 72%, transparent);
+}
+.pm-lt-check {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  color: var(--pm-green, #1a5e3d);
+  animation: pm-lt-check-in 220ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) both;
+}
+@keyframes pm-lt-check-in {
+  from {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════════════
    Premium Chat surface — SPEC §5.4 · ENGINEERING §3.6 soft float
    Sessions float rail + stage float; composer glass; type roles.
@@ -19294,9 +19420,9 @@ button.pm-files-row-edit {
   z-index: 1;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   /* Match Collections row pad (text clears mint bar) */
-  padding: 9px 10px 9px 14px;
+  padding: 12px 10px 12px 14px;
   margin-bottom: 2px;
   border-radius: 10px;
   cursor: pointer;
@@ -19455,7 +19581,7 @@ button.pm-files-row-edit {
   box-sizing: border-box;
   border-radius: inherit;
   overflow: hidden;
-  background: var(--pm-float, #fdfbf7);
+  background: #ffffff;
 }
 .pm-chat-stage-head {
   flex-shrink: 0;
@@ -19467,9 +19593,9 @@ button.pm-files-row-edit {
   /* soft dissolve under title — no hard rule */
   background: linear-gradient(
     to bottom,
-    var(--pm-float, #fdfbf7) 0,
-    var(--pm-float, #fdfbf7) 70%,
-    color-mix(in srgb, var(--pm-float, #fdfbf7) 0%, transparent) 100%
+    #ffffff 0,
+    #ffffff 70%,
+    transparent 100%
   );
   z-index: 5;
 }
@@ -19477,7 +19603,7 @@ button.pm-files-row-edit {
   margin: 0;
   font: var(--pm-t-display);
   letter-spacing: -0.015em;
-  color: var(--pm-ink, #121410);
+  color: var(--pm-ink-display);
   max-width: var(--pm-chat-col, 860px);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -19542,9 +19668,9 @@ button.pm-files-row-edit {
   height: 36px;
   background: linear-gradient(
     to bottom,
-    var(--pm-float, #fdfbf7) 0%,
-    color-mix(in srgb, var(--pm-float, #fdfbf7) 72%, transparent) 42%,
-    color-mix(in srgb, var(--pm-float, #fdfbf7) 0%, transparent) 100%
+    #ffffff 0%,
+    rgba(255, 255, 255, 0.72) 42%,
+    rgba(255, 255, 255, 0) 100%
   );
 }
 .pm-chat-edge-fade--bottom {
@@ -19553,9 +19679,9 @@ button.pm-files-row-edit {
   z-index: 11; /* above thread, under composer dock (15) + scroll btn (16) */
   background: linear-gradient(
     to top,
-    var(--pm-float, #fdfbf7) 0%,
-    color-mix(in srgb, var(--pm-float, #fdfbf7) 78%, transparent) 38%,
-    color-mix(in srgb, var(--pm-float, #fdfbf7) 0%, transparent) 100%
+    #ffffff 0%,
+    rgba(255, 255, 255, 0.78) 38%,
+    rgba(255, 255, 255, 0) 100%
   );
 }
 .pm-chat-thread-inner {
@@ -19643,8 +19769,8 @@ button.pm-files-row-edit {
   /* Soft stage veil only — frost is on a static plate inside the card */
   background: linear-gradient(
     to top,
-    color-mix(in srgb, var(--pm-float, #fdfbf7) 42%, transparent) 0%,
-    color-mix(in srgb, var(--pm-float, #fdfbf7) 12%, transparent) 55%,
+    rgba(255, 255, 255, 0.55) 0%,
+    rgba(255, 255, 255, 0.14) 55%,
     transparent 100%
   );
   overflow: visible;
@@ -19663,8 +19789,7 @@ button.pm-files-row-edit {
  * Glow pseudos use filter:drop-shadow on the host instead of z-index:-1
  * under isolation.
  */
-.pm-chat-composer,
-.pm-chat-composer.sk-input-frame {
+.pm-chat-composer {
   position: relative;
   width: 100%;
   max-width: min(var(--pm-composer-col, 780px), 640px);
@@ -19672,50 +19797,37 @@ button.pm-files-row-edit {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px 12px 7px;
-  border-radius: 16px !important;
-  background: rgba(255, 255, 255, 0.55);
-  /* Both prefixes — Lightning may drop one in minify; keep explicit */
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
+  gap: 8px;
+  padding: 14px 14px 10px;
+  border: none;
+  border-radius: 24px;
+  background: var(--pm-float, #fdfcf9);
   overflow: visible;
-  isolation: auto;
   z-index: 1;
-  /* Soft outer depth (replaces isolated z-index:-1 glow plate) */
-  filter: drop-shadow(0 2px 10px rgba(0, 0, 0, 0.06));
-  transition:
-    border-color 800ms cubic-bezier(0.23, 1, 0.32, 1),
-    filter 800ms cubic-bezier(0.23, 1, 0.32, 1);
+  box-shadow:
+    0 2px 6px rgba(18, 20, 16, 0.05),
+    0 10px 24px -10px rgba(18, 20, 16, 0.12),
+    0 28px 64px -24px color-mix(in srgb, var(--pm-green, #1a5e3d) 30%, transparent);
+  transition: box-shadow 400ms cubic-bezier(0.23, 1, 0.32, 1);
 }
-/* Disable sk-input z-index:-1 glow plates — they needed isolation */
-.pm-chat-composer.sk-input-frame::before,
-.pm-chat-composer.sk-input-frame::after {
-  content: none !important;
-  display: none !important;
-  animation: none !important;
+.pm-chat-composer:focus-within {
+  box-shadow:
+    0 2px 6px rgba(18, 20, 16, 0.06),
+    0 12px 28px -10px rgba(18, 20, 16, 0.14),
+    0 28px 64px -20px color-mix(in srgb, var(--pm-green, #1a5e3d) 42%, transparent);
 }
-.pm-chat-composer.sk-input-frame:focus-within {
-  border-color: var(--pm-green, #1a5e3d);
-  filter: drop-shadow(0 0 12px color-mix(in srgb, var(--pm-green, #1a5e3d) 28%, transparent));
-}
-.pm-chat-composer.sk-input-frame.is-streaming {
-  border-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 45%, transparent);
-  filter: drop-shadow(0 0 14px color-mix(in srgb, var(--pm-green, #1a5e3d) 32%, transparent));
-}
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .pm-chat-composer,
-  .pm-chat-composer.sk-input-frame {
-    background: rgba(255, 255, 255, 0.88);
-  }
+.pm-chat-composer.is-streaming {
+  box-shadow:
+    0 2px 6px rgba(18, 20, 16, 0.06),
+    0 12px 28px -10px rgba(18, 20, 16, 0.14),
+    0 28px 64px -18px color-mix(in srgb, var(--pm-green, #1a5e3d) 48%, transparent);
 }
 
 .pm-chat-composer-tools {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
-  gap: 4px 6px;
+  gap: 6px 8px;
   min-height: 0;
 }
 .pm-chat-tool-chip {
@@ -19840,22 +19952,23 @@ button.pm-files-row-edit {
 
 /* ── Composer pop menus: original wipe / diamond interaction, rounded premium shell ── */
 .pm-chat-pop {
-  --pm-chat-pop-ms: 480ms;
+  --pm-chat-pop-ms: 200ms;
   --pm-chat-pop-ease: cubic-bezier(0.23, 1, 0.32, 1);
   position: fixed;
   z-index: 100;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-radius: 12px;
-  border: 1px solid color-mix(in srgb, var(--pm-green, #1a5e3d) 22%, transparent);
-  background: color-mix(in srgb, #ffffff 72%, transparent);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  box-shadow: var(--pm-shadow);
-  font: var(--pm-t-label);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  border-radius: 14px;
+  border: none;
+  background: #ffffff;
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent),
+    0 14px 36px -12px color-mix(in srgb, var(--pm-ink, #121410) 18%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent);
+  font: 420 12.5px/1.4 var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  letter-spacing: 0;
+  text-transform: none;
   transition:
     opacity var(--pm-chat-pop-ms) var(--pm-chat-pop-ease),
     transform var(--pm-chat-pop-ms) var(--pm-chat-pop-ease),
@@ -20015,15 +20128,24 @@ button.pm-files-row-edit {
   cursor: pointer;
   overflow: hidden;
   text-align: left;
-  color: var(--pm-muted, #6a706a);
-  transition: color var(--pm-chat-pop-ms) var(--pm-chat-pop-ease);
+  color: color-mix(in srgb, var(--pm-ink, #121410) 78%, transparent);
+  border-radius: 8px;
+  transition:
+    color 140ms var(--pm-chat-pop-ease),
+    background 140ms var(--pm-chat-pop-ease);
 }
 .pm-chat-pop-item:hover,
 .pm-chat-pop-item.is-hover {
-  color: var(--pm-on, #e8f0eb);
+  color: color-mix(in srgb, var(--pm-ink, #121410) 92%, transparent);
+  background: color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent);
 }
 .pm-chat-pop-item.is-active:not(:hover):not(.is-hover) {
   color: var(--pm-green, #1a5e3d);
+  font-weight: 480;
+}
+/* Green wipe retired — quiet hover replaces it */
+.pm-chat-pop-item-wipe {
+  display: none;
 }
 .pm-chat-pop-item-label {
   position: relative;
@@ -20150,57 +20272,151 @@ button.pm-files-row-edit {
   max-width: 100%;
 }
 /* Input | Send row */
-.pm-chat-composer-main {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  min-width: 0;
-}
 .pm-chat-composer-field {
   position: relative;
-  flex: 1 1 auto;
+  width: 100%;
   min-width: 0;
 }
 .pm-chat-composer-textarea {
   width: 100%;
-  min-height: 28px;
+  min-height: 30px;
   max-height: 96px;
   margin: 0;
-  padding: 4px 0 5px;
+  padding: 2px 4px 6px;
   border: none;
-  border-bottom: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 10%, transparent);
   border-radius: 0;
   resize: none;
   outline: none;
   background: transparent;
   font: var(--pm-t-body);
+  font-size: 15px;
   font-weight: 400;
-  line-height: 1.45;
+  line-height: 1.5;
   color: var(--pm-ink, #121410);
-  transition: border-color 180ms var(--pm-chat-ease);
 }
 .pm-chat-composer-textarea::placeholder {
   color: var(--pm-faint, #969c96);
-}
-.pm-chat-composer-textarea:focus {
-  border-bottom-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 45%, transparent);
 }
 .pm-chat-composer-textarea:disabled {
   opacity: 0.55;
 }
 .pm-chat-composer-send {
-  margin-bottom: 1px;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 180ms var(--pm-chat-ease), opacity 180ms var(--pm-chat-ease);
 }
-.pm-chat-composer-disclaimer {
-  margin: 0;
-  padding: 0 1px;
-  font: var(--pm-t-meta);
-  font-style: italic;
-  line-height: 1.3;
-  color: color-mix(in srgb, var(--pm-faint, #969c96) 92%, transparent);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.pm-chat-composer-send:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+.pm-chat-composer-send:disabled {
+  background: color-mix(in srgb, var(--pm-ink, #121410) 7%, #ffffff);
+  color: color-mix(in srgb, var(--pm-ink, #121410) 32%, #ffffff);
+  opacity: 1;
+}
+.pm-chat-composer-cancel {
+  height: 30px;
+  border-radius: 999px;
+}
+/*
+ * Composer-scoped quiet tools — ghost pills (thin hairline, normal case),
+ * icon toggle, and the Thinking popover. Recall keeps the old loud chips.
+ */
+.pm-chat-composer .pm-chat-tool-chip {
+  min-height: 28px;
+  padding: 0 11px;
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 10%, transparent);
+  font: 420 12px/1 var(--pm-ff, system-ui, sans-serif);
+  letter-spacing: 0;
+  text-transform: none;
+  color: color-mix(in srgb, var(--pm-ink, #121410) 60%, transparent);
+  background: transparent;
+}
+.pm-chat-composer .pm-chat-tool-chip:hover:not(:disabled):not(.is-on):not(.is-menu-open) {
+  color: color-mix(in srgb, var(--pm-ink, #121410) 80%, transparent);
+  background: color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent);
+}
+.pm-chat-composer .pm-chat-tool-chip.is-on {
+  color: var(--pm-on, #eaf3ee);
+  background: var(--pm-green, #1a5e3d);
+  border-color: transparent;
+}
+.pm-chat-composer .pm-chat-tool-chip.is-on:hover:not(.is-menu-open) {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 86%, #000000);
+}
+.pm-chat-composer .pm-chat-tool-chip.is-menu-open {
+  color: color-mix(in srgb, var(--pm-ink, #121410) 88%, transparent);
+  background: color-mix(in srgb, var(--pm-ink, #121410) 9%, transparent);
+  border-color: transparent;
+}
+.pm-chat-tool-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  color: color-mix(in srgb, var(--pm-ink, #121410) 50%, transparent);
+  background: transparent;
+  transition:
+    color 180ms var(--pm-chat-ease),
+    background 180ms var(--pm-chat-ease);
+}
+.pm-chat-tool-icon:hover {
+  color: color-mix(in srgb, var(--pm-ink, #121410) 75%, transparent);
+  background: color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent);
+}
+.pm-chat-tool-icon.is-on {
+  color: var(--pm-on, #eaf3ee);
+  background: var(--pm-green, #1a5e3d);
+}
+.pm-chat-tool-icon.is-on:hover {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 86%, #000000);
+}
+.pm-chat-think-pop {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  min-width: 130px;
+  padding: 5px;
+  border-radius: 12px;
+  background: var(--pm-float, #fdfcf9);
+  box-shadow: 0 4px 20px -6px rgba(18, 20, 16, 0.16);
+  animation: pm-chat-think-pop-in 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes pm-chat-think-pop-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.pm-chat-think-pop .pm-chat-pop-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: none;
+  border-radius: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  text-align: left;
+  font: 420 12.5px/1.3 var(--pm-ff, system-ui, sans-serif);
+  color: color-mix(in srgb, var(--pm-ink, #121410) 85%, transparent);
+  background: transparent;
+  transition: background 140ms var(--pm-chat-ease);
+}
+.pm-chat-think-pop .pm-chat-pop-item:hover {
+  background: color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent);
+}
+.pm-chat-think-pop .pm-chat-pop-item.is-active {
+  color: var(--pm-green, #1a5e3d);
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, transparent);
 }
 /*
  * ── Messages (Collection-aligned Premium)
@@ -20314,7 +20530,7 @@ button.pm-files-row-edit {
   font: var(--pm-t-prose);
   font-weight: 400;
   letter-spacing: -0.01em;
-  color: var(--pm-ink, #121410);
+  color: var(--pm-ink-prose);
   -webkit-font-smoothing: antialiased;
 }
 .pm-chat-msg-user-body p {
@@ -20333,7 +20549,7 @@ button.pm-files-row-edit {
 .pm-chat-prose {
   font: var(--pm-t-prose);
   font-weight: 400;
-  color: var(--pm-text, #2a2e2a);
+  color: var(--pm-ink-prose);
   max-width: none;
   width: 100%;
   -webkit-font-smoothing: antialiased;
@@ -22004,7 +22220,7 @@ button.pm-files-row-edit {
 }
 .pm-meeting-e-title {
   margin: 0 0 10px;
-  font-family: var(--pm-ff-serif, "Source Serif 4", Georgia, serif);
+  font-family: var(--pm-ff-serif, "Newsreader", Georgia, serif);
   font-weight: 400;
   font-size: 24px;
   letter-spacing: -0.02em;
@@ -22689,11 +22905,8 @@ button.pm-files-row-edit {
 }
 .pm-ls-entry-text {
   min-width: 0;
-  font-family: var(--pm-ff-prose, Georgia, serif);
-  font-size: 13.5px;
-  font-weight: 400;
-  line-height: 1.65;
-  color: var(--pm-text, #2a2e2a);
+  font: var(--pm-t-prose);
+  color: var(--pm-ink-prose);
 }
 .pm-ls-entry.is-amended {
   animation: pm-ls-flash 1.6s ease;
@@ -22762,6 +22975,10 @@ button.pm-files-row-edit {
 .pm-ls-tail-partial {
   opacity: 0.65;
   font-style: italic;
+}
+/* Inline translation inside a tail line (bilingual captions) */
+.pm-ls-tail-translation {
+  opacity: 0.66;
 }
 @keyframes pm-ls-enter {
   from {
@@ -23443,7 +23660,7 @@ button.pm-files-row-edit {
   opacity: 0.72;
 }
 .pm-meeting-section-card-name {
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: 13px;
   font-weight: 400;
   letter-spacing: -0.01em;
@@ -23671,7 +23888,7 @@ button.pm-files-row-edit {
   box-shadow: inset 2.5px 0 0 0 var(--pm-green, #1a5e3d);
 }
 .pm-meeting-add-section-bp-name {
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: 13.5px;
   font-weight: 400;
   letter-spacing: -0.01em;
@@ -24783,7 +25000,7 @@ button.pm-files-row-edit {
   font: var(--pm-t-display);
   font-size: var(--pm-meeting-title-size, clamp(20px, 2.1vw, 26px));
   letter-spacing: -0.015em;
-  color: var(--pm-ink, #121410);
+  color: var(--pm-ink-display);
   font-weight: 400;
   line-height: var(--pm-meeting-title-lh, 1.28);
   /* Auto-wrap, max 3 lines then ellipsis */
@@ -24811,7 +25028,7 @@ button.pm-files-row-edit {
   font: var(--pm-t-display);
   font-size: var(--pm-meeting-title-size, clamp(20px, 2vw, 26px));
   letter-spacing: -0.015em;
-  color: var(--pm-ink, #121410);
+  color: var(--pm-ink-display);
   font-weight: 400;
   line-height: var(--pm-meeting-title-lh, 1.28);
   background: transparent;
@@ -24972,7 +25189,7 @@ button.pm-files-row-edit {
   font-size: var(--pm-meeting-title-size, clamp(20px, 2.1vw, 26px));
   font-weight: 400;
   letter-spacing: -0.015em;
-  color: var(--pm-ink, #121410);
+  color: var(--pm-ink-display);
   line-height: var(--pm-meeting-title-lh, 1.28);
   white-space: normal;
   text-overflow: unset;
@@ -24994,7 +25211,7 @@ button.pm-files-row-edit {
   font-size: var(--pm-meeting-title-size, clamp(20px, 2.1vw, 26px));
   font-weight: 400;
   letter-spacing: -0.015em;
-  color: var(--pm-ink, #121410);
+  color: var(--pm-ink-display);
   line-height: var(--pm-meeting-title-lh, 1.28);
 }
 .pm-meeting-section-title-prefix {
@@ -25238,17 +25455,14 @@ button.pm-files-row-edit {
 
 /*
  * Meeting Summary reading view — readonly TipTap (.pm-meeting-summary-tiptap).
- * Source Serif reading face (design system prose), light hierarchy.
+ * Newsreader reading face (design system prose), light hierarchy.
  */
 .pm-meeting-md,
 .pm-meeting-summary-tiptap {
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
-  font-size: 14.5px;
-  font-weight: 400;
+  font: var(--pm-t-prose);
   font-style: normal;
-  font-variation-settings: "wght" 300;
   line-height: 1.75;
-  color: var(--pm-text, #2a2e2a);
+  color: var(--pm-ink-prose);
   max-width: min(72ch, 100%);
 }
 .pm-meeting-summary-tiptap .ProseMirror,
@@ -25270,20 +25484,20 @@ button.pm-files-row-edit {
 }
 .pm-meeting-summary-tiptap .ProseMirror h1 {
   margin: 1.25em 0 0.5em;
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: 1.25em;
   font-weight: 400;
-  font-variation-settings: "wght" 300;
+  font-variation-settings: "wght" 400;
   letter-spacing: -0.015em;
   color: var(--pm-ink, #121410);
   line-height: 1.3;
 }
 .pm-meeting-summary-tiptap .ProseMirror h2 {
   margin: 1.1em 0 0.4em;
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: 1.1em;
   font-weight: 400;
-  font-variation-settings: "wght" 300;
+  font-variation-settings: "wght" 400;
   letter-spacing: -0.01em;
   color: var(--pm-ink, #121410);
   line-height: 1.35;
@@ -25322,7 +25536,7 @@ button.pm-files-row-edit {
 }
 .pm-meeting-md-h1 {
   margin: 1.25em 0 0.5em;
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: 1.25em;
   font-weight: 400;
   letter-spacing: -0.015em;
@@ -25331,7 +25545,7 @@ button.pm-files-row-edit {
 }
 .pm-meeting-md-h2 {
   margin: 1.1em 0 0.4em;
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: 1.1em;
   font-weight: 400;
   letter-spacing: -0.01em;
@@ -25742,7 +25956,7 @@ button.pm-files-row-edit {
   letter-spacing: 0.01em;
 }
 .pm-meeting-ingest-menu-name {
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: 14px;
   font-weight: 400;
   letter-spacing: -0.015em;
@@ -25767,7 +25981,7 @@ button.pm-files-row-edit {
   box-shadow: none !important;
   background: transparent !important;
   padding: 0 2px !important;
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif) !important;
   font-size: 14px !important;
   font-weight: 400 !important;
   letter-spacing: -0.015em !important;
@@ -26255,16 +26469,16 @@ button.pm-files-row-edit {
   background: transparent;
 }
 /*
- * Segment body — Source Serif, slightly smaller than Summary prose
+ * Segment body — Newsreader, slightly smaller than Summary prose
  * so dense transcript / speaker lists stay scannable in the side rail.
  */
 .pm-meeting-seg-body {
   margin: 0;
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
-  font-size: 13px;
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
+  font-size: 14.5px;
   font-weight: 400;
-  font-variation-settings: "wght" 300;
-  line-height: 1.6;
+  font-variation-settings: "wght" 400;
+  line-height: 1.65;
   letter-spacing: -0.01em;
   color: var(--pm-text, #2a2e2a);
   white-space: pre-wrap;
@@ -26288,6 +26502,27 @@ button.pm-files-row-edit {
 .pm-meeting-seg.is-clickable {
   cursor: pointer;
 }
+/*
+ * Translation line — second row of a bilingual caption block. Muted
+ * weight/size against the Newsreader source line; per the UI language,
+ * reading text keeps ≥450-ish weight via color, not thin strokes.
+ */
+.pm-meeting-seg-translation {
+  margin: 3px 0 0;
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
+  font-size: 13.5px;
+  font-weight: 400;
+  font-variation-settings: "wght" 400;
+  line-height: 1.55;
+  letter-spacing: -0.005em;
+  color: color-mix(in srgb, var(--pm-text, #2a2e2a) 78%, transparent);
+  white-space: pre-wrap;
+  word-break: break-word;
+  -webkit-font-smoothing: antialiased;
+}
+.pm-meeting-seg--partial .pm-meeting-seg-translation {
+  color: color-mix(in srgb, var(--pm-green, #1a5e3d) 72%, var(--pm-text, #2a2e2a));
+}
 .pm-meeting-seg.is-clickable:hover {
   background: color-mix(in srgb, var(--pm-green, #1a5e3d) 5%, transparent);
 }
@@ -26300,7 +26535,7 @@ button.pm-files-row-edit {
   box-shadow: inset 2.5px 0 0 0 var(--pm-green, #1a5e3d);
 }
 
-/* Live partial (not yet flashed) — system prose language (Source Serif) */
+/* Live partial (not yet flashed) — system prose language (Newsreader) */
 .pm-meeting-seg--partial {
   background: var(--pm-green-wash, rgba(26, 94, 61, 0.06));
   box-shadow: inset 2.5px 0 0 0 color-mix(in srgb, var(--pm-green, #1a5e3d) 45%, transparent);
@@ -26327,12 +26562,12 @@ button.pm-files-row-edit {
   50% { opacity: 1; transform: scale(1); }
 }
 .pm-meeting-seg-partial-text {
-  /* Match .pm-meeting-seg-body (13px Source Serif) */
+  /* Match .pm-meeting-seg-body (14.5px Newsreader) */
   margin: 0;
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: 13px;
   font-weight: 400;
-  font-variation-settings: "wght" 300;
+  font-variation-settings: "wght" 400;
   line-height: 1.6;
   letter-spacing: -0.01em;
   color: var(--pm-text, #2a2e2a);
@@ -26526,14 +26761,14 @@ button.pm-files-row-edit {
   gap: 6px;
   min-width: 0;
 }
-/* Section title = Settings card-kicker (Source Serif 300) */
+/* Section title = Settings card-kicker (Newsreader 400) */
 .pm-recall-section-title {
   margin: 0;
-  font: var(--pm-settings-t-section, 300 18px/1.25 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif));
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font: var(--pm-settings-t-section, 300 18px/1.25 var(--pm-ff-prose, "Newsreader Variable", Georgia, serif));
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: clamp(17px, 1.7vw, 19px);
   font-weight: 400;
-  font-variation-settings: "wght" 300;
+  font-variation-settings: "wght" 400;
   letter-spacing: -0.01em;
   line-height: 1.25;
   text-transform: none;
@@ -26842,7 +27077,7 @@ button.pm-files-row-edit {
   padding: 0 2px;
 }
 .pm-recall-results-count {
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: 15px;
   font-weight: 400;
   letter-spacing: -0.01em;
@@ -26909,7 +27144,7 @@ button.pm-files-row-edit {
   padding-top: 2px;
 }
 .pm-recall-rank {
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: 22px;
   font-weight: 400;
   line-height: 1;
@@ -26970,7 +27205,7 @@ button.pm-files-row-edit {
   font: var(--pm-t-prose);
   font-size: 14px;
   line-height: 1.72;
-  color: var(--pm-text);
+  color: var(--pm-ink-prose);
   max-width: none;
   min-width: 0;
 }
@@ -27071,7 +27306,7 @@ button.pm-files-row-edit {
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: 12px;
   font-weight: 400;
   line-height: 1;
@@ -27108,7 +27343,7 @@ button.pm-files-row-edit {
   --pm-chunk-r: 12px;
   overflow-x: auto;
   min-width: 0;
-  /* Beat parent .pm-ws-prose-item (Source Serif + !important) */
+  /* Beat parent .pm-ws-prose-item (Newsreader + !important) */
   font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif) !important;
   font-size: 13px !important;
   font-weight: 400 !important;
@@ -27334,7 +27569,7 @@ img.pm-recall-md-img {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: 13.5px;
   font-weight: 400;
   letter-spacing: -0.005em;
@@ -27357,7 +27592,7 @@ img.pm-recall-md-img {
   font: var(--pm-t-prose);
   font-size: 13.5px;
   line-height: 1.7;
-  color: var(--pm-text);
+  color: var(--pm-ink-prose);
   white-space: pre-wrap;
 }
 /* ── Metrics — soft rounded tiles ── */
@@ -27397,7 +27632,7 @@ img.pm-recall-md-img {
   transform: translateY(0);
 }
 .pm-recall-metric-value {
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: clamp(22px, 2.5vw, 28px);
   font-weight: 400;
   line-height: 1;
@@ -27460,7 +27695,7 @@ img.pm-recall-md-img {
 }
 .pm-recall-empty-title {
   margin: 0;
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: 19px;
   font-weight: 400;
   letter-spacing: -0.015em;
@@ -27484,10 +27719,10 @@ img.pm-recall-md-img {
   outline: 1px solid color-mix(in srgb, var(--pm-green) 10%, transparent);
   outline-offset: -1px;
   font: var(--pm-t-prose);
-  color: var(--pm-text);
+  color: var(--pm-ink-prose);
 }
 .pm-recall-context :is(h1, h2, h3) {
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-weight: 400;
   color: var(--pm-ink);
 }
@@ -27496,6 +27731,7 @@ img.pm-recall-md-img {
   font: var(--pm-t-prose);
   font-size: 14px;
   line-height: 1.7;
+  color: var(--pm-ink-prose);
 }
 .pm-recall-context code,
 .pm-recall-context pre {
@@ -27719,10 +27955,11 @@ img.pm-recall-md-img {
   color: var(--pm-green, #1f6b4a);
 }
 .pm-people-picker-trigger-name {
-  font-family: var(--pm-serif, "Source Serif 4 Variable", Georgia, serif);
-  font-size: 15px;
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 13.5px;
+  font-weight: 500;
   line-height: 1.2;
-  letter-spacing: -0.015em;
+  letter-spacing: -0.005em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -27840,10 +28077,12 @@ img.pm-recall-md-img {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
-  font-size: 14px;
-  font-weight: 400;
-  letter-spacing: -0.015em;
+  /* UI 人名走无衬线 label 字（同 pm-meeting-seg-speaker 的设计语言），
+     prose 衬线只留给阅读型正文（转写/简报），菜单行不是阅读面。 */
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
   line-height: 1.35;
   color: var(--pm-ink, #121410);
   -webkit-font-smoothing: antialiased;
@@ -27923,7 +28162,7 @@ img.pm-recall-md-img {
   border-radius: 10px;
   background: none;
   text-align: left;
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
   font-size: 14px;
   font-weight: 400;
   letter-spacing: -0.015em;
@@ -28091,7 +28330,7 @@ img.pm-recall-md-img {
   margin: 0;
   font: var(--pm-t-display);
   letter-spacing: -0.025em;
-  color: var(--pm-ink, #121410);
+  color: var(--pm-ink-display);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -28260,6 +28499,7 @@ img.pm-recall-md-img {
 .pm-people-shell .pm-settings-hw-empty-title {
   font: var(--pm-t-display);
   font-size: 22px;
+  color: var(--pm-ink-display);
 }
 .pm-people-shell .pm-settings-hw-empty-hint,
 .pm-people-shell .pm-settings-hw-words-empty-title,
@@ -28775,13 +29015,16 @@ img.pm-recall-md-img {
 }
 /* Reading content carries the prose serif; UI chrome stays sans. */
 .pm-brief-body p,
-.pm-brief-body li,
-.pm-attendee-profile-text {
-  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+.pm-brief-body li {
+  font: var(--pm-t-prose);
+  color: var(--pm-ink-prose);
 }
 .pm-attendee-profile-text {
-  font-size: 13px;
-  line-height: 1.6;
+  font-family: var(--pm-ff-prose, "Newsreader Variable", Georgia, serif);
+}
+.pm-attendee-profile-text {
+  font: var(--pm-t-prose);
+  color: var(--pm-ink-prose);
 }
 
 /* Prepare picker: serif 300 names are too thin — nudge for readability */
