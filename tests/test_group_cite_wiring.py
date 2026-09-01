@@ -40,3 +40,11 @@ def test_group_cite_chips_use_sequential_display_index():
     assert "pm-qc-sources" in src
     assert "pm-qc-source-item" in src
     assert "citeMeetings" in src or "enrichGroupCites" in src
+
+
+def test_group_prompt_pins_one_sentence_per_cite_marker():
+    from src.prompts import MEETING_GROUP_CHAT_SYSTEM_PROMPT
+
+    low = MEETING_GROUP_CHAT_SYSTEM_PROMPT.lower()
+    assert "one sentence per marker" in low
+    assert "strongest single" in low

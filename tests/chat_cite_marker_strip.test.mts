@@ -19,3 +19,10 @@ test("Strip is applied on done, streaming head and tail paths", () => {
   const calls = body.match(/stripCiteMarkers\(/g) ?? []
   assert.ok(calls.length >= 3, `expected >=3 strip calls, got ${calls.length}`)
 })
+
+test("Digit range cite markers ([1:41-45]) are stripped in Chat too", () => {
+  assert.ok(
+    body.includes("\\d+\\s*:\\s*(?:stt_)?\\d+\\s*[-–]"),
+    "digit-prefixed range cite markers must be stripped, not shown raw",
+  )
+})
