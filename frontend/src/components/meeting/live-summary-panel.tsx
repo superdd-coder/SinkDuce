@@ -11,7 +11,7 @@ import {
   groupEntriesByKind,
   relativeAge,
   SECTION_ORDER,
-  tailSegments,
+  tailBilingualRows,
   type RelativeAgeKey,
 } from "./live-summary-sections"
 
@@ -156,9 +156,10 @@ export function LiveSummaryPanel({
   )
 }
 
-/** Bottom strip: transcript lines the summary has not absorbed yet, plus
- * the in-flight partial — keeps the "what is being said right now" feel
- * while reading the summary. */
+/** Bottom strip under the live summary: bilingual transcript lines — one
+ * line of original text, one line of translation — capped to four lines,
+ * with the in-flight partial as the newest pair. Keeps the "what is being
+ * said right now" feel while reading the summary. */
 export function LiveSummaryTail({
   segments,
   partial,
@@ -171,33 +172,39 @@ export function LiveSummaryTail({
   tailFromT: number
 }) {
   const t = useT()
-  const tail = tailSegments(segments, tailFromT)
-  if (tail.length === 0 && !partial) return null
+  const rows = tailBilingualRows(segments, tailFromT, partial, partialTranslation)
+  if (rows.length === 0) return null
+  const sourceRows = rows.filter((r) => r.kind === "source")
+  const translationRows = rows.filter((r) => r.kind === "translation")
+  // Two physically separate boxes so a wrapping source line can only clip
+  // inside the source box — translations can never push sources out.
+  const renderRows = (list: typeof rows) =>
+    list.map((r) => (
+      <p
+        key={r.key}
+        dir="auto"
+        className={cn(
+          r.kind === "translation" && "is-translation",
+          r.partial && "pm-ls-tail-partial",
+        )}
+      >
+        {r.text}
+      </p>
+    ))
   return (
     <div className="pm-ls-tail">
       <span className="pm-ls-tail-label">
         <span className="pm-ls-tail-dot" aria-hidden />
         {t("meeting.liveSummaryTail")}
       </span>
-      <div className="pm-ls-tail-lines">
-        {tail.map((s, i) => (
-          <p key={`${s.start}-${i}`}>
-            {s.text}
-            {s.translation ? (
-              <span className="pm-ls-tail-translation" dir="auto">
-                {" "}
-                {s.translation}
-              </span>
-            ) : null}
-          </p>
-        ))}
-        {partial ? (
-          <p className="pm-ls-tail-partial">
-            {partial}
-            {partialTranslation ? ` ${partialTranslation}` : ""}
-          </p>
-        ) : null}
-      </div>
+      {translationRows.length > 0 ? (
+        <>
+          <div className="pm-ls-tail-lines">{renderRows(sourceRows)}</div>
+          <div className="pm-ls-tail-lines">{renderRows(translationRows)}</div>
+        </>
+      ) : (
+        <div className="pm-ls-tail-lines is-source-only">{renderRows(sourceRows)}</div>
+      )}
     </div>
   )
 }

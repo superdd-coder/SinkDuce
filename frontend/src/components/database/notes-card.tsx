@@ -1,4 +1,5 @@
 import { ChevronRight, Loader2 } from "lucide-react"
+import { useShallow } from "zustand/react/shallow"
 import {
   useState,
   useEffect,
@@ -153,7 +154,12 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
       })
     }, [collection, fetchNotes])
 
-    const { pendingOpenNote, setPendingOpenNote } = useAppStore()
+    const { pendingOpenNote, setPendingOpenNote } = useAppStore(
+      useShallow((s) => ({
+        pendingOpenNote: s.pendingOpenNote,
+        setPendingOpenNote: s.setPendingOpenNote,
+      }))
+    )
     useEffect(() => {
       if (pendingOpenNote) {
         openEditor(pendingOpenNote)

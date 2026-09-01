@@ -49,6 +49,7 @@ import {
   Info,
 } from "lucide-react"
 import { useAppStore } from "@/stores/app-store"
+import { useShallow } from "zustand/react/shallow"
 import {
   recallSearch,
   type RecallResult,
@@ -149,7 +150,14 @@ function SearchTab() {
     toggleRecallCollection,
     collections,
     fetchCollections,
-  } = useAppStore()
+  } = useAppStore(
+    useShallow((s) => ({
+      recallCollections: s.recallCollections,
+      toggleRecallCollection: s.toggleRecallCollection,
+      collections: s.collections,
+      fetchCollections: s.fetchCollections,
+    }))
+  )
   const [query, setQuery] = useState("")
   const [topK, setTopK] = useState("10")
   const [rerankTopK, setRerankTopK] = useState("5")
@@ -659,7 +667,14 @@ function EvaluateTab() {
     setRecallCollections,
     collections,
     fetchCollections,
-  } = useAppStore()
+  } = useAppStore(
+    useShallow((s) => ({
+      recallCollections: s.recallCollections,
+      setRecallCollections: s.setRecallCollections,
+      collections: s.collections,
+      fetchCollections: s.fetchCollections,
+    }))
+  )
   const collection = recallCollections[0] || ""
   const [cases, setCases] = useState<EvalTestCase[]>([])
   const [loading, setLoading] = useState(false)

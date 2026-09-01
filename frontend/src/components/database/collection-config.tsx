@@ -24,6 +24,7 @@ import {
   type EmbeddingProvider,
 } from "@/api/client"
 import { useAppStore } from "@/stores/app-store"
+import { useShallow } from "zustand/react/shallow"
 import { toast } from "sonner"
 import { useT } from "@/i18n/use-t"
 import { formatApiError } from "@/api/http"
@@ -94,7 +95,7 @@ function ConfigSwitch({
 
 export function CollectionConfig({ collection }: CollectionConfigProps) {
   const t = useT()
-  const { providers } = useAppStore()
+  const { providers } = useAppStore(useShallow((s) => ({ providers: s.providers })))
   const [chunkMode, setChunkMode] = useState("normal")
   const [chunkSize, setChunkSize] = useState("")
   const [chunkOverlap, setChunkOverlap] = useState("")

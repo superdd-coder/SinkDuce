@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Pencil, Trash2, Plug, Star, Loader2 } from "lucide-react"
 import { useAppStore } from "@/stores/app-store"
+import { useShallow } from "zustand/react/shallow"
 import { deleteLLMProvider, testLLMProvider, setDefaultLLMProvider, updateConfig } from "@/api/client"
 import type { LLMProvider } from "@/stores/app-store"
 import { toast } from "sonner"
@@ -17,7 +18,7 @@ interface ProviderCardProps {
 
 export function ProviderCard({ provider, onEdit, onRefresh }: ProviderCardProps) {
   const t = useT()
-  const { setProviders } = useAppStore()
+  const { setProviders } = useAppStore(useShallow((s) => ({ setProviders: s.setProviders })))
   const [testing, setTesting] = useState(false)
   const [deleting, setDeleting] = useState(false)
 

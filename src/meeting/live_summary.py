@@ -108,7 +108,7 @@ class LiveSummaryEngine:
         meeting_id: str,
         llm=None,
         persist: bool = False,
-        cadence_s: float = 15.0,
+        cadence_s: float = 10.0,  # user-tuned: summarize every ~10s
         window_s: float = 60.0,
         compact_entries: int = 40,
         compact_interval_s: float = 180.0,  # user-tuned: compact every ~3 min
@@ -198,6 +198,15 @@ class LiveSummaryEngine:
                     return
                 self._seen_keys.add(key)
         with self._seg_lock:
+            # Provider sentence clocks are per-session and can regress far
+            # below the tail after a reconnect (engine switch / page refresh:
+            # observed 71440 → 10560 in the wild). That would wedge
+            # run_round's "anything newer than tail_from_t" gate forever and
+            # silently freeze live summary. Advance the stored timeline
+            # monotonically instead.
+            floor = max(self._last_segment_end, float(self.state.tail_from_t or 0.0))
+            if end <= floor:
+                end = floor + max(end - start, 1.0)
             self._segments.append(
                 {"start": start, "end": end, "text": text, "speaker_id": speaker_id}
             )

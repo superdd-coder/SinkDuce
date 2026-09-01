@@ -151,6 +151,10 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   const levelsRef = useRef<number[]>([])
   /** Serializes live PCM POSTs so disk order matches capture order. */
   const persistChainRef = useRef(Promise.resolve())
+  /** Meetings this window instance has captured in, since page load. A
+   * status='recording' meeting outside this set survived a page refresh —
+   * offer recovery instead of a stuck "Recording" badge. */
+  const sessionOwnedRecordingIdsRef = useRef<Set<string>>(new Set())
   const [hasFileProvider, setHasFileProvider] = useState(true) // optimistic — avoids flash on remount; config check corrects if needed
   const [supportedLanguageHints, setSupportedLanguageHints] = useState<LanguageHintOption[]>([])
   const [maxLanguageHints, setMaxLanguageHints] = useState(1)
@@ -1156,6 +1160,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     if (ownerId) {
       captureOwnerRef.current = ownerId
       setRecordingMeetingId(ownerId)
+      sessionOwnedRecordingIdsRef.current.add(ownerId)
     }
     // Permission / share dialog first — stay on setup if denied / cancelled
     const startError = await recorder.startRecording()
@@ -1711,6 +1716,39 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     const s = seconds % 60
     return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`
   }
+
+  // ── Interrupted-capture auto-recovery (page refreshed mid-recording) ──
+  // The PCM is already fsynced server-side every 500ms and the transcript
+  // checkpoints via partial save. On load, finalize the orphan immediately
+  // (recovery also resets status → created): the meeting then reopens in the
+  // audio-ready state — same UI as an uploaded recording, user decides whether
+  // to transcribe. No banner, no manual "finish" step.
+  const recoveryAttemptedRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (recordingMeetingId) return
+    const orphan = meetings.find(
+      (m) =>
+        !sessionOwnedRecordingIdsRef.current.has(m.id) &&
+        !m.audio_path &&
+        !recoveryAttemptedRef.current.has(m.id) &&
+        (m.status === "recording" ||
+          // Orphans captured before the server marked status='recording':
+          // the PCM + transcript checkpoint landed but status stayed
+          // 'created' (audio only ever appears via finalize/upload).
+          (m.status === "created" && !!m.transcript_path)),
+    )
+    if (!orphan) return
+    recoveryAttemptedRef.current.add(orphan.id)
+    void finalizeMeetingRecording(orphan.id, true)
+      .then((m) => {
+        applyMeeting(m)
+        void fetchMeetings()
+      })
+      .catch(() => {
+        // Leave it visible for the next page load to retry.
+        recoveryAttemptedRef.current.delete(orphan.id)
+      })
+  }, [meetings, recordingMeetingId, applyMeeting, fetchMeetings])
 
   return (
     <div className="pm-meeting">

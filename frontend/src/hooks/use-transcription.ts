@@ -71,6 +71,14 @@ export function useTranscription(meetingId: string | null) {
   /** True while an engine swap is in its flush window — suppresses the
    * onclose auto-reconnect so the swap timer is the only one reconnecting. */
   const engineSwitchingRef = useRef(false)
+  /** Crash checkpoint debounce: one partial save per window while finals flow */
+  const checkpointTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Audio captured while the WS is still connecting / switching engines
+   * (backend vocabulary setup takes seconds). Flushed on open so the first
+   * words — and the words spoken during a toggle — are still transcribed.
+   * Capped at ~2min of 500ms chunks. */
+  const pendingAudioRef = useRef<ArrayBuffer[]>([])
+  const PENDING_AUDIO_CAP = 240
   /** Monotonic id so stale WS handlers no-op */
   const connGenRef = useRef(0)
 
@@ -116,6 +124,34 @@ export function useTranscription(meetingId: string | null) {
   const onFinalizedRef = useRef<((segments: TranscriptSegment[]) => void) | null>(null)
   const setOnFinalized = useCallback((cb: ((segments: TranscriptSegment[]) => void) | null) => {
     onFinalizedRef.current = cb
+  }, [])
+
+  /** Crash checkpoint: debounce-post closed segments so a page refresh mid-
+   * recording leaves the transcript recoverable on the server. partial=true
+   * keeps meeting status untouched; the save at stop stays authoritative. */
+  const scheduleTranscriptCheckpoint = useCallback(() => {
+    if (checkpointTimerRef.current) return
+    checkpointTimerRef.current = setTimeout(() => {
+      checkpointTimerRef.current = null
+      const mid = meetingIdRef.current
+      if (!mid || !wantLiveRef.current) return
+      const finals = Array.from(segmentMapRef.current.values())
+        .filter((s) => !s.__partial)
+        .sort((a, b) => a.start - b.start)
+        .map(({ __key, __partial, ...rest }) => rest)
+      if (finals.length === 0) return
+      const text = finals.map((s) => s.text).join(" ")
+      saveMeetingTranscript(mid, { segments: finals, text, partial: true }).catch(() => {
+        /* best-effort checkpoint — stop-path save is the authoritative one */
+      })
+    }, 5000)
+  }, [])
+
+  const cancelTranscriptCheckpoint = useCallback(() => {
+    if (checkpointTimerRef.current) {
+      clearTimeout(checkpointTimerRef.current)
+      checkpointTimerRef.current = null
+    }
   }, [])
 
   const disconnect = useCallback((opts?: { intentional?: boolean }) => {
@@ -183,6 +219,19 @@ export function useTranscription(meetingId: string | null) {
         isTranscribing: wantLiveRef.current,
         error: null,
       }))
+      // Audio captured while the session was warming up (or mid engine-swap)
+      // goes first, in capture order.
+      const queued = pendingAudioRef.current
+      if (queued.length) {
+        pendingAudioRef.current = []
+        for (const buf of queued) {
+          try {
+            ws.send(buf)
+          } catch {
+            break
+          }
+        }
+      }
     }
 
     ws.onmessage = (event) => {
@@ -269,6 +318,8 @@ export function useTranscription(meetingId: string | null) {
             __partial: !data.is_final,
           }
           segmentMapRef.current.set(key, seg)
+
+          if (data.is_final) scheduleTranscriptCheckpoint()
 
           const finals = Array.from(segmentMapRef.current.values())
             .filter((s) => !s.__partial)
@@ -412,6 +463,8 @@ export function useTranscription(meetingId: string | null) {
 
       wantLiveRef.current = false
       engineSwitchingRef.current = false
+      cancelTranscriptCheckpoint()
+      pendingAudioRef.current = []
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current)
         reconnectTimerRef.current = null
@@ -491,19 +544,31 @@ export function useTranscription(meetingId: string | null) {
         onFinalizedRef.current?.(finals)
       }
     },
-    [disconnect],
+    [cancelTranscriptCheckpoint, disconnect],
   )
 
   const sendAudioData = useCallback((data: ArrayBuffer | Blob) => {
     const ws = wsRef.current
-    if (!ws || ws.readyState !== WebSocket.OPEN) return
-    if (data instanceof Blob) {
-      data.arrayBuffer().then((buf) => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(buf)
-      })
+    if (data instanceof ArrayBuffer) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        // Pipeline still warming up (or mid engine-swap): keep the audio so
+        // it is transcribed once the session is live, instead of dropping it.
+        if (wantLiveRef.current) {
+          const q = pendingAudioRef.current
+          q.push(data)
+          if (q.length > PENDING_AUDIO_CAP) {
+            q.splice(0, q.length - PENDING_AUDIO_CAP)
+          }
+        }
+        return
+      }
+      ws.send(data)
       return
     }
-    ws.send(data)
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    data.arrayBuffer().then((buf) => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(buf)
+    })
   }, [])
 
   const setSegments = useCallback((segments: TranscriptSegment[]) => {

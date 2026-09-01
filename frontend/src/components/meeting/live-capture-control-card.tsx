@@ -113,12 +113,15 @@ export function LiveCaptureControlCard({
           </Button>
         )}
 
-        {supportsTranslation && onTranslationEnabled && onTranslationTarget && (
+        {/* Always visible: disabled with a hint while no LiveTranslate
+            provider is configured (Settings → Live translation). */}
+        {onTranslationEnabled && onTranslationTarget && (
           <TranslationSelector
             enabled={translationEnabled}
             target={translationTarget}
             onEnabledChange={onTranslationEnabled}
             onTargetChange={onTranslationTarget}
+            disabled={!supportsTranslation}
           />
         )}
 

@@ -29,12 +29,15 @@ const DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 // OneShot defaults to Fun-ASR (precompiled hot words + the same Recognition API).
 const FILE_TRANS_MODEL = "fun-asr"
 const RT_TRANS_MODEL = "fun-asr-realtime"
-const DEFAULT_MODEL = "deepseek-v4-flash-0731"
-const CHAT_MODEL = "qwen3.7-plus"
-const LIBRARY_MODEL = "qwen3.7-flash"
-const MEETING_MODEL = "deepseek-v4-pro-0813"
-// qwen3.7-plus / qwen3.7-flash: vision + tools. DeepSeek: tools only, no vision.
-const DASHSCOPE_VISION_AND_TOOLS = ["qwen3.7-plus", "qwen3.7-flash"]
+// Live bilingual captions (Settings → Live translation).
+const LIVE_TRANSLATE_ADAPTER = "dashscope_livetranslate_realtime"
+const LT_TRANSLATE_MODEL = "qwen3.5-livetranslate-flash-realtime"
+const DEFAULT_MODEL = "qwen3.8-flash"
+const CHAT_MODEL = "qwen3.8-flash"
+const LIBRARY_MODEL = "qwen3.8-flash"
+const MEETING_MODEL = "qwen3.8-flash"
+// qwen3.8 / qwen3.7 (plus & flash): vision + tools. DeepSeek: tools only, no vision.
+const DASHSCOPE_VISION_AND_TOOLS = ["qwen3.8-flash", "qwen3.7-plus", "qwen3.7-flash"]
 
 function uniqueModels(names: string[]): string[] {
   return [...new Set(names.map((n) => n.trim()).filter(Boolean))]
@@ -103,10 +106,18 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
       }
       const existingFile = fileTransList.find((p) => p.adapter === "dashscope_funasr")
       const existingRt = rtTransList.find((p) => p.adapter === "dashscope_funasr_realtime")
+      // LiveTranslate providers share the realtime list but are NOT realtime
+      // transcription — never deactivate them in the ASR active sweep.
+      const existingLt = rtTransList.find((p) => p.adapter === LIVE_TRANSLATE_ADAPTER)
       for (const p of fileTransList.filter((p) => p.is_active && p.id !== existingFile?.id)) {
         await updateFileTranscriptionProvider(p.id, { ...p, is_active: false })
       }
-      for (const p of rtTransList.filter((p) => p.is_active && p.id !== existingRt?.id)) {
+      for (const p of rtTransList.filter(
+        (p) =>
+          p.is_active &&
+          p.id !== existingRt?.id &&
+          p.adapter !== LIVE_TRANSLATE_ADAPTER,
+      )) {
         await updateRealtimeTranscriptionProvider(p.id, { ...p, is_active: false })
       }
 
@@ -191,6 +202,20 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
               api_key: apiKey.trim(),
               is_active: true,
             }),
+        existingLt
+          ? updateRealtimeTranscriptionProvider(existingLt.id, {
+              ...existingLt,
+              model: LT_TRANSLATE_MODEL,
+              api_key: apiKey.trim(),
+              is_active: true,
+            })
+          : createRealtimeTranscriptionProvider({
+              name: "Dashscope",
+              adapter: LIVE_TRANSLATE_ADAPTER,
+              model: LT_TRANSLATE_MODEL,
+              api_key: apiKey.trim(),
+              is_active: true,
+            }),
       ])
       const slots = oneshotSlotSnapshot(llmCreated?.id, {
         chat: chatRef,
@@ -206,6 +231,7 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
       }
       await updateConfig("enrichment", {
         meeting_model: slots.meeting_model,
+        live_summary_model: slots.meeting_model,
         enrichment_model: slots.enrichment_model,
         agentic_query_model: slots.agentic_query_model,
         note_distill_model: slots.note_distill_model,
@@ -319,6 +345,9 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
                 <p className="pm-meta">{t("settings.fileDot")} <span className="font-mono">{FILE_TRANS_MODEL}</span></p>
                 <p className="pm-meta">
                   {t("settings.oneshotRtHint", { model: RT_TRANS_MODEL })}
+                </p>
+                <p className="pm-meta">
+                  {t("settings.oneshotLtHint", { model: LT_TRANSLATE_MODEL })}
                 </p>
               </div>
             </section>

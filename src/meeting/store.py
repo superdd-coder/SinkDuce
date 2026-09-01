@@ -235,6 +235,14 @@ def delete_meeting(meeting_id: str) -> bool:
     directory = _meeting_dir(meeting_id)
     if not directory.exists():
         return False
+    meeting = get_meeting(meeting_id)
+    if meeting is not None and meeting.speaker_people:
+        try:
+            from src.speakers.service import unenroll_meeting
+
+            unenroll_meeting(meeting_id)
+        except Exception:
+            logger.warning("voiceprint unenroll skipped for %s", meeting_id, exc_info=True)
     try:
         from src.meeting.transcript_index import purge_meeting_transcripts
 
@@ -297,6 +305,11 @@ def append_recording_pcm(meeting_id: str, chunk: bytes) -> None:
             fh.write(chunk)
             fh.flush()
             os.fsync(fh.fileno())
+    # Mark live capture server-side: nothing else ever sets status='recording'
+    # (the recording UI is browser-local state), and the post-refresh recovery
+    # banner keys off this status. Idempotent — writes only on the transition.
+    if meeting.status != MeetingStatus.recording:
+        update_meeting(meeting_id, status=MeetingStatus.recording)
 
 
 def _pcm_s16le_to_wav(pcm: bytes, sample_rate: int = _PCM_RATE) -> bytes:
@@ -596,6 +609,14 @@ def discard_recording(meeting_id: str) -> Meeting:
     meeting = get_meeting(meeting_id)
     if meeting is None:
         raise FileNotFoundError(f"Meeting {meeting_id} not found")
+
+    if meeting.speaker_people:
+        try:
+            from src.speakers.service import unenroll_meeting
+
+            unenroll_meeting(meeting_id)
+        except Exception:
+            logger.warning("voiceprint unenroll skipped for %s", meeting_id, exc_info=True)
 
     # 1. Delete audio file
     if meeting.audio_path:

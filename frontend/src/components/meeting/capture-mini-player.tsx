@@ -54,6 +54,16 @@ export const CaptureMiniPlayer = forwardRef<
     onTimeUpdate?.(0)
   }, [audioUrl, audioVersion, onTimeUpdate])
 
+  // loadedmetadata alone can fire before the duration is parsed (NaN) — listen
+  // to durationchange too or the progress bar stays at 0:00 forever (MediaBar
+  // uses the same dual-listener pattern).
+  const syncDuration = () => {
+    const el = audioRef.current
+    if (!el) return
+    const d = el.duration
+    setDuration(Number.isFinite(d) && d > 0 ? d : 0)
+  }
+
   useImperativeHandle(ref, () => ({
     seekTo(start: number, end?: number) {
       const el = audioRef.current
@@ -127,7 +137,8 @@ export const CaptureMiniPlayer = forwardRef<
       className="sr-only"
       data-meeting-audio=""
       onTimeUpdate={onTimeUpdateInternal}
-      onLoadedMetadata={() => setDuration(audioRef.current?.duration || 0)}
+      onLoadedMetadata={syncDuration}
+      onDurationChange={syncDuration}
       onEnded={() => {
         segmentEndRef.current = null
         setPlaying(false)

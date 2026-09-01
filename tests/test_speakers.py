@@ -1244,3 +1244,146 @@ class TestCloudEmbedSample:
         assert fetched.speaker_matches["spk0"].top[0].person_id == person.id
         assert fetched.speaker_matches["spk0"].auto is False
         assert not (fetched.speaker_people or {})
+
+
+class TestMeetingLifecycleUnenroll:
+    def test_delete_meeting_unenrolls_people(self, meeting_and_speakers):
+        from src.meeting.store import create_meeting, delete_meeting, get_meeting
+        from src.speakers.service import assign_speaker, enroll
+        from src.speakers.store import create_person, get_person
+
+        person = create_person("Zhang")
+        prior = create_meeting("Prior")
+        enroll(person.id, prior.id, "spk0", _unit([1.0, 0.0]).tolist(), 20.0)
+        doomed = create_meeting("Doomed")
+        _seed_transcript(doomed, [_seg(0.0, 10.0, "spk0")])
+        assign_speaker(
+            doomed.id, "spk0", person.id, segment_embeddings=[_unit([0.0, 1.0])]
+        )
+        stored = get_person(person.id)
+        assert any(r.meeting_id == doomed.id for r in stored.recent)
+
+        assert delete_meeting(doomed.id) is True
+        assert get_meeting(doomed.id) is None
+        stored = get_person(person.id)
+        assert [r.meeting_id for r in stored.recent] == [prior.id]
+        assert stored.centroid[0] == pytest.approx(1.0, abs=1e-5)
+        assert stored.speech_sec == pytest.approx(20.0)
+        assert stored.last_meeting_id == prior.id
+
+    def test_discard_recording_unenrolls_people(self, meeting_and_speakers):
+        from src.meeting.store import (
+            create_meeting,
+            discard_recording,
+            get_meeting,
+        )
+        from src.speakers.service import assign_speaker, enroll
+        from src.speakers.store import create_person, get_person
+
+        person = create_person("Zhang")
+        prior = create_meeting("Prior")
+        enroll(person.id, prior.id, "spk0", _unit([1.0, 0.0]).tolist(), 20.0)
+        meeting = create_meeting("Retry slot")
+        _seed_transcript(meeting, [_seg(0.0, 10.0, "spk0")])
+        assign_speaker(
+            meeting.id, "spk0", person.id, segment_embeddings=[_unit([0.0, 1.0])]
+        )
+
+        discard_recording(meeting.id)
+        stored = get_person(person.id)
+        assert [r.meeting_id for r in stored.recent] == [prior.id]
+        assert stored.centroid[0] == pytest.approx(1.0, abs=1e-5)
+        fetched = get_meeting(meeting.id)
+        assert fetched is not None
+        assert fetched.speaker_people is None
+
+    def test_delete_meeting_without_bindings_skips_speakers(
+        self, meeting_and_speakers
+    ):
+        from src.meeting.store import create_meeting, delete_meeting
+        from src.speakers.service import enroll
+        from src.speakers.store import create_person, get_person
+
+        person = create_person("Zhang")
+        enroll(person.id, "unrelated", "spk0", _unit([1.0, 0.0]).tolist(), 20.0)
+        meeting = create_meeting("No bindings")
+        _seed_transcript(meeting, [_seg(0.0, 4.0, "spk0")])
+        assert delete_meeting(meeting.id) is True
+        stored = get_person(person.id)
+        assert stored.centroid[0] == pytest.approx(1.0, abs=1e-5)
+
+    def test_prune_orphan_enrollments(self, speakers_dir):
+        from src.meeting.store import create_meeting
+        from src.speakers.models import Enrollment
+        from src.speakers.service import prune_orphan_enrollments
+        from src.speakers.store import create_person, get_person, update_person
+
+        live = create_meeting("Still here")
+        person = create_person("Zhang")
+        update_person(
+            person.id,
+            recent=[
+                Enrollment(
+                    meeting_id="ghost",
+                    speaker_id="spk0",
+                    embedding=_unit([0.0, 1.0]).tolist(),
+                    speech_sec=30.0,
+                    enrolled_at="2026-08-01T00:00:00+00:00",
+                ),
+                Enrollment(
+                    meeting_id=live.id,
+                    speaker_id="spk0",
+                    embedding=_unit([1.0, 0.0]).tolist(),
+                    speech_sec=10.0,
+                    enrolled_at="2026-08-02T00:00:00+00:00",
+                ),
+            ],
+            last_meeting_id="ghost",
+            last_speaker_id="spk0",
+        )
+
+        prune_orphan_enrollments(person.id)
+        stored = get_person(person.id)
+        assert [r.meeting_id for r in stored.recent] == [live.id]
+        assert stored.centroid[0] == pytest.approx(1.0, abs=1e-5)
+        assert stored.speech_sec == pytest.approx(10.0)
+        assert stored.last_meeting_id == live.id
+
+    def test_person_detail_dict_prunes_orphans(self, meeting_and_speakers, speakers_dir):
+        from src.meeting.store import create_meeting
+        from src.speakers.models import Enrollment
+        from src.speakers.service import person_detail_dict
+        from src.speakers.store import (
+            create_person,
+            get_person,
+            update_person,
+        )
+
+        live = create_meeting("Here")
+        person = create_person("Zhang")
+        update_person(
+            person.id,
+            recent=[
+                Enrollment(
+                    meeting_id="ghost",
+                    speaker_id="spk0",
+                    embedding=_unit([0.0, 1.0]).tolist(),
+                    speech_sec=30.0,
+                    enrolled_at="2026-08-01T00:00:00+00:00",
+                ),
+                Enrollment(
+                    meeting_id=live.id,
+                    speaker_id="spk0",
+                    embedding=_unit([1.0, 0.0]).tolist(),
+                    speech_sec=10.0,
+                    enrolled_at="2026-08-02T00:00:00+00:00",
+                ),
+            ],
+            last_meeting_id="ghost",
+            last_speaker_id="spk0",
+        )
+
+        data = person_detail_dict(get_person(person.id))
+        assert all(row["meeting_id"] != "ghost" for row in data["meetings"])
+        stored = get_person(person.id)
+        assert [r.meeting_id for r in stored.recent] == [live.id]
