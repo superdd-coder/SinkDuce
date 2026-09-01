@@ -146,10 +146,15 @@ export function MeetingGroupStage({
   }
 
   const openOverlay = async (n: number, sentenceId?: string, meetingId?: string) => {
-    const mem =
-      group?.members.find((x) => Number(x.n) === Number(n)) ||
-      (meetingId ? group?.members.find((x) => x.meeting_id === meetingId) : undefined)
-    if (!mem) return
+    // The cite snapshot's meeting_id is authoritative: roster n is reused
+    // after a member leaves and a new one joins with the same number.
+    const mem = meetingId
+      ? group?.members.find((x) => x.meeting_id === meetingId)
+      : group?.members.find((x) => Number(x.n) === Number(n))
+    if (!mem) {
+      if (meetingId) toast.error(t("meeting.citeMeetingRemoved"))
+      return
+    }
     const cached = meetingById.get(mem.meeting_id)
     if (cached) setOverlayMeeting(cached)
     setOverlayOpen(true)

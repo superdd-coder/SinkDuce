@@ -151,6 +151,11 @@ class LiveSummaryEngine:
         self._thread: threading.Thread | None = None
         self._stop_evt = threading.Event()
         self._in_flight = False
+        # Bumped by every start(): lets finalize() detect that a new WS
+        # session re-enabled the engine while its closing round was still
+        # in flight (translation-toggle reconnect), so its epilogue must
+        # not idle the freshly restarted engine.
+        self._lifecycle_gen = 0
 
     # ── state helpers ────────────────────────────────────────────
 
@@ -507,6 +512,7 @@ class LiveSummaryEngine:
     def start(self) -> None:
         with self._state_lock:
             self.state.engine = "running"
+            self._lifecycle_gen += 1
         if self._thread is not None and self._thread.is_alive():
             self._after_mutation(self.snapshot())
             return
@@ -528,6 +534,8 @@ class LiveSummaryEngine:
 
     def finalize(self) -> None:
         """Stop the loop and squeeze in one last round covering the tail."""
+        with self._state_lock:
+            gen_at_entry = self._lifecycle_gen
         self._stop_evt.set()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
@@ -536,8 +544,11 @@ class LiveSummaryEngine:
             self.run_round()
         except Exception:
             logger.exception("[LIVE-SUMMARY] Final round failed for %s", self.meeting_id)
+        # Only idle the engine when no new session started it mid-flight;
+        # a reconnecting client's start() wins over this epilogue.
         with self._state_lock:
-            self.state.engine = "idle"
+            if self._lifecycle_gen == gen_at_entry:
+                self.state.engine = "idle"
         self._after_mutation(self.snapshot())
 
     def _loop(self) -> None:

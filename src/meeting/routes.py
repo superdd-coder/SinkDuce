@@ -1011,6 +1011,11 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
             )
 
         client_requested_stop = False
+        # Engine swaps (translation toggle / language change) stop-flush and
+        # reconnect within seconds; only a real recording stop may finalize
+        # the live summary engine (finalize() idles it, which would freeze
+        # the summary the reconnecting session is about to re-enable).
+        client_wants_finalize = True
         pcm_frames = 0
         pcm_bytes = 0
         while True:
@@ -1028,6 +1033,7 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
                 if payload.get("action") == "stop":
                     print(f"[REALTIME-WS] >>> client sent stop signal", flush=True)
                     client_requested_stop = True
+                    client_wants_finalize = bool(payload.get("finalize", True))
                     break
                 if payload.get("action") == "live_summary":
                     enabled = bool(payload.get("enabled"))
@@ -1095,10 +1101,13 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
             provider_already_stopped = True
             await asyncio.sleep(2.0)
             # Recording stopped → squeeze one final summary round (to_thread:
-            # LLM latency must not block the event loop).
-            stopped_engine = live_summary_mod.get_engine(meeting_id)
-            if stopped_engine is not None and stopped_engine.state.engine == "running":
-                await asyncio.to_thread(stopped_engine.finalize)
+            # LLM latency must not block the event loop). Skipped for engine
+            # swaps — finalize() idles the engine and its closing round races
+            # the reconnecting client's re-enable.
+            if client_wants_finalize:
+                stopped_engine = live_summary_mod.get_engine(meeting_id)
+                if stopped_engine is not None and stopped_engine.state.engine == "running":
+                    await asyncio.to_thread(stopped_engine.finalize)
     except WebSocketDisconnect:
         print(f"[REALTIME-WS] >>> client disconnected for meeting {meeting_id}", flush=True)
         logger.info("[REALTIME-WS] Client disconnected for meeting %s", meeting_id)

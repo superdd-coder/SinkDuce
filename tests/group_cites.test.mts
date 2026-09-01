@@ -149,3 +149,17 @@ test("enrichGroupCites fills title and date from the roster lookup", () => {
 test("cite tooltip hover delay is a debounce, not instant", () => {
   assert.ok(GROUP_CITE_HOVER_DELAY_MS >= 280)
 })
+
+test("range tokens [n:k-l] parse as the range start sentence", () => {
+  assert.deepEqual(parseGroupCiteToken("[1:41-45]"), { n: 1, refN: 41 })
+  assert.deepEqual(parseGroupCiteToken("[2:41–45]"), { n: 2, refN: 41 })
+  assert.deepEqual(parseGroupCiteToken("[1:stt_0041-0045]"), { n: 1, refN: 41 })
+})
+
+test("range token becomes one chip anchored at the range start sentence", () => {
+  const cites = [{ n: 1, meeting_id: "m1", sentence_id: "stt_0041", ref_n: 41 }]
+  const shown = displayedGroupCites("Settling failed [1:41-45].", cites)
+  assert.equal(shown.length, 1)
+  assert.equal(shown[0]?.sentence_id, "stt_0041")
+  assert.equal(shown[0]?.tokenRefN, 41)
+})

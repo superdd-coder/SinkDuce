@@ -2,6 +2,8 @@
 
 Chips show 1, 2, 3 in appearance order. Tokens still carry roster n
 and optional sentence k: `[1]`, `[1:53]`, `[1:stt_0053]`, `([1])`.
+A k may also be a sentence span — `[1:41-45]` (models compress
+consecutive excerpt refs) — and resolves to the span's first sentence.
 */
 
 import { MEETING_CITE_RE_SOURCE, parseMeetingRefGroups } from "./meeting-ref-chips.ts"
@@ -30,9 +32,10 @@ export type CiteMeetingLookup = {
   created_at?: string
 }
 
-/** Optional wrapping parens / extra brackets around `[n]` or `[n:k]`. */
+/** Optional wrapping parens / extra brackets around `[n]`, `[n:k]` or `[n:k-l]`.
+The span suffix stays non-capturing: consumers read capture 2 as the start k. */
 export const GROUP_CITE_RE_SOURCE =
-  String.raw`(?:\(|（|\[)?\[(\d+)(?::(?:stt_)?(\d+))?\](?:\)|）|\])?`
+  String.raw`(?:\(|（|\[)?\[(\d+)(?::(?:stt_)?(\d+)(?:\s*[-–]\s*(?:stt_)?\d+)?)?\](?:\)|）|\])?`
 
 export function parseGroupCiteToken(
   raw: string,

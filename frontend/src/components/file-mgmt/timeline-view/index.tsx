@@ -25,6 +25,7 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
+  useDroppable,
   DragOverlay,
   type CollisionDetection,
   type DragEndEvent,
@@ -32,7 +33,7 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core'
 import { arrayMove } from '@dnd-kit/sortable'
-import { ChainRow, parseEndDropId, parseStartDropId } from './chain-row'
+import { ChainRow, endDropId, parseEndDropId, parseStartDropId } from './chain-row'
 import { NodeCard, groupSourceForNode } from './node-card'
 import { NodeDetailSidebar } from './node-detail-sidebar'
 import { AddNodeDialog } from './add-node-dialog'
@@ -56,6 +57,37 @@ function visibleNodesForChain(chain: Chain, nodes: Node[]): Node[] {
   if (chain.is_main) return sorted
   // Branch row only shows event nodes; start/end stay as hidden anchors in DB
   return sorted.filter(n => n.node_type === 'event')
+}
+
+/**
+ * Empty open branch "+" — also the drop target for the first branch node.
+ * Reuses the chain end-drop id (`__end__:<chainId>`) so dOver/de treat the
+ * drop exactly like appending to an empty list (insert at index 0).
+ */
+function EmptyBranchAdd({
+  chainId,
+  onAdd,
+}: {
+  chainId: string
+  onAdd: () => void
+}) {
+  const t = useT()
+  const { setNodeRef, isOver } = useDroppable({ id: endDropId(chainId) })
+  return (
+    <button
+      type="button"
+      ref={setNodeRef}
+      data-branch-target
+      className={cn(
+        'relative z-[1] pm-timeline-add-slot w-10 h-10',
+        isOver && 'ring-2 ring-[color-mix(in_srgb,var(--pm-green)_22%,transparent)]',
+      )}
+      onClick={onAdd}
+      title={t("fileMgmt.addFirstNodeBranch")}
+    >
+      <Plus className="h-4 w-4" />
+    </button>
+  )
 }
 
 /**
@@ -2108,19 +2140,14 @@ export function TimelineView({
                       <Trash2 className="h-3 w-3" />
                     </button>
                   )}
-                  <button
-                    type="button"
-                    data-branch-target
-                    className="relative z-[1] pm-timeline-add-slot w-10 h-10"
-                    onClick={() => {
+                  <EmptyBranchAdd
+                    chainId={bi.bc.chain_id}
+                    onAdd={() => {
                       const all = chainData.get(bi.bc.chain_id)?.nodes ?? []
                       const maxO = all.reduce((m, n) => Math.max(m, n.order), 0)
                       addN(bi.bc.chain_id, maxO)
                     }}
-                    title={t("fileMgmt.addFirstNodeBranch")}
-                  >
-                    <Plus className="h-4 w-4" />
-                  </button>
+                  />
                 </div>
               ) : (
                 <div className="relative min-w-0">

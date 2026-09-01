@@ -592,7 +592,10 @@ export function useTranscription(meetingId: string | null) {
         return
       }
       try {
-        ws.send(JSON.stringify({ action: "stop" }))
+        // finalize:false — this stop only flushes the engine tail before the
+        // reconnect; finalizing would idle the live-summary engine and its
+        // closing LLM round would race the re-enable on the new session.
+        ws.send(JSON.stringify({ action: "stop", finalize: false }))
       } catch {
         /* socket already dying — the swap timer below reconnects */
       }

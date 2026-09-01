@@ -22,8 +22,10 @@ function stabilizeStreamingMarkdown(md: string): string {
  * raw syntax — models occasionally leak it, so strip it at render time.
  * The colon keeps ordinary markdown links ("[text](url)") untouched.
  */
-const CITE_MARKER_RE = /\[(?:n|ref)\s*:\s*[^\]]*\]/gi
-const CITE_MARKER_PARTIAL_RE = /\[(?:n|ref)\s*:\s*[^\]]*$/i
+const CITE_MARKER_RE =
+  /\[(?:n|ref)\s*:\s*[^\]]*\]|\[\d+\s*:\s*(?:stt_)?\d+\s*[-–]\s*(?:stt_)?\d+\]/gi
+const CITE_MARKER_PARTIAL_RE =
+  /\[(?:(?:n|ref)\s*:\s*[^\]]*|\d+\s*:\s*(?:stt_)?\d+\s*[-–]\s*(?:stt_)?\d*)$/i
 
 function stripCiteMarkers(md: string): string {
   return md.replace(CITE_MARKER_RE, "")

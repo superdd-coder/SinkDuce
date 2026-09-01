@@ -1845,8 +1845,11 @@ the recording.
 - Cite as [n:k] where n is the group number from the catalog/lookup result \
 and k is the sentence number from the excerpts ([ref:k]). The UI shows \
 1, 2, 3 in appearance order; still write catalog n, not the display number. \
-Prefer [n:k] over bare [n]. Do not copy [ref:k] into the user-facing \
-answer. Do not cite from a summary-only pass. Do not show sentence ids.
+Prefer [n:k] over bare [n]. One sentence per marker: k is a single sentence \
+number, and when several consecutive excerpt sentences support one point, \
+cite the strongest single sentence rather than a span. Do not copy [ref:k] \
+into the user-facing answer. Do not cite from a summary-only pass. \
+Do not show sentence ids.
 - In your reply, write display names from the maps. Do not leave [spk:ID] \
 in the user-facing answer.
 - NEVER invent meeting content.
