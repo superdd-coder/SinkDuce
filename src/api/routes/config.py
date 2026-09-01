@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import functools
 import json
 import logging
 import re
 import threading
 import time
 import uuid
+import weakref
 from typing import Callable
 
 from fastapi import APIRouter, Body, HTTPException
@@ -22,6 +24,34 @@ from src.providers.cache import get_or_create as cached_provider, invalidate as 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Config-mutating endpoints each do read-modify-write of the whole
+# config.yaml. They must not interleave: the oneshot dialog fires six
+# provider creates in parallel, and the last stale snapshot to land used to
+# wipe every provider written before it (oneshot "succeeded" with only the
+# LLM provider left). Keyed per event loop so tests using asyncio.run get a
+# fresh lock each time; production has a single loop.
+_write_locks: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def _write_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _write_locks.get(loop)
+    if lock is None:
+        lock = asyncio.Lock()
+        _write_locks[loop] = lock
+    return lock
+
+
+def _serialize_writes(fn):
+    """Run a mutating endpoint under the global config write lock."""
+
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        async with _write_lock():
+            return await fn(*args, **kwargs)
+
+    return wrapper
 
 
 def _public_dump(obj) -> dict:
@@ -348,6 +378,7 @@ def _slot_ref_valid(ref: str | None, providers: list, kind: str) -> bool:
 
 
 @router.put("/config")
+@_serialize_writes
 async def update_config(req: ConfigUpdateRequest):
     reload_config()
     config = get_config()
@@ -417,6 +448,7 @@ async def update_config(req: ConfigUpdateRequest):
 
 
 @router.post("/config/reload")
+@_serialize_writes
 async def reload():
     reload_config()
     await async_reload_services()
@@ -640,6 +672,7 @@ def list_llm_providers():
 
 
 @router.post("/llm/providers")
+@_serialize_writes
 async def add_llm_provider(provider: LLMProviderConfig):
     config = get_config()
     added = _add_to_provider_list(config.llm.providers, provider)
@@ -656,6 +689,7 @@ async def add_llm_provider(provider: LLMProviderConfig):
 
 
 @router.put("/llm/providers/{provider_id}")
+@_serialize_writes
 async def update_llm_provider(provider_id: str, update: dict = Body()):
     config = get_config()
     found = _apply_provider_update(
@@ -725,6 +759,7 @@ def _probe_provider_thinking(provider) -> str:
 
 
 @router.delete("/llm/providers/{provider_id}")
+@_serialize_writes
 async def delete_llm_provider(provider_id: str):
     config = get_config()
     target, rest = _remove_provider(config.llm.providers, provider_id)
@@ -771,6 +806,7 @@ async def test_llm_provider(provider_id: str):
 
 
 @router.post("/llm/providers/{provider_id}/set-default")
+@_serialize_writes
 async def set_default_llm_provider(provider_id: str):
     import logging
     _log = logging.getLogger("api.llm")
@@ -802,6 +838,7 @@ def list_embedding_providers():
 
 
 @router.post("/embedding/providers")
+@_serialize_writes
 async def add_embedding_provider(provider: EmbeddingProviderConfig):
     config = get_config()
     added = _add_to_provider_list(config.embedding.providers, provider)
@@ -812,6 +849,7 @@ async def add_embedding_provider(provider: EmbeddingProviderConfig):
 
 
 @router.put("/embedding/providers/{provider_id}")
+@_serialize_writes
 async def update_embedding_provider(provider_id: str, update: dict = Body()):
     config = get_config()
     found = _apply_provider_update(
@@ -830,6 +868,7 @@ async def update_embedding_provider(provider_id: str, update: dict = Body()):
 
 
 @router.delete("/embedding/providers/{provider_id}")
+@_serialize_writes
 async def delete_embedding_provider(provider_id: str):
     config = get_config()
     target, rest = _remove_provider(
@@ -870,6 +909,7 @@ async def test_embedding_provider(provider_id: str):
 
 
 @router.post("/embedding/providers/{provider_id}/set-default")
+@_serialize_writes
 async def set_default_embedding_provider(provider_id: str):
     import logging
     _log = logging.getLogger("api.embedding")
@@ -902,6 +942,7 @@ def list_rerank_providers():
 
 
 @router.post("/rerank/providers")
+@_serialize_writes
 async def add_rerank_provider(provider: RerankProviderConfig):
     config = get_config()
     added = _add_to_provider_list(config.rerank.providers, provider)
@@ -912,6 +953,7 @@ async def add_rerank_provider(provider: RerankProviderConfig):
 
 
 @router.put("/rerank/providers/{provider_id}")
+@_serialize_writes
 async def update_rerank_provider(provider_id: str, update: dict = Body()):
     config = get_config()
     found = _apply_provider_update(
@@ -930,6 +972,7 @@ async def update_rerank_provider(provider_id: str, update: dict = Body()):
 
 
 @router.delete("/rerank/providers/{provider_id}")
+@_serialize_writes
 async def delete_rerank_provider(provider_id: str):
     config = get_config()
     target, rest = _remove_provider(config.rerank.providers, provider_id, promote=True)
@@ -971,6 +1014,7 @@ async def test_rerank_provider(provider_id: str):
 
 
 @router.post("/rerank/providers/{provider_id}/set-default")
+@_serialize_writes
 async def set_default_rerank_provider(provider_id: str):
     import logging
     _log = logging.getLogger("api.rerank")
@@ -1053,6 +1097,7 @@ def list_file_transcription_providers():
 
 
 @router.post("/transcription/file-providers")
+@_serialize_writes
 async def add_file_transcription_provider(provider: TranscriptionProviderConfig):
     config = get_config()
     added = _add_to_provider_list(
@@ -1064,6 +1109,7 @@ async def add_file_transcription_provider(provider: TranscriptionProviderConfig)
 
 
 @router.put("/transcription/file-providers/{provider_id}")
+@_serialize_writes
 async def update_file_transcription_provider(provider_id: str, update: dict = Body()):
     config = get_config()
     invalidate_provider(f"file_trans:{provider_id}")
@@ -1082,6 +1128,7 @@ async def update_file_transcription_provider(provider_id: str, update: dict = Bo
 
 
 @router.delete("/transcription/file-providers/{provider_id}")
+@_serialize_writes
 async def delete_file_transcription_provider(provider_id: str):
     config = get_config()
     target, rest = _remove_provider(
@@ -1226,6 +1273,7 @@ def _maybe_autoload_local(provider_id: str, adapter: str) -> None:
 
 
 @router.post("/transcription/file-providers/{provider_id}/set-active")
+@_serialize_writes
 async def set_active_file_transcription_provider(provider_id: str):
     import logging
     _log = logging.getLogger("api.transcription")
@@ -1311,6 +1359,7 @@ def list_realtime_transcription_providers():
 
 
 @router.post("/transcription/realtime-providers")
+@_serialize_writes
 async def add_realtime_transcription_provider(provider: TranscriptionProviderConfig):
     config = get_config()
     added = _add_to_provider_list(
@@ -1325,6 +1374,7 @@ async def add_realtime_transcription_provider(provider: TranscriptionProviderCon
 
 
 @router.put("/transcription/realtime-providers/{provider_id}")
+@_serialize_writes
 async def update_realtime_transcription_provider(provider_id: str, update: dict = Body()):
     config = get_config()
     invalidate_provider(f"rt_trans:{provider_id}")
@@ -1344,6 +1394,7 @@ async def update_realtime_transcription_provider(provider_id: str, update: dict 
 
 
 @router.delete("/transcription/realtime-providers/{provider_id}")
+@_serialize_writes
 async def delete_realtime_transcription_provider(provider_id: str):
     config = get_config()
     target, rest = _remove_provider(
@@ -1449,6 +1500,7 @@ async def test_realtime_transcription_provider(provider_id: str):
 
 
 @router.post("/transcription/realtime-providers/{provider_id}/set-active")
+@_serialize_writes
 async def set_active_realtime_transcription_provider(provider_id: str):
     import logging
     _log = logging.getLogger("api.transcription")
