@@ -134,11 +134,36 @@ def _thinking_on_for_tool_round(
     return True
 
 
-def _retry_llm_kwargs_after_error(kwargs: dict, error: BaseException) -> dict | None:
-    """One compatible retry. Thinking + forced tool_choice is a 400 on Qwen."""
+def _retry_llm_kwargs_after_error(kwargs: dict, error: BaseException, llm=None) -> dict | None:
+    """One compatible retry. Thinking + forced tool_choice is a 400 on Qwen;
+    always-thinking models reject thinking-off entirely (百炼第三方智谱 etc.).
+    """
+    from src.providers.llm.thinking import is_always_think_error
+
     msg = str(error).lower()
     out = dict(kwargs)
     extra = dict(out.get("extra_body") or {})
+    if is_always_think_error(error):
+        # The model cannot turn thinking off: switch to reasoning_effort and
+        # remember the posture so subsequent calls skip the rejected param.
+        if llm is not None and getattr(llm, "_thinking_mode", None) is not None:
+            try:
+                llm._thinking_mode = "always"
+                from src.providers.llm.thinking import remember_thinking_mode
+
+                remember_thinking_mode(
+                    str(getattr(llm, "_base_url", "") or ""),
+                    str(getattr(llm, "_model", "") or ""),
+                    "always",
+                )
+            except Exception:
+                pass
+        out.pop("extra_body", None)
+        if not out.get("reasoning_effort"):
+            out["reasoning_effort"] = "low"
+        if isinstance(out.get("tool_choice"), dict):
+            out["tool_choice"] = "auto"
+        return out
     thinking_rejects_choice = "thinking" in msg and "tool_choice" in msg
     if thinking_rejects_choice:
         already_off = extra.get("enable_thinking") is False or (
@@ -1339,26 +1364,33 @@ class ChatboxAgent:
                 base_url = str(getattr(self._llm, "_base_url", "") or "").lower()
                 is_dashscope = "dashscope" in base_url or "aliyuncs" in base_url
                 is_deepseek = "deepseek" in model_lower or "deepseek" in base_url
-                build_extra = getattr(self._llm, "_build_thinking_extra", None)
-                if callable(build_extra):
-                    stream_kwargs["extra_body"] = build_extra(think_round)
-                elif think_round:
-                    if is_dashscope:
-                        stream_kwargs["extra_body"] = {"enable_thinking": True}
-                    elif "minimax" in model_lower:
+                # Preferred: provider-aware builder — knows the model's
+                # thinking posture (always-thinking models get reasoning_effort
+                # instead of a rejected enable_thinking=false).
+                apply_thinking = getattr(self._llm, "_apply_thinking_kwargs", None)
+                if callable(apply_thinking):
+                    apply_thinking(stream_kwargs, think_round)
+                else:
+                    build_extra = getattr(self._llm, "_build_thinking_extra", None)
+                    if callable(build_extra):
+                        stream_kwargs["extra_body"] = build_extra(think_round)
+                    elif think_round:
+                        if is_dashscope:
+                            stream_kwargs["extra_body"] = {"enable_thinking": True}
+                        elif "minimax" in model_lower:
+                            stream_kwargs["extra_body"] = {
+                                "thinking": {"type": "adaptive"}
+                            }
+                        else:
+                            stream_kwargs["extra_body"] = {
+                                "thinking": {"type": "enabled"}
+                            }
+                    elif is_dashscope:
+                        stream_kwargs["extra_body"] = {"enable_thinking": False}
+                    elif "minimax" in model_lower or is_deepseek:
                         stream_kwargs["extra_body"] = {
-                            "thinking": {"type": "adaptive"}
+                            "thinking": {"type": "disabled"}
                         }
-                    else:
-                        stream_kwargs["extra_body"] = {
-                            "thinking": {"type": "enabled"}
-                        }
-                elif is_dashscope:
-                    stream_kwargs["extra_body"] = {"enable_thinking": False}
-                elif "minimax" in model_lower or is_deepseek:
-                    stream_kwargs["extra_body"] = {
-                        "thinking": {"type": "disabled"}
-                    }
                 try:
                     mt = getattr(self._llm, "_default_max_tokens", 0)
                     if isinstance(mt, int) and mt > 0:
@@ -1370,7 +1402,9 @@ class ChatboxAgent:
                     stream = client.chat.completions.create(**stream_kwargs)
                 except Exception as e:
                     logger.warning("LLM streaming call failed: %s", e)
-                    retry_kwargs = _retry_llm_kwargs_after_error(stream_kwargs, e)
+                    retry_kwargs = _retry_llm_kwargs_after_error(
+                        stream_kwargs, e, llm=getattr(self, "_llm", None),
+                    )
                     if retry_kwargs is not None:
                         try:
                             stream = client.chat.completions.create(**retry_kwargs)
@@ -2744,6 +2778,41 @@ class ChatboxAgent:
         """Yield text in small chunks for SSE streaming."""
         for i in range(0, len(text), chunk_size):
             yield text[i:i + chunk_size]
+
+    def persist_interrupted_answer(self, session_id: str, text: str) -> None:
+        """Persist a partially generated answer after a mid-stream disconnect.
+
+        ``chat_stream`` normally persists the assistant message itself, right
+        before yielding ``done``. When the client disconnects earlier (page
+        refresh, stop, crash) that final persist never runs; the stream
+        handler calls this from its ``finally`` so the text already generated
+        survives. Skips when the last assistant message already carries this
+        exact text (done was persisted in the window before the close).
+        """
+        text = (text or "").strip()
+        if not text:
+            return
+        try:
+            recent = self._store.get_messages(session_id, limit=2)
+            for msg in reversed(recent):
+                if getattr(msg, "role", None) == "assistant":
+                    if (getattr(msg, "content", None) or "") == text:
+                        return
+                    break
+            self._store.add_message(
+                session_id,
+                "assistant",
+                text,
+                metadata={"tool_calls": 0, "partial": True, "interrupted": True},
+            )
+            logger.info(
+                "[Chatbox] Persisted interrupted partial answer session=%s chars=%d",
+                session_id, len(text),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist interrupted answer session=%s", session_id
+            )
 
 
 def _preview_tool_content(content, *, max_chars: int = 4000) -> str:

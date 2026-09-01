@@ -5844,14 +5844,14 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   visibility: visible;
   pointer-events: auto;
   z-index: 2;
-  transition: opacity 220ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  transition: opacity 140ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
 }
 .pm-shell-view-layer.is-exiting {
   opacity: 0;
   visibility: visible;
   pointer-events: none;
   z-index: 2;
-  transition: opacity 160ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  transition: opacity 100ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
 }
 .pm-shell-view-layer.is-idle {
   opacity: 0;
@@ -22956,13 +22956,20 @@ button.pm-files-row-edit {
   background: var(--pm-green, #1a5e3d);
   animation: pm-meeting-live-pulse 1.4s ease infinite;
 }
+/* Each block (source / translation) is its own scroll-clipped box: exactly
+   two visual lines, oldest roll out the top — a wrapping source line can
+   only clip inside the source box, never push translations around. */
 .pm-ls-tail-lines {
   display: flex;
   flex-direction: column;
-  justify-content: flex-end; /* latest lines stay visible, old roll out the top */
+  justify-content: flex-end;
   font-size: 13px; /* anchors the em math below to the line font size */
-  max-height: 4.5em; /* exactly 3 lines × 1.5 line-height */
+  max-height: 3em; /* exactly 2 lines × 1.5 line-height */
   overflow: hidden;
+}
+/* Translation-off mode: one box, up to four source lines */
+.pm-ls-tail-lines.is-source-only {
+  max-height: 6em;
 }
 .pm-ls-tail-lines p {
   margin: 0;
@@ -22976,8 +22983,8 @@ button.pm-files-row-edit {
   opacity: 0.65;
   font-style: italic;
 }
-/* Inline translation inside a tail line (bilingual captions) */
-.pm-ls-tail-translation {
+/* Translation line of a bilingual pair — reads as secondary to the source */
+.pm-ls-tail-lines p.is-translation {
   opacity: 0.66;
 }
 @keyframes pm-ls-enter {

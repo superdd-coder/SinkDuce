@@ -22,12 +22,12 @@ interface OneShotOpenRouterDialogProps {
 }
 
 const BASE_URL = "https://openrouter.ai/api/v1"
-const DEFAULT_MODEL = "deepseek/deepseek-v4-flash-0731"
-const CHAT_MODEL = "qwen/qwen3.7-plus"
-const LIBRARY_MODEL = "qwen/qwen3.7-flash"
-const MEETING_MODEL = "deepseek/deepseek-v4-pro-0813"
-// qwen3.7-plus / flash: vision + tools. DeepSeek: tools only, no vision.
-const OPENROUTER_VISION_AND_TOOLS = ["qwen/qwen3.7-plus", "qwen/qwen3.7-flash"]
+const DEFAULT_MODEL = "qwen/qwen3.8-flash"
+const CHAT_MODEL = "qwen/qwen3.8-flash"
+const LIBRARY_MODEL = "qwen/qwen3.8-flash"
+const MEETING_MODEL = "qwen/qwen3.8-flash"
+// qwen3.8 / qwen3.7 (plus & flash): vision + tools. DeepSeek: tools only, no vision.
+const OPENROUTER_VISION_AND_TOOLS = ["qwen/qwen3.8-flash", "qwen/qwen3.7-plus", "qwen/qwen3.7-flash"]
 
 function uniqueModels(names: string[]): string[] {
   return [...new Set(names.map((n) => n.trim()).filter(Boolean))]
@@ -126,6 +126,7 @@ export function OneShotOpenRouterDialog({ open, onOpenChange, onSaved }: OneShot
       }
       await updateConfig("enrichment", {
         meeting_model: slots.meeting_model,
+        live_summary_model: slots.meeting_model,
         enrichment_model: slots.enrichment_model,
         agentic_query_model: slots.agentic_query_model,
         note_distill_model: slots.note_distill_model,

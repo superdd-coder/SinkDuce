@@ -146,6 +146,11 @@ class LLMProviderConfig(BaseModel):
     default_model: str = ""
     visual_model_ids: list[str] = []
     function_call_model_ids: list[str] = []
+    # Thinking posture of the default model, probed once at save time:
+    # "" unknown (send enable_thinking as before) | "toggle" (switchable)
+    # | "always" (rejects thinking-off; use reasoning_effort instead)
+    # | "none" (rejects thinking params entirely; send nothing).
+    thinking_mode: str = ""
 
 
 class LLMConfig(BaseModel):
@@ -243,6 +248,14 @@ class ServerConfig(BaseModel):
     # code reads it — MCP is reached at ``http://<host>:<api_port>/mcp``.
 
 
+# DashScope LiveTranslate providers are stored in the realtime transcription
+# provider list but are a separate capability. Their is_active flag is the
+# live-translation default and is scoped independently from the realtime
+# transcription default (see TranscriptionConfig.active_realtime_provider and
+# the kind-scoped exclusivity sweeps in api/routes/config.py).
+LIVE_TRANSLATE_ADAPTER = "dashscope_livetranslate_realtime"
+
+
 class TranscriptionProviderConfig(BaseModel):
     id: str = ""
     name: str = ""
@@ -280,7 +293,17 @@ class TranscriptionConfig(BaseModel):
 
     @property
     def active_realtime_provider(self) -> TranscriptionProviderConfig | None:
-        return next((p for p in self.realtime_providers if p.is_active), None)
+        # LiveTranslate (translation) providers share this list but are a
+        # separate capability: their is_active flag is the translation
+        # default and must never act as the transcription default.
+        return next(
+            (
+                p
+                for p in self.realtime_providers
+                if p.is_active and (p.adapter or "") != LIVE_TRANSLATE_ADAPTER
+            ),
+            None,
+        )
 
     def get_local_file_provider(self) -> TranscriptionProviderConfig:
         """Return a built-in local file transcription provider (ONNX runtime)."""

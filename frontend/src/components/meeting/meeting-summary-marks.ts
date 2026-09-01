@@ -268,6 +268,11 @@ export function prepareMeetingSummaryForTiptapView(
     .replace(/［/g, "[")
     .replace(/］/g, "]")
 
+  // A line-leading `*` is a CommonMark bullet marker, not an italic
+  // delimiter — normalize to `-` before the emphasis pass below so no
+  // single-star pairing can ever touch list markers.
+  s = s.replace(/^([ \t]*)\*[ \t]+/gm, "$1- ")
+
   // Interior spaces in **bold** / *italic* only — never eat gaps between adjacent emphasis
   s = trimEmphasisInteriorSpaces(s)
 

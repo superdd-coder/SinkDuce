@@ -409,13 +409,21 @@ async def ingest_recording_pcm(meeting_id: str, request: Request):
 
 
 @router.post("/meetings/{meeting_id}/finalize-recording")
-def finalize_recording(meeting_id: str):
+def finalize_recording(meeting_id: str, recovery: bool = False):
     meeting = store.get_meeting(meeting_id)
     if not meeting:
         raise HTTPException(404, "Meeting not found")
     path = store.finalize_recording_pcm(meeting_id)
+    if recovery and meeting.status == MeetingStatus.recording:
+        # Interrupted-capture recovery: land the meeting in the uploaded-audio
+        # shape (audio_path + status created) so the page shows the review UI
+        # and the list stops reporting Recording — even when there was no PCM.
+        store.update_meeting(meeting_id, status=MeetingStatus.created)
     updated = store.get_meeting(meeting_id)
-    logger.info("[FINALIZE-RECORDING] Meeting %s audio_path=%s", meeting_id, path)
+    logger.info(
+        "[FINALIZE-RECORDING] Meeting %s audio_path=%s recovery=%s status=%s",
+        meeting_id, path, recovery, updated.status.value,
+    )
     return _serialize_meeting(updated)
 
 
@@ -577,18 +585,12 @@ async def get_active_provider_info():
         realtime_transcription_registry,
         resolve_adapter=resolve_realtime_adapter,
     )
-    # Live bilingual captions: available when a LiveTranslate provider is
-    # configured, or the active realtime provider is DashScope (API key
-    # re-used for the synthesized translation session).
+    # Live bilingual captions: available only when a LiveTranslate provider
+    # is explicitly configured in Settings → Live translation.
     supports_translation = any(
         resolve_realtime_adapter(p.adapter or "") == "dashscope_livetranslate_realtime"
         for p in (config.transcription.realtime_providers or [])
     )
-    if not supports_translation and rt_cfg is not None:
-        adapter_name = resolve_realtime_adapter(rt_cfg.adapter or "")
-        supports_translation = adapter_name.startswith("dashscope") and bool(
-            (rt_cfg.api_key or "").strip()
-        )
     realtime_info["supports_realtime_translation"] = supports_translation
 
     return {
@@ -611,12 +613,17 @@ async def save_realtime_transcript(meeting_id: str, body: dict = Body()):
     collected segments here so the meeting gets a saved transcript, a
     ``transcript_path``, and a status of ``completed``. Subsequent operations
     (Summarize, Allocate) then work the same as for file-based meetings.
+
+    With ``body["partial"]=true`` the transcript is checkpointed without the
+    status flip or pipeline side effects, so a page refresh mid-recording
+    still leaves the closed segments recoverable on the server.
     """
     logger.info("[SAVE-TRANSCRIPT] Meeting %s (realtime path)", meeting_id)
     meeting = store.get_meeting(meeting_id)
     if not meeting:
         logger.warning("[SAVE-TRANSCRIPT] Meeting %s NOT FOUND", meeting_id)
         raise HTTPException(404, "Meeting not found")
+    partial = bool(body.get("partial"))
     raw_segments = body.get("segments") or []
     if not isinstance(raw_segments, list):
         raise HTTPException(400, "segments must be a list")
@@ -629,9 +636,15 @@ async def save_realtime_transcript(meeting_id: str, body: dict = Body()):
     result = TranscriptionResult(text=text, segments=segments)
     store.save_transcript(meeting_id, result)
     logger.info(
-        "[SAVE-TRANSCRIPT] Saved %d segments (%d chars) for meeting %s",
-        len(segments), len(text), meeting_id,
+        "[SAVE-TRANSCRIPT] Saved %d segments (%d chars) for meeting %s%s",
+        len(segments), len(text), meeting_id, " (partial)" if partial else "",
     )
+    if partial:
+        # Checkpoint only: keep status='recording' untouched and skip
+        # pipeline/status side effects so the live capture state machine
+        # keeps running. The final save below does the full transition.
+        return {"message": "Partial transcript saved", "segments": len(segments)}
+
     try:
         recovered = store.finalize_recording_pcm(meeting_id)
         if recovered:

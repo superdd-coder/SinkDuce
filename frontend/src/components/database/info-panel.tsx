@@ -6,6 +6,7 @@ import { TiptapEditor } from "@/components/ui/tiptap-editor"
 import { cn } from "@/lib/utils"
 import { onInfoRefresh, triggerInfoRefresh } from "@/lib/info-refresh"
 import { useAppStore } from "@/stores/app-store"
+import { useShallow } from "zustand/react/shallow"
 import {
   getCollectionSummary,
   getProjectDescription,
@@ -65,7 +66,14 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
   /** To-do height is CSS 2/5 of the rail stack — not tied to left chrome. */
   const notesCardRef = useRef<NotesCardHandle>(null)
 
-  const { setSidebarView, setActiveMeeting, setPendingOpenFile, collections } = useAppStore()
+  const { setSidebarView, setActiveMeeting, setPendingOpenFile, collections } = useAppStore(
+    useShallow((s) => ({
+      setSidebarView: s.setSidebarView,
+      setActiveMeeting: s.setActiveMeeting,
+      setPendingOpenFile: s.setPendingOpenFile,
+      collections: s.collections,
+    }))
+  )
   const collectionName = collections.find(c => c.id === collection)?.name || collection
 
   // Track activity edges so we only silent-refresh when work finishes

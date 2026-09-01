@@ -299,6 +299,38 @@ def unenroll(person_id: str, meeting_id: str) -> Person | None:
     )
 
 
+def unenroll_meeting(meeting_id: str) -> None:
+    """Detach a deleted/discarded meeting from every person's voiceprint."""
+    from src.speakers.store import list_people
+
+    for person in list_people():
+        unenroll(person.id, meeting_id)
+        prune_orphan_enrollments(person.id)
+
+
+def prune_orphan_enrollments(person_id: str) -> None:
+    """Drop voiceprint rows whose meeting no longer exists, then recompute."""
+    from src.meeting.store import get_meeting
+
+    person = get_person(person_id)
+    if person is None or not person.recent:
+        return
+    kept = [r for r in person.recent if get_meeting(r.meeting_id) is not None]
+    last_ok = not person.last_meeting_id or get_meeting(person.last_meeting_id) is not None
+    if len(kept) == len(person.recent) and last_ok:
+        return
+    person.recent = kept
+    person = _recompute_from_recent(person)
+    update_person(
+        person.id,
+        centroid=person.centroid,
+        recent=person.recent,
+        speech_sec=person.speech_sec,
+        last_meeting_id=person.last_meeting_id,
+        last_speaker_id=person.last_speaker_id,
+    )
+
+
 def rebind(
     from_person_id: str | None,
     to_person_id: str,
@@ -1148,6 +1180,8 @@ def resolve_assignee_person_id(
 def person_detail_dict(person) -> dict:
     from src.speakers.store import person_public_dict
 
+    prune_orphan_enrollments(person.id)
+    person = get_person(person.id) or person
     data = person_public_dict(person)
     data["meetings"] = person_meeting_rows(person)
     data["meeting_count"] = len(data["meetings"])

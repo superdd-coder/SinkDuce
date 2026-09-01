@@ -42,6 +42,61 @@ export function tailSegments(
   return tail.slice(Math.max(0, tail.length - limit))
 }
 
+export interface BilingualTailRow {
+  key: string
+  text: string
+  kind: "source" | "translation"
+  partial: boolean
+}
+
+/** Bilingual tail rows in BLOCK layout: the newest sources on top (≤2
+ * lines), the newest translations below (≤2 lines), oldest first within
+ * each block. Units are a completed segment or the in-flight partial —
+ * each contributes at most one line per kind, so late translations can
+ * never crowd source lines out. When nothing has a translation the tail
+ * widens to 4 source lines instead. */
+export function tailBilingualRows(
+  segments: TranscriptSegment[],
+  tailFromT: number,
+  partial: string,
+  partialTranslation: string | undefined,
+): BilingualTailRow[] {
+  const units: { key: string; source: string; translation?: string; partial: boolean }[] = []
+  tailSegments(segments, tailFromT, 5).forEach((s, i) => {
+    units.push({
+      key: `${s.start}-${i}`,
+      source: s.text,
+      translation: s.translation || undefined,
+      partial: false,
+    })
+  })
+  if (partial) {
+    units.push({
+      key: "partial",
+      source: partial,
+      translation: partialTranslation || undefined,
+      partial: true,
+    })
+  }
+  const hasTranslation = units.some((u) => !!u.translation)
+  const keep = hasTranslation ? 2 : 4
+  const kept = units.slice(Math.max(0, units.length - keep))
+  const sourceRows: BilingualTailRow[] = []
+  const translationRows: BilingualTailRow[] = []
+  for (const u of kept) {
+    sourceRows.push({ key: `${u.key}-s`, text: u.source, kind: "source", partial: u.partial })
+    if (u.translation) {
+      translationRows.push({
+        key: `${u.key}-t`,
+        text: u.translation,
+        kind: "translation",
+        partial: u.partial,
+      })
+    }
+  }
+  return [...sourceRows, ...translationRows]
+}
+
 export type RelativeAgeKey = "justNow" | "minutesAgo" | "hoursAgo"
 
 /** Coarse age for the "updated" meta line; never throws on bad input. */

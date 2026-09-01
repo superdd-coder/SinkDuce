@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
+import threading
+from collections import OrderedDict
+from pathlib import Path
 from typing import Any, Callable
 
 from src.config import TranscriptionProviderConfig
@@ -24,6 +29,104 @@ MODEL_FUN_ASR_REALTIME = "fun-asr-realtime"
 MODEL_QWEN_REALTIME = "qwen-audio-3.0-asr-flash-streaming"
 ALLOWED_REALTIME_MODELS = (MODEL_FUN_ASR_REALTIME, MODEL_QWEN_REALTIME)
 _DEFAULT_REALTIME_MODEL = MODEL_FUN_ASR_REALTIME
+
+
+# ── Cloud vocabulary cache ───────────────────────────────────────────
+# DashScope caps accounts at 10 vocabulary tables. Creating one per WS
+# connection burned quota AND added ~3s (create + poll + settle) to every
+# connect, translation toggle, and page-refresh reconnect. Cache
+# (model, words, api_key) → vocab_id, LRU-capped and persisted under
+# data/hot_words/ so restarts reuse tables instead of orphaning them.
+# Eviction (and only eviction) deletes the cloud table.
+_VOCAB_CACHE_LIMIT = 4
+_vocab_cache: "OrderedDict[str, dict]" = OrderedDict()
+_vocab_cache_lock = threading.Lock()
+_vocab_cache_loaded = False
+
+
+def _vocab_cache_path() -> Path:
+    from src.config import DATA_DIR
+
+    return Path(DATA_DIR) / "hot_words" / "realtime_vocab_cache.json"
+
+
+def _vocab_cache_key(model: str, vocabulary: dict, api_key: str) -> str:
+    payload = json.dumps(
+        {"model": model, "words": vocabulary, "api_key": api_key},
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _vocab_cache_load_locked() -> None:
+    global _vocab_cache_loaded
+    _vocab_cache_loaded = True
+    try:
+        data = json.loads(_vocab_cache_path().read_text("utf-8"))
+    except FileNotFoundError:
+        return
+    except Exception:
+        logger.warning(
+            "[DashScope RT] Vocabulary cache unreadable; starting empty", exc_info=True
+        )
+        return
+    entries = data.get("entries") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        return
+    for e in entries:
+        if isinstance(e, dict) and e.get("key") and e.get("vocab_id"):
+            _vocab_cache[str(e["key"])] = {
+                "vocab_id": str(e["vocab_id"]),
+                "api_key": str(e.get("api_key") or ""),
+                "model": str(e.get("model") or ""),
+            }
+
+
+def _vocab_cache_save_locked() -> None:
+    try:
+        path = _vocab_cache_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        entries = [{"key": k, **v} for k, v in _vocab_cache.items()]
+        path.write_text(
+            json.dumps({"entries": entries}, ensure_ascii=False, indent=1), "utf-8"
+        )
+    except Exception:
+        logger.warning("[DashScope RT] Vocabulary cache save failed", exc_info=True)
+
+
+def _vocab_cache_evict_locked() -> None:
+    while len(_vocab_cache) > _VOCAB_CACHE_LIMIT:
+        _, old = _vocab_cache.popitem(last=False)
+        try:
+            VocabularyService(api_key=old["api_key"]).delete_vocabulary(old["vocab_id"])
+            logger.info(
+                "[DashScope RT] Evicted cached vocabulary %s", old["vocab_id"]
+            )
+        except Exception:
+            logger.warning(
+                "[DashScope RT] Failed to delete evicted vocabulary %s",
+                old["vocab_id"],
+                exc_info=True,
+            )
+
+
+def _vocab_cache_drop(key: str) -> None:
+    """Remove one entry (e.g. a cached table that start() rejected)."""
+    with _vocab_cache_lock:
+        entry = _vocab_cache.pop(key, None)
+        _vocab_cache_save_locked()
+    if entry is not None:
+        try:
+            VocabularyService(api_key=entry["api_key"]).delete_vocabulary(
+                entry["vocab_id"]
+            )
+        except Exception:
+            logger.warning(
+                "[DashScope RT] Failed to delete dropped vocabulary %s",
+                entry["vocab_id"],
+                exc_info=True,
+            )
 
 
 def _require_dashscope() -> None:
@@ -114,21 +217,57 @@ class DashScopeRealtimeTranscription(RealtimeTranscriptionProvider):
         self._base_ws_url = _DEFAULT_WS_URL
         self._recognition: Any | None = None
         self._vocab_id: str | None = None
+        self._last_vocab_cache_key: str | None = None
 
     def _uses_instant_vocabulary(self) -> bool:
         """Qwen supports instant vocabulary; Fun-ASR uses VocabularyService."""
         return self._model == MODEL_QWEN_REALTIME
 
     def _create_vocabulary(self, hot_words: list) -> str | None:
-        """Create a cloud-side hot words vocabulary and return its ID (Fun-ASR)."""
+        """Return a cloud hot-words vocabulary ID for this model + word set.
+
+        Cached per (model, words, api_key) and reused across connections —
+        a fresh table is only created when the words change.
+        """
         from src.meeting.transcription.dashscope_file import (
             _build_precompiled_vocabulary_items,
         )
 
         vocabulary = _build_precompiled_vocabulary_items(hot_words)
         if not vocabulary:
+            self._last_vocab_cache_key = None
             return None
 
+        key = _vocab_cache_key(self._model, vocabulary, self._api_key)
+        self._last_vocab_cache_key = key
+        with _vocab_cache_lock:
+            if not _vocab_cache_loaded:
+                _vocab_cache_load_locked()
+            hit = _vocab_cache.get(key)
+            if hit is not None:
+                _vocab_cache.move_to_end(key)
+                logger.info(
+                    "[DashScope RT] Reusing cached vocabulary %s (%d hot words)",
+                    hit["vocab_id"], len(vocabulary),
+                )
+                return hit["vocab_id"]
+
+        vocab_id = self._create_vocabulary_remote(vocabulary)
+        if not vocab_id:
+            return None
+
+        with _vocab_cache_lock:
+            _vocab_cache[key] = {
+                "vocab_id": vocab_id,
+                "api_key": self._api_key,
+                "model": self._model,
+            }
+            _vocab_cache_evict_locked()
+            _vocab_cache_save_locked()
+        return vocab_id
+
+    def _create_vocabulary_remote(self, vocabulary: dict) -> str | None:
+        """Create a fresh cloud vocabulary table and wait until it is OK."""
         import time
 
         service = VocabularyService(api_key=self._api_key)
@@ -156,7 +295,9 @@ class DashScopeRealtimeTranscription(RealtimeTranscriptionProvider):
                 full_response = service.query_vocabulary(vocab_id)
                 status = full_response[0] if isinstance(full_response, list) else full_response
                 if isinstance(status, dict) and status.get("status") == "OK":
-                    time.sleep(2)
+                    # Short settle for server-side propagation; tables are
+                    # cached afterwards so this cost is paid once per change.
+                    time.sleep(1.0)
                     logger.info(
                         "[DashScope RT] Vocabulary %s ready with %d hot words",
                         vocab_id, len(vocabulary),
@@ -218,6 +359,7 @@ class DashScopeRealtimeTranscription(RealtimeTranscriptionProvider):
         }
 
         vocab_note = 0
+        vocab_cache_key: str | None = None
         if self._uses_instant_vocabulary():
             vocabulary = _build_instant_vocabulary(hot_words)
             if vocabulary:
@@ -233,6 +375,7 @@ class DashScopeRealtimeTranscription(RealtimeTranscriptionProvider):
                 recognition_kwargs["vocabulary_id"] = vocab_id
                 self._vocab_id = vocab_id
                 vocab_note = 1
+            vocab_cache_key = getattr(self, "_last_vocab_cache_key", None)
 
         self._recognition = Recognition(**recognition_kwargs)
 
@@ -252,6 +395,29 @@ class DashScopeRealtimeTranscription(RealtimeTranscriptionProvider):
             vocab_note,
             start_kwargs,
         )
+        try:
+            await asyncio.to_thread(self._recognition.start, **start_kwargs)
+            return
+        except Exception:
+            if vocab_cache_key is None:
+                raise
+            logger.warning(
+                "[DashScope RT] start() failed with a cached vocabulary — "
+                "dropping it and retrying once with a fresh table",
+                exc_info=True,
+            )
+        # Cached table may have been deleted out-of-band (quota cleanup):
+        # drop it and build a fresh one, once.
+        _vocab_cache_drop(vocab_cache_key)
+        vocab_id = await asyncio.to_thread(self._create_vocabulary, hot_words)
+        if vocab_id:
+            recognition_kwargs["vocabulary_id"] = vocab_id
+            self._vocab_id = vocab_id
+            vocab_note = 1
+        else:
+            recognition_kwargs.pop("vocabulary_id", None)
+            vocab_note = 0
+        self._recognition = Recognition(**recognition_kwargs)
         await asyncio.to_thread(self._recognition.start, **start_kwargs)
 
     async def send_frame(self, audio_data: bytes) -> None:
@@ -267,16 +433,17 @@ class DashScopeRealtimeTranscription(RealtimeTranscriptionProvider):
                 await asyncio.to_thread(self._recognition.stop)
             except Exception:
                 # Client may already be gone (abrupt disconnect makes the SDK
-                # raise). The vocabulary table must still be freed — accounts
-                # cap at 10 tables and leaks block ALL hot words with 429.
+                # raise). Stopping the SDK is still required.
                 logger.warning(
-                    "Realtime recognition.stop() raised; freeing vocabulary anyway",
+                    "Realtime recognition.stop() raised during stop",
                     exc_info=True,
                 )
             self._recognition = None
             logger.info("Realtime transcription stopped")
-        if self._vocab_id:
-            await asyncio.to_thread(self._delete_vocabulary, self._vocab_id)
+        # The vocabulary table is intentionally NOT deleted here: it is cached
+        # (LRU-capped on disk, evicted tables are deleted) and reused by the
+        # next connection — deleting it would re-pay ~3s of table setup on
+        # every connect and every translation toggle.
 
 
 class _RealtimeCallback:

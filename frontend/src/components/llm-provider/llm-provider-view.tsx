@@ -17,6 +17,7 @@ import { Plus, Star, Pencil, Trash2, Plug, Loader2, Eye, EyeOff, Zap, Download, 
 import { DropdownSelect } from "@/components/ui/dropdown-select"
 import { cn } from "@/lib/utils"
 import { useAppStore } from "@/stores/app-store"
+import { useShallow } from "zustand/react/shallow"
 import {
   getLLMProviders, type LLMProvider,
   getEmbeddingProviders, createEmbeddingProvider, updateEmbeddingProvider,
@@ -499,6 +500,10 @@ function SimpleProviderDialog<T extends { id: string }>({
 
 // ── Transcription provider card ──
 
+// LiveTranslate providers live in the realtime provider list but are managed
+// in their own "Live translation" section — never shown as transcription.
+const LIVE_TRANSLATE_ADAPTER = "dashscope_livetranslate_realtime"
+
 interface TranscriptionProviderCardProps {
   provider: TranscriptionProvider
   kind: "file" | "realtime"
@@ -604,7 +609,14 @@ function TranscriptionProviderCard({ provider, onEdit, onRefresh, onDelete, onSe
 
 export function LLMProviderView() {
   const t = useT()
-  const { providers, setProviders, developerMode, toggleDeveloperMode } = useAppStore()
+  const { providers, setProviders, developerMode, toggleDeveloperMode } = useAppStore(
+    useShallow((s) => ({
+      providers: s.providers,
+      setProviders: s.setProviders,
+      developerMode: s.developerMode,
+      toggleDeveloperMode: s.toggleDeveloperMode,
+    }))
+  )
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingProvider, setEditingProvider] = useState<LLMProvider | null>(null)
   const [modelDownloadOpen, setModelDownloadOpen] = useState(false)
@@ -628,6 +640,11 @@ export function LLMProviderView() {
   const [rtTransProviders, setRtTransProviders] = useState<TranscriptionProvider[]>([])
   const [rtTransDialogOpen, setRtTransDialogOpen] = useState(false)
   const [editingRtTrans, setEditingRtTrans] = useState<TranscriptionProvider | null>(null)
+
+  // Live translation (LiveTranslate) providers — stored in the same
+  // realtime provider list, but surfaced in their own Settings section.
+  const [ltDialogOpen, setLtDialogOpen] = useState(false)
+  const [editingLt, setEditingLt] = useState<TranscriptionProvider | null>(null)
 
   // Hot words manager
   const [hotWordsManagerOpen, setHotWordsManagerOpen] = useState(false)
@@ -855,7 +872,12 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
 
   // Filter out built-in local providers — those are shown in Local Models section
   const cloudFileProviders = fileTransProviders.filter((p) => !p.id.startsWith("builtin-"))
-  const cloudRtProviders = rtTransProviders.filter((p) => !p.id.startsWith("builtin-"))
+  const ltTranslationProviders = rtTransProviders.filter(
+    (p) => !p.id.startsWith("builtin-") && p.adapter === LIVE_TRANSLATE_ADAPTER,
+  )
+  const cloudRtProviders = rtTransProviders.filter(
+    (p) => !p.id.startsWith("builtin-") && p.adapter !== LIVE_TRANSLATE_ADAPTER,
+  )
 
   // ── LLM ──
   const fetchProviders = async () => {
@@ -1031,7 +1053,10 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
   const embOptions = providerTypes.embedding.map((p) => ({ value: p.name, label: p.display_name }))
   const rerankOptions = providerTypes.reranker.map((p) => ({ value: p.name, label: p.display_name }))
   const ftAdapterOpts = providerTypes.file_transcription.map((p) => ({ value: p.name, label: p.display_name }))
-  const rtAdapterOpts = providerTypes.realtime_transcription.map((p) => ({ value: p.name, label: p.display_name }))
+  // LiveTranslate providers are managed in the Live translation section.
+  const rtAdapterOpts = providerTypes.realtime_transcription
+    .filter((p) => p.name !== LIVE_TRANSLATE_ADAPTER)
+    .map((p) => ({ value: p.name, label: p.display_name }))
 
   const embFields: FieldDef[] = [
     { key: "name", label: t("common.name"), placeholder: t("settings.embedding") },
@@ -1145,6 +1170,22 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
       { key: "api_key", label: t("settings.apiKey"), type: "password", placeholder: "sk-..." },
     ]
   }
+
+  // Live translation dialog: adapter is locked to LiveTranslate (injected on
+  // save) — the form only edits name / model / key / workspace.
+  const ltTransFields: FieldDef[] = [
+    { key: "name", label: t("common.name"), placeholder: t("settings.liveTranslation") },
+    {
+      key: "model",
+      label: t("library.model"),
+      options: [
+        { value: "qwen3.5-livetranslate-flash-realtime", label: "qwen3.5-livetranslate-flash-realtime (recommended)" },
+        { value: "qwen3-livetranslate-flash-realtime", label: "qwen3-livetranslate-flash-realtime (legacy)" },
+      ],
+    },
+    { key: "api_key", label: t("settings.apiKey"), type: "password", placeholder: "sk-..." },
+    { key: "workspace_id", label: t("settings.workspaceId"), placeholder: "llm-xxxxxxxx (optional)" },
+  ]
 
 
   const visualModelOptions = (() => {
@@ -1786,6 +1827,53 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                 </div>
               </div>
             </div>
+          </div>
+        </section>
+
+        {/* Live translation (LiveTranslate) */}
+        <section className="pm-settings-section">
+          <div className="pm-settings-card">
+            <div className="pm-settings-card-head">
+              <div className="pm-settings-card-head-text min-w-0">
+                <h2 className="pm-settings-card-kicker">{t("settings.liveTranslation")}</h2>
+                <p className="pm-settings-card-desc">
+                  {t("settings.liveTranslationSettingsDesc")}
+                </p>
+              </div>
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => {
+                  setEditingLt(null)
+                  setLtDialogOpen(true)
+                }}
+              >
+                {t("common.add")}
+              </Button>
+            </div>
+            {ltTranslationProviders.length === 0 ? (
+              <p className="pm-settings-card-desc">
+                {t("settings.liveTranslationEmpty")}
+              </p>
+            ) : (
+              <div className="pm-settings-provider-grid">
+                {ltTranslationProviders.map((p) => (
+                  <TranscriptionProviderCard
+                    key={p.id}
+                    provider={p}
+                    kind="realtime"
+                    onEdit={(p) => {
+                      setEditingLt(p)
+                      setLtDialogOpen(true)
+                    }}
+                    onRefresh={fetchRtTransProviders}
+                    onDelete={deleteRealtimeTranscriptionProvider}
+                    onSetActive={setActiveRealtimeTranscriptionProvider}
+                    onTest={testRealtimeTranscriptionProvider}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         </section>
 
@@ -2714,6 +2802,35 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
           checkboxField="is_active"
           checkboxLabel={t("settings.setAsActive")}
           modelFetchSection="transcription"
+        />
+
+        <SimpleProviderDialog
+          open={ltDialogOpen}
+          provider={editingLt}
+          title={t("settings.liveTranslation")}
+          kicker={t("settings.liveTranslation")}
+          fields={ltTransFields}
+          defaults={{ model: "qwen3.5-livetranslate-flash-realtime", is_active: "true" }}
+          onOpenChange={setLtDialogOpen}
+          onSaved={() => {
+            setLtDialogOpen(false)
+            setEditingLt(null)
+            fetchRtTransProviders()
+          }}
+          onCreate={(data) =>
+            createRealtimeTranscriptionProvider({
+              adapter: LIVE_TRANSLATE_ADAPTER,
+              ...data,
+            } as Partial<TranscriptionProvider>)
+          }
+          onUpdate={(id, data) =>
+            updateRealtimeTranscriptionProvider(id, {
+              adapter: LIVE_TRANSLATE_ADAPTER,
+              ...data,
+            } as Partial<TranscriptionProvider>)
+          }
+          checkboxField="is_active"
+          checkboxLabel={t("settings.setAsActive")}
         />
       </div>
 

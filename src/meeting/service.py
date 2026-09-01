@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.config import DATA_DIR, get_config
+from src.config import DATA_DIR, get_config, LIVE_TRANSLATE_ADAPTER
 from src.meeting import store
 from src.meeting.models import (
     GenerationState,
@@ -602,17 +602,15 @@ class MeetingService(
 
     # -- Realtime translation (LiveTranslate) --------------------------------
 
-    _LIVE_TRANSLATE_ADAPTER = "dashscope_livetranslate_realtime"
+    _LIVE_TRANSLATE_ADAPTER = LIVE_TRANSLATE_ADAPTER
 
     def _resolve_translation_provider_cfg(self):
-        """Config for the LiveTranslate session, or None when unavailable.
+        """Config for the LiveTranslate session, or None when not configured.
 
-        A provider explicitly configured with the LiveTranslate adapter wins
-        (holds its own api key / model / workspace). Otherwise the session is
-        synthesized from the active DashScope realtime provider's API key —
-        plain-ASR users get translation without extra Settings work.
+        Only an explicitly configured LiveTranslate provider (Settings →
+        Live translation) enables realtime translation — no key borrowing
+        from the realtime transcription provider.
         """
-        from src.config import TranscriptionProviderConfig
         from src.meeting.transcription import resolve_realtime_adapter
 
         config = get_config()
@@ -623,34 +621,20 @@ class MeetingService(
             if resolve_realtime_adapter(p.adapter or "")
             == self._LIVE_TRANSLATE_ADAPTER
         ]
-        if explicit:
-            return next((p for p in explicit if p.is_active), explicit[0])
-
-        active = config.transcription.active_realtime_provider
-        if active is None:
-            active = config.transcription.get_local_realtime_provider()
-        adapter = resolve_realtime_adapter((active.adapter or "")) if active else ""
-        if adapter.startswith("dashscope") and (active.api_key or "").strip():
-            return TranscriptionProviderConfig(
-                id="auto-livetranslate",
-                name="DashScope LiveTranslate (auto)",
-                adapter=self._LIVE_TRANSLATE_ADAPTER,
-                api_key=active.api_key,
-                workspace_id=getattr(active, "workspace_id", None),
-            )
-        return None
+        if not explicit:
+            return None
+        return next((p for p in explicit if p.is_active), explicit[0])
 
     def get_realtime_translation_provider(self) -> RealtimeTranscriptionProvider:
         """LiveTranslate provider for meetings that request a target language.
 
-        Raises ValueError when no DashScope key is reachable from config.
+        Raises ValueError when no LiveTranslate provider is configured.
         """
         cfg = self._resolve_translation_provider_cfg()
         if cfg is None:
             raise ValueError(
-                "Realtime translation requires a DashScope API key: set a "
-                "DashScope realtime provider as Default in Settings, or add "
-                "a LiveTranslate provider."
+                "Realtime translation is not configured. Add a LiveTranslate "
+                "provider in Settings → Live translation."
             )
         from src.meeting.transcription.dashscope_livetranslate_realtime import (
             resolve_live_translate_model,

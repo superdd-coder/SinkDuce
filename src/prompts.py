@@ -417,6 +417,8 @@ MEETING_GENERAL_SUMMARY_PROMPT = """\
 <task>
 Produce a comprehensive meeting-level Markdown document.
 
+Bullet marker: always use "- " (hyphen + space) for every bullet item.
+
 Language: Output MUST be in the same language as the transcript.
 If the transcript is English, write in English.  NEVER switch
 languages — this is a hard failure.
@@ -1384,6 +1386,8 @@ If the transcript is English, write in English.  If Chinese, write
 in Chinese.  NEVER switch languages — this is a hard failure.
 
 Produce a Markdown document with these sections:
+
+Bullet marker: always use "- " (hyphen + space) for every bullet item.
 
 ## Summary
 A 3-5 paragraph overview covering all distinct discussion threads,

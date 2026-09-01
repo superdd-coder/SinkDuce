@@ -9,6 +9,9 @@ from openai import OpenAI
 
 from src.config import LLMProviderConfig
 from src.providers.base import LLMProvider
+from src.providers.llm.thinking import is_always_think_error
+from src.providers.llm.thinking import learned_thinking_mode
+from src.providers.llm.thinking import remember_thinking_mode
 from src.providers.registry import llm_registry
 
 logger = logging.getLogger(__name__)
@@ -108,6 +111,14 @@ class OpenAICompatLLM(LLMProvider):
         # Detect DashScope endpoints — they use a different thinking parameter
         # format (`enable_thinking`) instead of DeepSeek's native format.
         self._is_dashscope = "dashscope.aliyuncs.com" in self._base_url
+        # Thinking posture of the model: per-model learned entry (probe or
+        # runtime fallback) wins; the provider config field (probed for the
+        # default model) is the fallback. "" means unknown — the create-time
+        # retry learns it as a last resort.
+        mode = (getattr(config, "thinking_mode", "") or "").strip().lower()
+        if mode not in ("toggle", "always", "none"):
+            mode = ""
+        self._thinking_mode = learned_thinking_mode(self._base_url, self._model) or mode
 
     def _build_thinking_extra(
         self, thinking: bool, effort: str | None = None
@@ -119,7 +130,42 @@ class OpenAICompatLLM(LLMProvider):
     ) -> None:
         if thinking is None:
             return
+        if self._thinking_mode == "none":
+            return
+        if self._thinking_mode == "always":
+            # Always-thinking models reject thinking-off (400/1210); the API
+            # contract is reasoning_effort (low/high/max) instead. "Off"
+            # degrades to the lowest effort — thinking cannot be disabled.
+            mapped = "low" if not thinking else map_deepseek_reasoning_effort(effort)
+            if mapped:
+                kwargs["reasoning_effort"] = mapped
+            return
         kwargs.update(thinking_create_kwargs(self._is_dashscope, thinking, effort))
+
+    def _create_with_thinking_fallback(self, kwargs: dict, thinking: bool | None, effort: str | None, send):
+        """send(kwargs) with a one-shot adaptation to always-thinking models.
+
+        Primary classification happens at save time (thinking probe); this
+        retry covers models the probe could not classify.
+        """
+        try:
+            return send(kwargs)
+        except Exception as e:
+            if self._thinking_mode == "always" or not is_always_think_error(e):
+                raise
+            self._thinking_mode = "always"
+            remember_thinking_mode(self._base_url, self._model, "always")
+            logger.warning(
+                "LLM %s: model rejects thinking-off (always-thinks) — "
+                "adapting to reasoning_effort and remembering it",
+                self._model,
+            )
+            rebuilt = {
+                k: v for k, v in kwargs.items()
+                if k not in ("extra_body", "reasoning_effort")
+            }
+            self._apply_thinking_kwargs(rebuilt, thinking, effort)
+            return send(rebuilt)
 
     def _resolve_temperature(self, temperature: float | None) -> float:
         return temperature if temperature is not None else _DEFAULT_TEMPERATURE
@@ -158,7 +204,10 @@ class OpenAICompatLLM(LLMProvider):
             kwargs["response_format"] = response_format
         self._apply_thinking_kwargs(kwargs, thinking, thinking_effort)
 
-        response = self._client.chat.completions.create(**kwargs)
+        response = self._create_with_thinking_fallback(
+            kwargs, thinking, thinking_effort,
+            send=lambda kw: self._client.chat.completions.create(**kw),
+        )
         if not response.choices:
             return ""
         msg = response.choices[0].message
@@ -242,7 +291,10 @@ class OpenAICompatLLM(LLMProvider):
         # sit in front of every one-line answer and multiply per-image
         # latency (measured qwen3.7-flash 30.6s → 7.4s with it off).
         self._apply_thinking_kwargs(kwargs, thinking=False)
-        response = client.chat.completions.create(**kwargs)
+        response = self._create_with_thinking_fallback(
+            kwargs, thinking=False, effort=None,
+            send=lambda kw: client.chat.completions.create(**kw),
+        )
         if not response.choices:
             return ""
         return _strip_think(response.choices[0].message.content or "")
@@ -279,7 +331,10 @@ class OpenAICompatLLM(LLMProvider):
             kwargs["response_format"] = response_format
         self._apply_thinking_kwargs(kwargs, thinking, thinking_effort)
 
-        stream = self._client.chat.completions.create(**kwargs)
+        stream = self._create_with_thinking_fallback(
+            kwargs, thinking, thinking_effort,
+            send=lambda kw: self._client.chat.completions.create(**kw),
+        )
         in_think = False
         seen_non_think = False  # first non-think token → transition
         buf = ""
@@ -360,7 +415,10 @@ class OpenAICompatLLM(LLMProvider):
             kwargs["response_format"] = response_format
         self._apply_thinking_kwargs(kwargs, thinking, thinking_effort)
 
-        stream = self._client.chat.completions.create(**kwargs)
+        stream = self._create_with_thinking_fallback(
+            kwargs, thinking, thinking_effort,
+            send=lambda kw: self._client.chat.completions.create(**kw),
+        )
         in_think = False
         buf = ""  # buffer for partial tag matches
         for chunk in stream:

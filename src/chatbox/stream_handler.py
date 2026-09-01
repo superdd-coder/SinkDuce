@@ -35,6 +35,8 @@ class ChatStreamHandler:
         web_search_enabled: bool = False,
     ) -> AsyncGenerator[str, None]:
         """Yield SSE event strings for the frontend to consume."""
+        answer_parts: list[str] = []
+        saw_done = False
         try:
             async for event in self._agent.chat_stream(
                 session_id, user_message, thinking=thinking, collections=collections,
@@ -42,6 +44,10 @@ class ChatStreamHandler:
                 web_search_enabled=web_search_enabled,
             ):
                 event_type = event.get("type", "unknown")
+                if event_type == "token":
+                    answer_parts.append(str(event.get("content") or ""))
+                elif event_type == "done":
+                    saw_done = True
                 try:
                     payload = json.dumps(event, ensure_ascii=False, default=str, allow_nan=False)
                 except (TypeError, ValueError) as e:
@@ -66,3 +72,18 @@ class ChatStreamHandler:
                 ensure_ascii=False,
             )
             yield f"event: error\ndata: {error_event}\n\n"
+        finally:
+            # Client gone mid-turn (refresh / stop / crash): the agent's own
+            # persist only runs right before ``done``, so without this the
+            # already-generated text would be lost. GeneratorExit is a
+            # BaseException — the except above never swallows it, and the
+            # persist here is sync-only, which is safe during generator close.
+            if not saw_done:
+                try:
+                    self._agent.persist_interrupted_answer(
+                        session_id, "".join(answer_parts)
+                    )
+                except Exception:
+                    logger.exception(
+                        "Interrupted-answer persist failed for session %s", session_id
+                    )

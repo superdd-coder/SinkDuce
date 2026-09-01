@@ -390,10 +390,11 @@ def _no_dashscope_required(monkeypatch):
     monkeypatch.setattr(mod, "_require_dashscope", lambda: None)
 
 
-def test_service_translation_provider_synthesized_from_dashscope_key(monkeypatch):
+def test_service_translation_provider_requires_explicit_config(monkeypatch):
+    """No auto-borrowing: a DashScope ASR key alone must NOT enable
+    translation — an explicit LiveTranslate provider is required."""
     from src.config import TranscriptionProviderConfig
 
-    _no_dashscope_required(monkeypatch)
     dash = TranscriptionProviderConfig(
         id="dash-rt",
         name="Dash",
@@ -404,13 +405,12 @@ def test_service_translation_provider_synthesized_from_dashscope_key(monkeypatch
     _patch_config(monkeypatch, [dash], dash)
 
     svc = _svc()
-    provider = svc.get_realtime_translation_provider()
-    assert type(provider).__name__ == "DashScopeLiveTranslateRealtime"
-    assert provider._api_key == "sk-live"
+    with pytest.raises(ValueError, match="not configured"):
+        svc.get_realtime_translation_provider()
 
     meta = svc.get_realtime_translation_provider_meta()
-    assert meta["adapter"] == "dashscope_livetranslate_realtime"
-    assert meta["supports_realtime_translation"] is True
+    assert meta["id"] is None
+    assert meta["supports_realtime_translation"] is False
 
 
 def test_service_translation_provider_cache_drops_on_model_change(monkeypatch):
@@ -482,18 +482,31 @@ def test_service_translation_provider_prefers_explicit(monkeypatch):
     assert provider._model == "qwen3-livetranslate-flash-realtime"
 
 
-def test_service_translation_provider_requires_dashscope(monkeypatch):
+def test_service_translation_provider_prefers_active_explicit(monkeypatch):
+    """Several LiveTranslate providers: the is_active one wins."""
     from src.config import TranscriptionProviderConfig
 
-    local = TranscriptionProviderConfig(
-        id="local-rt",
-        name="Local",
-        adapter="funasr_onnx_realtime",
+    _no_dashscope_required(monkeypatch)
+    inactive = TranscriptionProviderConfig(
+        id="lt-off",
+        name="LT off",
+        adapter="dashscope_livetranslate_realtime",
+        api_key="sk-off",
+        is_active=False,
+    )
+    active = TranscriptionProviderConfig(
+        id="lt-on",
+        name="LT on",
+        adapter="dashscope_livetranslate_realtime",
+        api_key="sk-on",
+        model="qwen3-livetranslate-flash-realtime",
         is_active=True,
     )
-    _patch_config(monkeypatch, [local], local)
-    with pytest.raises(ValueError, match="[Dd]ashScope"):
-        _svc().get_realtime_translation_provider()
+    _patch_config(monkeypatch, [inactive, active], None)
+
+    provider = _svc().get_realtime_translation_provider()
+    assert provider._api_key == "sk-on"
+    assert provider._model == "qwen3-livetranslate-flash-realtime"
 
 
 # ════════════════════════ 6. WS route ════════════════════════
@@ -605,6 +618,8 @@ def test_ws_translation_unavailable_sends_error(monkeypatch, tmp_path):
 
 
 def test_active_provider_info_reports_translation_support(monkeypatch):
+    """Capability flag reflects explicit LiveTranslate config only — a
+    DashScope ASR key alone no longer implies translation support."""
     from src.config import TranscriptionProviderConfig
     import src.config as config_mod
     from src.main import app
@@ -630,6 +645,18 @@ def test_active_provider_info_reports_translation_support(monkeypatch):
 
     resp = TestClient(app).get("/api/transcription/active-provider-info")
     assert resp.status_code == 200
+    # DashScope ASR key alone → no translation capability (no auto-borrow)
+    assert resp.json()["realtime"]["supports_realtime_translation"] is False
+
+    # explicit LiveTranslate provider → capability on, even when inactive
+    lt = TranscriptionProviderConfig(
+        id="lt-explicit",
+        name="LT",
+        adapter="dashscope_livetranslate_realtime",
+        api_key="sk-lt",
+    )
+    fake_cfg.transcription.realtime_providers = [lt, dash]
+    resp = TestClient(app).get("/api/transcription/active-provider-info")
     assert resp.json()["realtime"]["supports_realtime_translation"] is True
 
     # local-only → no translation capability

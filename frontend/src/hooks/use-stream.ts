@@ -70,6 +70,7 @@ export function useStreamChat() {
 
     // Hoisted so catch/finally can flush even if setup fails mid-way
     let flushAnswerTokensNow: () => void = () => {}
+    let flushThinkingBufNow: () => void = () => {}
 
     try {
       const {
@@ -145,6 +146,27 @@ export function useStreamChat() {
         flushTokenBuf()
       }
 
+      // Batch thinking tokens the same way as answer tokens: reasoning models
+      // emit very chatty streams and each store write copies messages+timeline
+      // and wakes every subscriber. 32ms is imperceptible on a scrolling trail.
+      let thinkingBuf = ""
+      let thinkingTimer: ReturnType<typeof setTimeout> | 0 = 0
+      const flushThinkingBuf = () => {
+        thinkingTimer = 0
+        if (!thinkingBuf) return
+        const chunk = thinkingBuf
+        thinkingBuf = ""
+        // Inactive sessions drop thinking, matching the previous per-event behavior
+        if (_isActive(sid)) appendTimelineThinking(chunk)
+      }
+      flushThinkingBufNow = flushThinkingBuf
+      const queueThinkingToken = (text: string) => {
+        if (!text) return
+        thinkingBuf += text
+        if (thinkingTimer) return
+        thinkingTimer = setTimeout(flushThinkingBuf, 32)
+      }
+
       if (resp.body) {
         for await (const { event: currentEvent, data } of iterateSessionSse(resp.body)) {
             const active = _isActive(sid)
@@ -156,8 +178,8 @@ export function useStreamChat() {
                 break
 
               case "thinking":
-                // Reasoning timeline is plain text — keep low latency, no MD cost
-                if (active) appendTimelineThinking(String(data.content ?? ""))
+                // Reasoning timeline is plain text — batched like answer tokens
+                queueThinkingToken(String(data.content ?? ""))
                 break
 
               case "token":
@@ -167,6 +189,8 @@ export function useStreamChat() {
 
               case "tool_call_start":
                 if (active) {
+                  // Close the streaming thinking block before the tool block lands
+                  flushThinkingBufNow()
                   flushAnswerTokensNow()
                   flushLastMessageToThinking()
                   startTimelineTool({
@@ -305,6 +329,7 @@ export function useStreamChat() {
               }
 
               case "done":
+                flushThinkingBufNow()
                 flushAnswerTokensNow()
                 if (Array.isArray(data.sources) && data.sources.length) {
                   if (active) setLastMessageSources(data.sources)
@@ -343,6 +368,7 @@ export function useStreamChat() {
                 return
 
               case "error":
+                flushThinkingBufNow()
                 flushAnswerTokensNow()
                 if (active) appendToLastMessage(`Error: ${data.content}`)
                 else _cacheAppend(sid, `Error: ${data.content}`)
@@ -353,13 +379,16 @@ export function useStreamChat() {
         }
       }
       // Stream body ended without a done event — still flush pending answer text
+      flushThinkingBufNow()
       flushAnswerTokensNow()
     } catch (err: any) {
+      flushThinkingBufNow()
       flushAnswerTokensNow()
       if (err.name === "AbortError") return
       if (_isActive(sid)) useAppStore.getState().appendToLastMessage(`Error: ${err.message}`)
       else _cacheAppend(sid, `Error: ${err.message}`)
     } finally {
+      flushThinkingBufNow()
       flushAnswerTokensNow()
       if (_isActive(sid)) {
         useAppStore.getState().finishLastMessage()

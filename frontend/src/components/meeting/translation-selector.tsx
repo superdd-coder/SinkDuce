@@ -112,9 +112,11 @@ export function TranslationSelector({
     ? `${t("meeting.liveTranslationShort")} · ${target.toUpperCase()}`
     : t("meeting.liveTranslation")
 
-  const title = enabled
-    ? `${t("meeting.liveTranslation")} · ${target.toUpperCase()} — ${t("meeting.liveTranslationCaveat")}`
-    : t("meeting.liveTranslationDesc")
+  const title = disabled
+    ? t("meeting.liveTranslationNotConfigured")
+    : enabled
+      ? `${t("meeting.liveTranslation")} · ${target.toUpperCase()} — ${t("meeting.liveTranslationCaveat")}`
+      : t("meeting.liveTranslationDesc")
 
   const trigger = (
     <Button

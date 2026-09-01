@@ -8,13 +8,14 @@ import re
 import threading
 import time
 import uuid
+from typing import Callable
 
 from fastapi import APIRouter, Body, HTTPException
 
 from src.api.errors import ApiError
 
 from src.api.schemas import ConfigUpdateRequest
-from src.config import get_config, save_config, reload_config, LLMProviderConfig, EmbeddingProviderConfig, RerankProviderConfig, TranscriptionProviderConfig
+from src.config import get_config, save_config, reload_config, LLMProviderConfig, EmbeddingProviderConfig, RerankProviderConfig, TranscriptionProviderConfig, LIVE_TRANSLATE_ADAPTER
 from src.services import async_refresh_llm_runtime, async_reload_services
 from src.providers.cache import get_or_create as cached_provider, invalidate as invalidate_provider
 
@@ -164,12 +165,33 @@ def _clean_error(e: Exception) -> str:
     return _friendly_provider_error(status, msg, err_type=err_type)[:200]
 
 
-def _add_to_provider_list(providers: list, provider, *, flag: str = "is_default"):
-    """Append a provider; exclusive *flag* is is_default or is_active."""
+def _same_realtime_kind(a, b) -> bool:
+    """Exclusivity peers: LiveTranslate (translation) and realtime ASR are
+    separate kinds — activating one kind never clears the other's is_active."""
+    la = (a.adapter or "") == LIVE_TRANSLATE_ADAPTER
+    lb = (b.adapter or "") == LIVE_TRANSLATE_ADAPTER
+    return la == lb
+
+
+def _add_to_provider_list(
+    providers: list,
+    provider,
+    *,
+    flag: str = "is_default",
+    sweep: Callable[[object, object], bool] | None = None,
+):
+    """Append a provider; exclusive *flag* is is_default or is_active.
+
+    `sweep(incoming, peer)` scopes the exclusivity clear to same-kind peers —
+    used by realtime transcription so LiveTranslate providers keep their own
+    is_active flag (see LIVE_TRANSLATE_ADAPTER).
+    """
     if not getattr(provider, "id", None):
         provider.id = str(uuid.uuid4())
     if getattr(provider, flag, False):
         for p in providers:
+            if sweep and not sweep(provider, p):
+                continue
             setattr(p, flag, False)
     elif not providers:
         setattr(provider, flag, True)
@@ -186,8 +208,13 @@ def _apply_provider_update(
     int_fields: set[str] | frozenset[str] = frozenset(),
     bool_fields: set[str] | frozenset[str] = frozenset(),
     exclusive_flag: str = "is_default",
+    sweep: Callable[[object, object], bool] | None = None,
 ):
-    """Patch one provider in *providers*. Returns it, or None if missing."""
+    """Patch one provider in *providers*. Returns it, or None if missing.
+
+    `sweep` scopes the exclusive-flag clear to same-kind peers (realtime
+    transcription vs LiveTranslate keep independent is_active flags).
+    """
     from src.secrets import skip_secret_write
 
     ints = set(int_fields)
@@ -208,7 +235,7 @@ def _apply_provider_update(
                 setattr(providers[i], key, value)
         if update.get(exclusive_flag):
             for j, other in enumerate(providers):
-                if j != i:
+                if j != i and (sweep is None or sweep(providers[i], other)):
                     setattr(other, exclusive_flag, False)
         return providers[i]
     return None
@@ -616,6 +643,10 @@ def list_llm_providers():
 async def add_llm_provider(provider: LLMProviderConfig):
     config = get_config()
     added = _add_to_provider_list(config.llm.providers, provider)
+    loop = asyncio.get_running_loop()
+    mode = await loop.run_in_executor(None, _probe_provider_thinking, added)
+    if mode:
+        added.thinking_mode = mode
     save_config(config)
     reload_config()
     await async_refresh_llm_runtime()
@@ -641,6 +672,16 @@ async def update_llm_provider(provider_id: str, update: dict = Body()):
     if "function_call_model_ids" in update:
         if not _slot_ref_valid(config.default_chat_model, config.llm.providers, "chat"):
             config.default_chat_model = None
+    # Endpoint/model/key changed → re-classify the thinking posture, unless
+    # the caller pinned thinking_mode explicitly in the same update.
+    endpoint_changed = bool(
+        {"model", "base_url", "api_key", "default_model"} & set(update)
+    )
+    if endpoint_changed and "thinking_mode" not in update:
+        loop = asyncio.get_running_loop()
+        mode = await loop.run_in_executor(None, _probe_provider_thinking, found)
+        if mode:
+            found.thinking_mode = mode
     save_config(config)
     reload_config()
     await async_refresh_llm_runtime()
@@ -654,6 +695,33 @@ def _provider_display_name(provider, fallback_id: str = "") -> str:
         return name
     pid = (getattr(provider, "id", None) or fallback_id or "").strip()
     return pid or "Provider"
+
+
+def _probe_provider_thinking(provider) -> str:
+    """Classify a model's thinking posture with one tiny request.
+
+    Runs at save time so real tasks never pay the trial-and-error cost.
+    Probes the effective model (default_model overrides model) — the one
+    runtime calls will actually use. Returns "" (keep previous value) when
+    inconclusive.
+    """
+    model = (provider.default_model or provider.model or "").strip()
+    if not (
+        (provider.base_url or "").strip()
+        and (provider.api_key or "").strip()
+        and model
+    ):
+        return ""
+    from src.providers.llm.thinking import probe_thinking_mode
+
+    try:
+        return probe_thinking_mode(provider.base_url, provider.api_key, model)
+    except Exception as e:
+        import logging
+        logging.getLogger("api.llm").warning(
+            "Thinking probe failed for %s: %s", model, e,
+        )
+        return ""
 
 
 @router.delete("/llm/providers/{provider_id}")
@@ -1246,7 +1314,10 @@ def list_realtime_transcription_providers():
 async def add_realtime_transcription_provider(provider: TranscriptionProviderConfig):
     config = get_config()
     added = _add_to_provider_list(
-        config.transcription.realtime_providers, provider, flag="is_active"
+        config.transcription.realtime_providers,
+        provider,
+        flag="is_active",
+        sweep=_same_realtime_kind,
     )
     save_config(config)
     reload_config()
@@ -1263,6 +1334,7 @@ async def update_realtime_transcription_provider(provider_id: str, update: dict 
         update,
         bool_fields={"is_active"},
         exclusive_flag="is_active",
+        sweep=_same_realtime_kind,
     )
     if not found:
         raise HTTPException(404, f"Provider '{provider_id}' not found")
@@ -1382,34 +1454,38 @@ async def set_active_realtime_transcription_provider(provider_id: str):
     _log = logging.getLogger("api.transcription")
     _log.info("Set active realtime transcription: %s", provider_id)
     config = get_config()
-    found = False
     display_name = provider_id
     adapter = ""
-    for p in config.transcription.realtime_providers:
-        if p.id == provider_id:
-            p.is_active = True
-            found = True
-            display_name = (p.name or "").strip() or provider_id
-            adapter = p.adapter
-            _log.info("Activated realtime transcription provider: %s (%s)", p.name, p.adapter)
-        else:
-            p.is_active = False
-    if not found:
-        if provider_id.startswith("builtin-"):
-            for p in config.transcription.realtime_providers:
+    providers = config.transcription.realtime_providers
+    target = next((p for p in providers if p.id == provider_id), None)
+    if target is not None:
+        target_kind_lt = (target.adapter or "") == LIVE_TRANSLATE_ADAPTER
+        for p in providers:
+            if p is target:
+                p.is_active = True
+            elif ((p.adapter or "") == LIVE_TRANSLATE_ADAPTER) == target_kind_lt:
+                # Same kind only: realtime ASR and LiveTranslate defaults are
+                # independent — activating one never clears the other.
                 p.is_active = False
-            config.transcription.realtime_providers = [
-                p for p in config.transcription.realtime_providers if p.id != provider_id
-            ]
-            builtin = config.transcription.get_local_realtime_provider()
-            builtin.is_active = True
-            config.transcription.realtime_providers.append(builtin)
-            display_name = (builtin.name or "").strip() or provider_id
-            adapter = builtin.adapter
-            _log.info("Activated builtin realtime transcription provider: %s", adapter)
-        else:
-            _log.warning("Set active realtime transcription failed: provider '%s' not found", provider_id)
-            raise HTTPException(404, f"Provider '{provider_id}' not found")
+        display_name = (target.name or "").strip() or provider_id
+        adapter = target.adapter
+        _log.info("Activated realtime transcription provider: %s (%s)", target.name, target.adapter)
+    elif provider_id.startswith("builtin-"):
+        for p in providers:
+            if (p.adapter or "") != LIVE_TRANSLATE_ADAPTER:
+                p.is_active = False
+        config.transcription.realtime_providers = [
+            p for p in providers if p.id != provider_id
+        ]
+        builtin = config.transcription.get_local_realtime_provider()
+        builtin.is_active = True
+        config.transcription.realtime_providers.append(builtin)
+        display_name = (builtin.name or "").strip() or provider_id
+        adapter = builtin.adapter
+        _log.info("Activated builtin realtime transcription provider: %s", adapter)
+    else:
+        _log.warning("Set active realtime transcription failed: provider '%s' not found", provider_id)
+        raise HTTPException(404, f"Provider '{provider_id}' not found")
     save_config(config)
     reload_config()
     _invalidate_transcription_caches(kind="realtime")

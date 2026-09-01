@@ -206,8 +206,8 @@ export const appendRecordingPcm = async (id: string, pcm: ArrayBuffer) => {
   }
 }
 
-export const finalizeMeetingRecording = (id: string) =>
-  request<Meeting>(`/meetings/${id}/finalize-recording`, {
+export const finalizeMeetingRecording = (id: string, recovery = false) =>
+  request<Meeting>(`/meetings/${id}/finalize-recording${recovery ? "?recovery=true" : ""}`, {
     method: "POST",
   })
 
@@ -477,7 +477,7 @@ export const getLiveSummary = (id: string) =>
 
 export const saveMeetingTranscript = (
   id: string,
-  payload: { segments: TranscriptSegment[]; text?: string },
+  payload: { segments: TranscriptSegment[]; text?: string; partial?: boolean },
 ) =>
   request<{ message: string; segments: number }>(`/meetings/${id}/save-transcript`, {
     method: "POST",

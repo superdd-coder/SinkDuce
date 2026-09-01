@@ -74,7 +74,7 @@ export function AppLayout() {
   const [displayView, setDisplayView] = useState<SidebarView>(sidebarView)
   const [viewPhase, setViewPhase] = useState<"shown" | "hiding">("shown")
   const viewMotionGenRef = useRef(0)
-  const VIEW_OUT_MS = 160
+  const VIEW_OUT_MS = 100
 
   useEffect(() => {
     setVisitedViews((prev) => {
