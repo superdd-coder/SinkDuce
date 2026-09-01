@@ -112,6 +112,32 @@ def test_registry_returns_same_engine_and_restart_revives_it():
     drop_engine("registry-mtg")
 
 
+def test_finalize_cannot_idle_a_restarted_engine():
+    """The translation-toggle reconnect races finalize(): the new WS session
+    re-enables (start()) while finalize's closing LLM round is still in
+    flight. finalize's epilogue must not flip the freshly restarted engine
+    back to idle — the 'engine == running' ingest gate then silently drops
+    every later final and the live summary freezes until the next enable."""
+    eng = _make_engine(_FakeLLM())
+
+    class _RestartMidRoundLLM:
+        def generate(self, *a, **kw):
+            # New WS session re-enables while finalize's closing round runs.
+            eng.start()
+            return json.dumps({"add": [], "amend": [], "resolve": [], "drop": []})
+
+    eng.llm = _RestartMidRoundLLM()
+    eng.start()
+    eng.ingest_segment(0.0, 5.0, "hello")
+    eng.finalize()
+
+    assert eng.state.engine == "running", (
+        "finalize() idled an engine that was restarted while its closing "
+        "round was in flight — live summary would freeze"
+    )
+    eng.stop()
+
+
 def test_default_cadence_is_user_tuned_10s():
     """Lock the user-tuned round cadence (10s) against accidental drift."""
     eng = LiveSummaryEngine("cadence-check", llm=_FakeLLM())

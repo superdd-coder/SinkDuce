@@ -27,6 +27,7 @@ from src.meeting.transcription.base import (
 from src.meeting.transcription import (
     create_file_transcription_provider,
     create_realtime_transcription_provider,
+    is_local_realtime_adapter,
 )
 from src.providers.cache import get_or_create as cached_provider
 from src.services import services
@@ -553,6 +554,12 @@ class MeetingService(
 
         Always re-reads config so Settings “Default” switches take effect.
         Drops stale cache entries that do not match the active adapter.
+
+        Cloud adapters are built fresh per call: their instances carry
+        per-session SDK state (one recognition slot), so sharing one across
+        websocket connections lets an old handler's stop() kill the new
+        session's recognizer mid-stream. Only the heavyweight local ONNX
+        adapter (expensive model load) is cached.
         """
         from src.providers.cache import invalidate as cache_invalidate
         from src.providers.cache import peek as cache_peek
@@ -564,6 +571,14 @@ class MeetingService(
         if provider_cfg.id == "builtin-local-rt":
             provider_cfg = config.transcription.get_local_realtime_provider()
             provider_cfg = provider_cfg.model_copy(update={"is_active": True})
+        if not is_local_realtime_adapter(provider_cfg.adapter or ""):
+            logger.info(
+                "Active realtime transcription provider: id=%s adapter=%s model=%s (per-session instance)",
+                provider_cfg.id,
+                provider_cfg.adapter,
+                provider_cfg.model,
+            )
+            return create_realtime_transcription_provider(provider_cfg)
         cache_key = f"rt_trans:{provider_cfg.id}"
         cached = cache_peek(cache_key)
         if cached is not None and not self._provider_matches_adapter(
@@ -629,6 +644,9 @@ class MeetingService(
         """LiveTranslate provider for meetings that request a target language.
 
         Raises ValueError when no LiveTranslate provider is configured.
+        Fresh instance per call — same per-session SDK state argument as
+        get_active_realtime_provider (LiveTranslate is cloud-only today,
+        the local-adapter branch is future-proofing only).
         """
         cfg = self._resolve_translation_provider_cfg()
         if cfg is None:
@@ -641,6 +659,9 @@ class MeetingService(
         )
         from src.providers.cache import invalidate as cache_invalidate
         from src.providers.cache import peek as cache_peek
+
+        if not is_local_realtime_adapter(cfg.adapter or ""):
+            return create_realtime_transcription_provider(cfg)
 
         expected_model = resolve_live_translate_model(cfg.model)
         key_suffix = cfg.api_key[-6:] if cfg.api_key else "nokey"

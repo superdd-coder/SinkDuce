@@ -189,6 +189,43 @@ def test_ws_reset_and_disable(tmp_path, monkeypatch):
         live_summary_mod.drop_engine(meeting.id)
 
 
+def test_ws_stop_finalize_false_keeps_engine_running(tmp_path, monkeypatch):
+    """Engine-swap stop (translation toggle / language change) must flush the
+    provider tail WITHOUT finalizing the live summary engine — the client
+    reconnects seconds later and re-enables on the same meeting."""
+    from fastapi.testclient import TestClient
+
+    from src.main import app
+
+    meeting, fake_llm, _provider, live_summary_mod = _setup(monkeypatch, tmp_path)
+    client = TestClient(app)
+    try:
+        with client.websocket_connect(
+            f"/api/meetings/{meeting.id}/realtime-transcribe"
+        ) as ws:
+            assert ws.receive_json()["type"] == "provider"
+            assert _recv_until(ws, lambda m: m.get("type") == "ready")
+            ws.send_json({"action": "live_summary", "enabled": True})
+            _recv_until(ws, lambda m: m.get("type") == "live_summary_status")
+
+            ws.send_json({"action": "stop", "finalize": False})
+            # Handler stop path: provider flush sleeps ~2s, then the buggy
+            # behavior finalizes (engine → idle). Give it time to land so the
+            # assertion below observes the settled state.
+            import time as _time
+
+            _time.sleep(3.5)
+
+            eng = live_summary_mod.get_engine(meeting.id)
+            assert eng is not None
+            assert eng.state.engine == "running", (
+                "stop with finalize:false must leave the live summary engine "
+                "running for the reconnecting client"
+            )
+    finally:
+        live_summary_mod.drop_engine(meeting.id)
+
+
 def test_rest_live_summary_state_and_404(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
