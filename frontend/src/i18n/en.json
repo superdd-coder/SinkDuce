@@ -1296,6 +1296,7 @@
     "failedAssignPerson": "Failed to assign person",
     "sourcesIds": "Sources: {ids}",
     "citeSentenceId": "Sentence {id}",
+    "citeMeetingRemoved": "That meeting is no longer in this group",
     "createNewCollection": "Create new collection",
     "generating": "Generating…"
   },

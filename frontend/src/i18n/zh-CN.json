@@ -1296,6 +1296,7 @@
     "failedAssignPerson": "分配人物失败",
     "sourcesIds": "来源：{ids}",
     "citeSentenceId": "句子 {id}",
+    "citeMeetingRemoved": "该会议已不在这个分组里",
     "createNewCollection": "新建项目",
     "generating": "生成中…"
   },

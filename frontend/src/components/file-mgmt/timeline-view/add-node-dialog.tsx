@@ -103,7 +103,8 @@ export function AddNodeDialog({
 }: AddNodeDialogProps) {
   const t = useT()
   const [title, setTitle] = useState("")
-  const [groupSlug, setGroupSlug] = useState<string>(groups[0]?.group_id ?? "")
+  // Group is optional — default to none (matches node sidebar "No group")
+  const [groupSlug, setGroupSlug] = useState<string>("")
   const [localGroups, setLocalGroups] = useState<NodeGroup[]>(groups)
   const [groupFormOpen, setGroupFormOpen] = useState(false)
   const [eventTime, setEventTime] = useState("")
@@ -177,7 +178,7 @@ export function AddNodeDialog({
   useEffect(() => {
     if (!open) {
       setTitle("")
-      setGroupSlug(groups[0]?.group_id ?? "")
+      setGroupSlug("")
       setEventTime("")
       setMessageBody("")
       setPending([])
@@ -190,7 +191,6 @@ export function AddNodeDialog({
     } else {
       setTitle(initialTitle?.trim() || "")
       setMessageBody(initialMessageBody?.trim() || "")
-      setGroupSlug((prev) => prev || groups[0]?.group_id || "")
       setEditorKey((k) => k + 1)
     }
   }, [open, groups, initialTitle, initialMessageBody])
@@ -282,10 +282,6 @@ export function AddNodeDialog({
       toast.error(t("fileMgmt.nodeNameRequired"))
       return
     }
-    if (!groupSlug) {
-      toast.error(t("fileMgmt.groupRequired"))
-      return
-    }
     setSubmitting(true)
     try {
       // Backend clamps order to [1, max_order+1]. Large value → chain tail.
@@ -293,7 +289,7 @@ export function AddNodeDialog({
       const order =
         afterOrder >= 0 ? afterOrder + 1 : 1_000_000_000
       const node = await createNode(collectionId, chainId, {
-        group_id: groupSlug,
+        group_id: groupSlug || null,
         node_type: "event",
         title: trimmedTitle,
         order,
@@ -418,7 +414,7 @@ export function AddNodeDialog({
                   variant="default"
                   size="xs"
                   onClick={() => void handleSubmit()}
-                  disabled={submitting || !groupSlug || !title.trim()}
+                  disabled={submitting || !title.trim()}
                 >
                   {submitting ? t("fileMgmt.adding") : t("fileMgmt.addNode")}
                 </Button>
@@ -463,10 +459,7 @@ export function AddNodeDialog({
                     </div>
 
                     <div className="pm-add-node-field">
-                      <FieldLabel>
-                        {t("common.group")}{" "}
-                        <span className="text-[var(--pm-danger)]">*</span>
-                      </FieldLabel>
+                      <FieldLabel>{t("common.group")}</FieldLabel>
                       <DropdownSelect
                         size="sm"
                         value={groupSlug}
@@ -477,11 +470,9 @@ export function AddNodeDialog({
                           }
                           setGroupSlug(v)
                         }}
-                        placeholder={t("fileMgmt.selectGroup")}
+                        placeholder={t("fileMgmt.noGroup")}
                         options={[
-                          ...(localGroups.length === 0
-                            ? [{ value: "", label: t("fileMgmt.selectGroup") }]
-                            : []),
+                          { value: "", label: t("fileMgmt.noGroup") },
                           ...localGroups.map((g) => ({
                             value: g.group_id,
                             label: systemFolderDisplayName(g.name, t),
@@ -770,8 +761,8 @@ export function AddNodeDialog({
             const newest = gs.find(
               (g) => !localGroups.some((o) => o.group_id === g.group_id)
             )
+            // Auto-select only the group just created — never a fallback first group
             if (newest) setGroupSlug(newest.group_id)
-            else if (gs[0]) setGroupSlug(gs[0].group_id)
             onGroupsChanged?.()
           } catch {
             onGroupsChanged?.()

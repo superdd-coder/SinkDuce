@@ -3202,12 +3202,9 @@ def attach_file_to_node(
                 ).fetchone()
                 if grp and grp["folder_id"]:
                     target_folder_id = grp["folder_id"]
-            if not target_folder_id:
-                raise HTTPException(
-                    400,
-                    "Node has no group — cannot auto-determine upload folder. "
-                    "Upload to a folder first, then attach with file_id.",
-                )
+            # No group (or group without folder) → root orphan upload. The node
+            # keeps the attachment via file_nodes; derived paths sync later if
+            # a group/branch folder appears (see _sync_node_derived_paths).
         finally:
             conn2.close()
 
