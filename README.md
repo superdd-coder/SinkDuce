@@ -33,7 +33,7 @@ LLM, embedding, and speech can use cloud APIs or **local models** (Ollama, LM St
 
 ### macOS (Apple Silicon)
 
-1. Download **[SinkDuce-macos-arm64-v1.3.1.dmg](https://github.com/superdd-coder/sinkduce/releases/download/v1.3.1/SinkDuce-macos-arm64-v1.3.1.dmg)** from the [v1.3.1 Release](https://github.com/superdd-coder/sinkduce/releases/tag/v1.3.1).
+1. Download **[SinkDuce-macos-arm64-v1.3.2.dmg](https://github.com/superdd-coder/sinkduce/releases/download/v1.3.2/SinkDuce-macos-arm64-v1.3.2.dmg)** from the [v1.3.2 Release](https://github.com/superdd-coder/sinkduce/releases/tag/v1.3.2).
 2. Open the disk image and drag **SinkDuce** into Applications.
 3. First launch: right-click → **Open** (ad-hoc signed; Gatekeeper may warn).
 4. After an update: **Cmd+Q** then reopen — the red window button only hides to the menu bar.
