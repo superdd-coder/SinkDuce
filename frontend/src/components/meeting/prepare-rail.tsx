@@ -34,6 +34,7 @@ import { useAppStore } from "@/stores/app-store"
 import { useT } from "@/i18n/use-t"
 import { MeetingNotesCard } from "./meeting-notes-card"
 import {
+  dropAttendeesWithoutSelection,
   orderBriefSections,
   parseBriefSections,
   parseInlineBold,
@@ -610,7 +611,7 @@ function BriefPanel({
 }) {
   const t = useT()
   const locale = useAppStore((s) => s.locale)
-  const selectedCount = (meeting.expected_people ?? []).length
+  const hasAttendees = (meeting.expected_people ?? []).length > 0
   const hasAgenda = !!notes.trim()
   const [brief, setBrief] = useState<MeetingBrief>(meeting.brief ?? EMPTY_BRIEF)
   const [busy, setBusy] = useState(false)
@@ -667,7 +668,7 @@ function BriefPanel({
   }, [meeting.id, meeting.expected_people, brief.generated_at])
 
   const generate = useCallback(async () => {
-    if (!selectedCount || busy) return
+    if (busy) return
     setBusy(true)
     setBrief((prev) => ({ ...prev, state: "generating", error: null }))
     try {
@@ -685,7 +686,7 @@ function BriefPanel({
     } finally {
       setBusy(false)
     }
-  }, [busy, locale, meeting.id, onMeetingUpdated, selectedCount])
+  }, [busy, locale, meeting.id, onMeetingUpdated])
 
   if (brief.state === "generating") {
     return (
@@ -721,7 +722,7 @@ function BriefPanel({
             type="button"
             className="pm-prepare-brief-refresh"
             onClick={() => void generate()}
-            disabled={busy || !selectedCount}
+            disabled={busy}
             title={t("meeting.prepareRegenerate")}
           >
             <RefreshCw className={cn("size-3.5", busy && "spin")} />
@@ -731,7 +732,10 @@ function BriefPanel({
           <p className="pm-prepare-brief-error">{t("meeting.prepareStaleWarning")}</p>
         )}
         <div className="pm-brief-list">
-          {orderBriefSections(parseBriefSections(brief.markdown)).map((section) => (
+          {dropAttendeesWithoutSelection(
+            orderBriefSections(parseBriefSections(brief.markdown)),
+            hasAttendees,
+          ).map((section) => (
             <BriefSectionCard key={`${section.kind}-${section.token}`} section={section} />
           ))}
         </div>
@@ -747,7 +751,7 @@ function BriefPanel({
           type="button"
           className="pm-prepare-cta"
           onClick={() => void generate()}
-          disabled={!selectedCount || busy}
+          disabled={busy}
         >
           {t("meeting.prepareRetry")}
         </button>
@@ -758,32 +762,20 @@ function BriefPanel({
   return (
     <div className="pm-prepare-brief">
       <p className="pm-prepare-hint">{t("meeting.prepareBriefHint")}</p>
-      {selectedCount ? (
-        <>
-          <button
-            type="button"
-            className="pm-prepare-cta"
-            onClick={() => void generate()}
-            disabled={busy}
-          >
-            {brief.state === "none" && !brief.markdown
-              ? t("meeting.prepareGenerate")
-              : t("meeting.prepareRegenerate")}
-          </button>
-          {!hasAgenda && (
-            <p className="pm-prepare-brief-dirty">
-              {t("meeting.prepareAgendaNudge")}
-            </p>
-          )}
-          {dirtyCount ? (
-            <p className="pm-prepare-brief-dirty">
-              {t("meeting.prepareNDirty", { n: dirtyCount })}
-            </p>
-          ) : null}
-        </>
-      ) : (
-        <p className="pm-prepare-empty">{t("meeting.prepareNoSelection")}</p>
-      )}
+      <button
+        type="button"
+        className="pm-prepare-cta"
+        onClick={() => void generate()}
+        disabled={busy}
+      >
+        {brief.state === "none" && !brief.markdown
+          ? t("meeting.prepareGenerate")
+          : t("meeting.prepareRegenerate")}
+      </button>
+      {!hasAgenda && <p className="pm-prepare-brief-dirty">{t("meeting.prepareAgendaNudge")}</p>}
+      {dirtyCount ? (
+        <p className="pm-prepare-brief-dirty">{t("meeting.prepareNDirty", { n: dirtyCount })}</p>
+      ) : null}
     </div>
   )
 }

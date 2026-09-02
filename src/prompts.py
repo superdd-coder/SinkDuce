@@ -2307,6 +2307,8 @@ Observation cards (oldest first):
 #     todos_block  — open todos from the group's meetings, stale first
 #                    (empty when the meeting has no group or no open todos)
 #     persons_block — one entry per pre-selected attendee
+#                    (empty when no attendee is pre-selected; the empty input
+#                    makes the model omit the Attendees section)
 MEETING_PREP_BRIEF_PROMPT = """Write a one-page pre-meeting brief. The user walks into this meeting in two minutes; the brief is their preparation sheet, organized around what THEY plan to discuss (the agenda below), not a generic recap of last time.
 
 Structure — emit each section as a markdown H2 with EXACTLY this English wording (the headings are UI tokens: never translate, reword, or number them). Omit any section whose input is empty or absent:

@@ -3,9 +3,9 @@
 Assembly (zero LLM): the group's last-meeting summary, open todos from the
 group's meetings, attendee profiles and metadata. Synthesis: exactly one LLM
 call over that compact context. Degradation is decided here, not in the
-prompt: absent blocks are simply not rendered (non-group meetings get the
-attendee section only; a missing last-meeting summary degrades to a one-line
-note; no open todos means no todo block).
+prompt: absent blocks are simply not rendered (no pre-selected attendees
+means no attendee block; a missing last-meeting summary degrades to a
+one-line note; no open todos means no todo block).
 """
 
 from __future__ import annotations
@@ -281,7 +281,7 @@ def _todos_block(open_todos: list[dict]) -> str:
 
 def _persons_block(persons: list[dict]) -> str:
     if not persons:
-        return "(none)"
+        return ""
     chunks = []
     for p in persons:
         lines = [f"### {p['name']}"]
@@ -319,8 +319,6 @@ def generate_brief(meeting_id: str, *, locale: str = "zh-CN", llm=None) -> dict:
     if meeting is None:
         raise FileNotFoundError(f"Meeting {meeting_id} not found")
     person_ids = list(meeting.expected_people or [])
-    if not person_ids:
-        raise ValueError("No pre-selected attendees — set expected_people first")
 
     # Lazy profile refresh: cached when clean (zero LLM), distilled when dirty.
     # Concurrent — one slow provider must not serialize everyone.
@@ -422,8 +420,6 @@ def start_brief_generate(meeting_id: str, *, locale: str = "zh-CN") -> dict:
     meeting = get_meeting(meeting_id)
     if meeting is None:
         raise FileNotFoundError(f"Meeting {meeting_id} not found")
-    if not (meeting.expected_people or []):
-        raise ValueError("No pre-selected attendees — set expected_people first")
 
     with _generating_lock:
         already = meeting_id in _BRIEF_GENERATING

@@ -88,6 +88,18 @@ export function orderBriefSections(sections: BriefSection[]): BriefSection[] {
     .map((row) => row.section)
 }
 
+/**
+ * Hide the Attendees section when no attendee is pre-selected. The prompt
+ * omits the section when the person input is empty, but legacy briefs or a
+ * talkative model may still emit one.
+ */
+export function dropAttendeesWithoutSelection(
+  sections: BriefSection[],
+  hasAttendees: boolean,
+): BriefSection[] {
+  return hasAttendees ? sections : sections.filter((s) => s.kind !== "attendees")
+}
+
 export interface InlineSegment {
   text: string
   bold: boolean

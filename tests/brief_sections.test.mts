@@ -3,6 +3,7 @@ import { test } from "node:test"
 
 import {
   BRIEF_SECTION_ORDER,
+  dropAttendeesWithoutSelection,
   orderBriefSections,
   parseBriefSections,
   parseInlineBold,
@@ -91,6 +92,28 @@ test("bold-only heading lines are tolerated", () => {
   const md = "**Attendees**\n### Zhang\ndirect"
   const [section] = parseBriefSections(md)
   assert.equal(section.kind, "attendees")
+})
+
+test("attendees section drops when nobody is pre-selected", () => {
+  const md = [
+    "## Recap",
+    "settled plan A",
+    "",
+    "## Attendees",
+    "### Zhang",
+    "-> bring a comparison table",
+  ].join("\n")
+  const sections = orderBriefSections(parseBriefSections(md))
+  // Legacy briefs may carry an Attendees section; without attendees it hides.
+  assert.deepEqual(
+    dropAttendeesWithoutSelection(sections, false).map((s) => s.kind),
+    ["recap"],
+  )
+  // With attendees selected nothing is filtered.
+  assert.deepEqual(
+    dropAttendeesWithoutSelection(sections, true).map((s) => s.kind),
+    ["recap", "attendees"],
+  )
 })
 
 test("parseInlineBold splits bold segments", () => {

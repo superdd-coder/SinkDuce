@@ -950,7 +950,6 @@
     "prepareConfirm": "确认添加",
     "prepareCancel": "取消",
     "prepareCreateAndAdd": "新建「{name}」并加入",
-    "prepareNoSelection": "先预选参会人，才能生成会前简报。",
     "prepareBriefHint": "围绕你的议程生成的一页准备单：相关背景、要追的进度、每位参会人会对什么有反应。",
     "prepareAgendaPlaceholder": "一行一个议题——这次开会想拿到什么结果？",
     "prepareAgendaNudge": "还没写议程——在「议程」写下本次议题，简报会更聚焦。",

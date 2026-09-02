@@ -950,7 +950,6 @@
     "prepareConfirm": "Confirm",
     "prepareCancel": "Cancel",
     "prepareCreateAndAdd": "Create “{name}” and add",
-    "prepareNoSelection": "Pre-select attendees first to unlock the brief.",
     "prepareBriefHint": "A one-page prep sheet built around your agenda: relevant history, follow-ups to press, and how each attendee will react.",
     "prepareAgendaPlaceholder": "One topic per line — what do you want to get out of this meeting?",
     "prepareAgendaNudge": "No agenda yet — write your topics in the Agenda tab for a sharper brief.",

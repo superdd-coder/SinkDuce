@@ -267,12 +267,21 @@ class TestGenerateBrief:
         synthesis = [c for c in fake.calls if "pre-meeting brief" in c.lower()][0]
         assert "not yet generated" in synthesis
 
-    def test_no_expected_people_raises(self, speakers_dir, meetings_dir, groups_dir):
+    def test_no_expected_people_generates_without_attendee_input(
+        self, speakers_dir, meetings_dir, groups_dir
+    ):
+        """No pre-selected attendees: generation still succeeds, and the
+        synthesis input carries no person block at all."""
         from src.meeting.prepare import generate_brief
 
         mid = _seed_meeting("Nobody selected")
-        with pytest.raises(ValueError):
-            generate_brief(mid, llm=_FakeLLM())
+        fake = _FakeLLM()
+        brief = generate_brief(mid, llm=fake)
+        assert brief["state"] == "ready"
+        assert brief["person_ids"] == []
+        synthesis = [c for c in fake.calls if "pre-meeting brief" in c.lower()][0]
+        assert "(none)" not in synthesis
+        assert "PROFILE" not in synthesis
 
 
 class TestBriefStateAndRoutes:
@@ -336,10 +345,28 @@ class TestBriefStateAndRoutes:
         assert body["markdown"] == "BRIEF_ROUTE"
         assert body["person_ids"] == [person.id]
 
-    def test_generate_without_people_400(self, client, speakers_dir, meetings_dir, groups_dir):
+    def test_generate_route_without_people_succeeds(
+        self, client, speakers_dir, meetings_dir, groups_dir
+    ):
+        """No pre-selected attendees: the route accepts the kick and the
+        brief lands ready with an empty person list."""
         mid = _seed_meeting("Nobody")
-        resp = client.post(f"/meetings/{mid}/brief/generate", json={})
-        assert resp.status_code == 400
+        fake = _FakeLLM(brief_md="BRIEF_NO_PEOPLE")
+        with patch("src.meeting.prepare._resolve_llm", lambda: fake):
+            resp = client.post(f"/meetings/{mid}/brief/generate", json={})
+            assert resp.status_code == 200
+            assert resp.json()["state"] in {"generating", "ready"}
+
+            deadline = time.monotonic() + 5.0
+            body = None
+            while time.monotonic() < deadline:
+                body = client.get(f"/meetings/{mid}/brief").json()
+                if body["state"] == "ready":
+                    break
+                time.sleep(0.05)
+        assert body is not None and body["state"] == "ready"
+        assert body["markdown"] == "BRIEF_NO_PEOPLE"
+        assert body["person_ids"] == []
 
 
 class _SlowLLM(_FakeLLM):
