@@ -12,6 +12,8 @@ export function MeetingNotesCard({
   placeholder,
   label,
   idleMeta,
+  /** Hide the in-card save-status meta (e.g. the rail shows it in the tab bar). */
+  hideMeta,
   minHeight = "200px",
   showToolbar,
   onEditorReady,
@@ -25,6 +27,7 @@ export function MeetingNotesCard({
    * the card) — the save-status meta stays. */
   label?: string | null
   idleMeta?: string
+  hideMeta?: boolean
   minHeight?: string
   showToolbar?: boolean
   onEditorReady?: (editor: Editor) => void
@@ -42,7 +45,7 @@ export function MeetingNotesCard({
         ) : (
           <span className="pm-meeting-f-card-label">{label ?? t("common.notes")}</span>
         )}
-        <span className="pm-meeting-f-card-meta">{meta}</span>
+        {!hideMeta && <span className="pm-meeting-f-card-meta">{meta}</span>}
       </div>
       <div className="pm-meeting-f-card-body pm-meeting-f-notes">
         <MarkdownEditor

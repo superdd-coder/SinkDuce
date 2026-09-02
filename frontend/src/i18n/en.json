@@ -958,7 +958,6 @@
     "prepareNDirty": "{n} profile(s) to update",
     "prepareGenerating": "Synthesizing brief…",
     "prepareRefreshProfiles": "Updating {n} profile(s)…",
-    "prepareFromGroup": "From “{title}”",
     "prepareFailed": "Brief generation failed.",
     "prepareStaleWarning": "Last generation failed — showing the previous brief.",
     "prepareRetry": "Retry",

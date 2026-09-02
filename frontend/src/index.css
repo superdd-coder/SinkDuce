@@ -10196,6 +10196,11 @@ button.pm-rail-new:hover:not(:disabled) {
   line-height: 1.55;
   max-width: 52ch;
 }
+/* 52ch is an English measure; CJK glyphs are ~2ch wide, so the cap wraps
+   Chinese text halfway across wide cards. Let CJK run the full width. */
+html:lang(zh) .pm-settings-card-desc {
+  max-width: 100%;
+}
 /*
  * Nested subheads (File transcription · Realtime · Enrichment · More fold) —
  * Newsreader 400 one step below section titles; never uppercase Geist chrome.
@@ -28456,6 +28461,19 @@ img.pm-recall-md-img {
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
   gap: 10px;
 }
+/* Whole right column scrolls as one: the meetings card grows with its
+   content instead of keeping a fixed pane with an inner scrollbar. */
+.pm-people-shell .pm-settings-hw-main-body {
+  overflow-y: auto;
+}
+.pm-people-shell .pm-people-identity,
+.pm-people-shell .pm-people-profile,
+.pm-people-shell .pm-people-history {
+  flex: 0 0 auto;
+}
+.pm-people-shell .pm-people-meetings {
+  overflow: visible;
+}
 .pm-people-history {
   flex: 1 1 auto;
   min-height: 0;
@@ -28549,6 +28567,18 @@ img.pm-recall-md-img {
   padding: 10px 12px 0;
   border-bottom: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
 }
+.pm-prepare-tabs-side {
+  margin-left: auto;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 2px;
+}
+.pm-prepare-save-state {
+  font: 450 10px/1 var(--pm-ff, system-ui, sans-serif);
+  color: var(--pm-faint, #969c96);
+}
 .pm-prepare-tab {
   display: inline-flex;
   align-items: center;
@@ -28597,6 +28627,28 @@ img.pm-recall-md-img {
   margin: 0 0 12px;
   font: 450 12.5px/1.55 var(--pm-ff, system-ui, sans-serif);
   color: color-mix(in srgb, var(--pm-ink, #121410) 68%, transparent);
+}
+/* Empty states (no attendees picked / no brief yet): fill the tab body and
+   center the hint + CTA both ways. */
+.pm-prepare-attendees.is-empty,
+.pm-prepare-brief.is-empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
+}
+.pm-prepare-attendees.is-empty .pm-prepare-hint,
+.pm-prepare-brief.is-empty .pm-prepare-hint {
+  margin: 0;
+}
+.pm-prepare-brief.is-empty .pm-prepare-brief-dirty {
+  margin: 0;
+}
+.is-empty .pm-prepare-cta {
+  align-self: center;
 }
 .pm-prepare-empty {
   margin: 8px 0;

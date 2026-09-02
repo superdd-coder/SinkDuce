@@ -958,7 +958,6 @@
     "prepareNDirty": "{n} 人需更新侧写",
     "prepareGenerating": "正在合成简报…",
     "prepareRefreshProfiles": "正在更新 {n} 人侧写…",
-    "prepareFromGroup": "来自「{title}」",
     "prepareFailed": "简报生成失败。",
     "prepareStaleWarning": "上次生成失败，以下为之前的简报。",
     "prepareRetry": "重试",
