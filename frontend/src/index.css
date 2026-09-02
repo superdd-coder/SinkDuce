@@ -3342,8 +3342,39 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   font-weight: 400;
   color: var(--pm-faint);
 }
-.pm-timeline-node-action {
+/* Hover-only action cluster: floats over the title (no layout room while
+   hidden). `background: inherit` tracks the card variant (white / mint /
+   canvas) and stays fully opaque — title text never shows through. */
+.pm-timeline-node-actions {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: inherit;
   opacity: 0;
+  pointer-events: none;
+  transform: translate(4px, -50%);
+  transition:
+    opacity 140ms var(--pm-timeline-ease),
+    transform 140ms var(--pm-timeline-ease);
+}
+.pm-timeline-node:hover .pm-timeline-node-actions,
+.pm-timeline-node:focus-within .pm-timeline-node-actions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(0, -50%);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-timeline-node-actions {
+    transition-duration: 0.01ms !important;
+  }
+}
+.pm-timeline-node-action {
   padding: 4px;
   border-radius: 6px;
   color: var(--pm-muted);
@@ -3351,14 +3382,10 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   border: none;
   cursor: pointer;
   flex-shrink: 0;
+  display: inline-flex;
   transition:
-    opacity 140ms var(--pm-timeline-ease),
-    color 140ms var(--pm-timeline-ease),
-    background 140ms var(--pm-timeline-ease);
-}
-.pm-timeline-node:hover .pm-timeline-node-action,
-.pm-timeline-node:focus-within .pm-timeline-node-action {
-  opacity: 1;
+    color 120ms var(--pm-timeline-ease),
+    background 120ms var(--pm-timeline-ease);
 }
 .pm-timeline-node-action:hover {
   color: var(--pm-ink);
@@ -10195,6 +10222,11 @@ button.pm-rail-new:hover:not(:disabled) {
   color: var(--pm-muted);
   line-height: 1.55;
   max-width: 52ch;
+}
+/* 52ch is an English measure; CJK glyphs are ~2ch wide, so the cap wraps
+   Chinese text halfway across wide cards. Let CJK run the full width. */
+html:lang(zh) .pm-settings-card-desc {
+  max-width: 100%;
 }
 /*
  * Nested subheads (File transcription · Realtime · Enrichment · More fold) —
@@ -19697,20 +19729,21 @@ button.pm-files-row-edit {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: 100%;
-  min-height: 240px;
+  /* Parent (.pm-chat-thread-fade) is height:auto — % height would collapse.
+     min-height resolves against it and centers in the real thread height. */
+  min-height: 100%;
   padding: 48px 24px;
   text-align: center;
 }
 .pm-chat-empty-title {
   margin: 0;
-  font: var(--pm-t-title);
-  color: var(--pm-ink, #121410);
+  font: var(--pm-t-body);
+  color: var(--pm-muted, #6a706a);
 }
 .pm-chat-empty-sub {
   margin: 0;
-  font: var(--pm-t-meta);
-  color: var(--pm-faint, #969c96);
+  font: var(--pm-t-body);
+  color: var(--pm-muted, #6a706a);
 }
 .pm-chat-scroll-btn {
   /* Sit above the floating composer (tools + field ~92–110px + dock pad) */
@@ -28456,6 +28489,19 @@ img.pm-recall-md-img {
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
   gap: 10px;
 }
+/* Whole right column scrolls as one: the meetings card grows with its
+   content instead of keeping a fixed pane with an inner scrollbar. */
+.pm-people-shell .pm-settings-hw-main-body {
+  overflow-y: auto;
+}
+.pm-people-shell .pm-people-identity,
+.pm-people-shell .pm-people-profile,
+.pm-people-shell .pm-people-history {
+  flex: 0 0 auto;
+}
+.pm-people-shell .pm-people-meetings {
+  overflow: visible;
+}
 .pm-people-history {
   flex: 1 1 auto;
   min-height: 0;
@@ -28549,6 +28595,18 @@ img.pm-recall-md-img {
   padding: 10px 12px 0;
   border-bottom: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
 }
+.pm-prepare-tabs-side {
+  margin-left: auto;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 2px;
+}
+.pm-prepare-save-state {
+  font: 450 10px/1 var(--pm-ff, system-ui, sans-serif);
+  color: var(--pm-faint, #969c96);
+}
 .pm-prepare-tab {
   display: inline-flex;
   align-items: center;
@@ -28595,13 +28653,35 @@ img.pm-recall-md-img {
 }
 .pm-prepare-hint {
   margin: 0 0 12px;
-  font: 450 12.5px/1.55 var(--pm-ff, system-ui, sans-serif);
-  color: color-mix(in srgb, var(--pm-ink, #121410) 68%, transparent);
+  font: var(--pm-t-body);
+  color: var(--pm-muted, #6a706a);
+}
+/* Empty states (no attendees picked / no brief yet): fill the tab body and
+   center the hint + CTA both ways. */
+.pm-prepare-attendees.is-empty,
+.pm-prepare-brief.is-empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
+}
+.pm-prepare-attendees.is-empty .pm-prepare-hint,
+.pm-prepare-brief.is-empty .pm-prepare-hint {
+  margin: 0;
+}
+.pm-prepare-brief.is-empty .pm-prepare-brief-dirty {
+  margin: 0;
+}
+.is-empty .pm-prepare-cta {
+  align-self: center;
 }
 .pm-prepare-empty {
   margin: 8px 0;
-  font: 400 12.5px/1.5 var(--pm-ff, system-ui, sans-serif);
-  color: color-mix(in srgb, var(--pm-ink, #121410) 40%, transparent);
+  font: var(--pm-t-body);
+  color: var(--pm-muted, #6a706a);
 }
 .pm-prepare-chips {
   display: flex;
@@ -28691,8 +28771,8 @@ img.pm-recall-md-img {
 }
 .pm-prepare-brief-dirty {
   margin: 8px 0 0;
-  font: 450 11.5px/1.4 var(--pm-ff, system-ui, sans-serif);
-  color: color-mix(in srgb, var(--pm-ink, #121410) 45%, transparent);
+  font: var(--pm-t-body);
+  color: var(--pm-muted, #6a706a);
 }
 .pm-prepare-brief-error {
   margin: 0 0 10px;

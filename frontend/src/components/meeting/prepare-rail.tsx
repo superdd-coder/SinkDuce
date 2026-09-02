@@ -34,6 +34,7 @@ import { useAppStore } from "@/stores/app-store"
 import { useT } from "@/i18n/use-t"
 import { MeetingNotesCard } from "./meeting-notes-card"
 import {
+  dropAttendeesWithoutSelection,
   orderBriefSections,
   parseBriefSections,
   parseInlineBold,
@@ -42,6 +43,14 @@ import {
 import type { MeetingNotesStatus } from "@/hooks/use-meeting-notes"
 
 type PrepareTab = "attendees" | "brief" | "notes"
+
+const EMPTY_BRIEF: MeetingBrief = {
+  state: "none",
+  markdown: "",
+  error: null,
+  generated_at: "",
+  person_ids: [],
+}
 
 export function PrepareRail({
   meetingId,
@@ -63,6 +72,7 @@ export function PrepareRail({
   onMeetingUpdated: (meeting: Meeting) => void
 }) {
   const t = useT()
+  const locale = useAppStore((s) => s.locale)
   const [tab, setTab] = useState<PrepareTab>(meeting.brief ? "brief" : "attendees")
 
   const tabs: { key: PrepareTab; label: string; icon: typeof Users }[] = [
@@ -70,6 +80,65 @@ export function PrepareRail({
     { key: "notes", label: t("meeting.prepareTabNotes"), icon: ClipboardList },
     { key: "brief", label: t("meeting.prepareTabBrief"), icon: FileText },
   ]
+
+  // Brief state lives here so the regenerate button can sit in the tab bar.
+  const [brief, setBrief] = useState<MeetingBrief>(meeting.brief ?? EMPTY_BRIEF)
+  const [briefBusy, setBriefBusy] = useState(false)
+  const briefKey = `${meeting.id}:${meeting.brief?.generated_at ?? ""}`
+  const keyRef = useRef(briefKey)
+
+  // Sync when the parent meeting object brings a newer brief.
+  useEffect(() => {
+    if (keyRef.current !== briefKey) {
+      keyRef.current = briefKey
+      if (meeting.brief) setBrief(meeting.brief)
+    }
+  }, [briefKey, meeting.brief])
+
+  useEffect(() => {
+    let alive = true
+    getMeetingBrief(meeting.id)
+      .then((b) => {
+        if (alive) setBrief(b)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [meeting.id])
+
+  // Poll while the backend synthesizes.
+  useEffect(() => {
+    if (brief.state !== "generating") return
+    const id = window.setInterval(() => {
+      getMeetingBrief(meeting.id)
+        .then((b) => setBrief(b))
+        .catch(() => {})
+    }, 900)
+    return () => window.clearInterval(id)
+  }, [brief.state, meeting.id])
+
+  const generateBrief = useCallback(async () => {
+    if (briefBusy) return
+    setBriefBusy(true)
+    setBrief((prev) => ({ ...prev, state: "generating", error: null }))
+    try {
+      const next = await generateMeetingBrief(meeting.id, locale)
+      setBrief(next)
+      if (next.state === "ready") {
+        try {
+          onMeetingUpdated(await getMeeting(meeting.id))
+        } catch {
+          /* brief already in local state; meeting refresh is best-effort */
+        }
+      }
+    } catch {
+      setBrief((prev) => ({ ...prev, state: "error", error: "request failed" }))
+    } finally {
+      setBriefBusy(false)
+    }
+  }, [briefBusy, locale, meeting.id, onMeetingUpdated])
+
   const briefReady = meeting.brief?.state === "ready"
   const handleDot = !!notes.trim() || briefReady
 
@@ -109,6 +178,27 @@ export function PrepareRail({
                 )}
               </button>
             ))}
+            <span className="pm-prepare-tabs-side">
+              {tab === "notes" && (
+                <span className="pm-prepare-save-state">
+                  {notesStatus === "saved"
+                    ? t("meeting.notesSaved")
+                    : t("meeting.notesSaving")}
+                </span>
+              )}
+              {tab === "brief" &&
+                (brief.state === "ready" || (brief.state === "error" && brief.markdown)) && (
+                  <button
+                    type="button"
+                    className="pm-prepare-brief-refresh"
+                    onClick={() => void generateBrief()}
+                    disabled={briefBusy}
+                    title={t("meeting.prepareRegenerate")}
+                  >
+                    <RefreshCw className={cn("size-3.5", briefBusy && "spin")} />
+                  </button>
+                )}
+            </span>
           </div>
           <div className="pm-prepare-body" key={tab}>
             {tab === "attendees" && (
@@ -123,10 +213,17 @@ export function PrepareRail({
                 /* The tab above already says "Agenda" — no card title. */
                 label={null}
                 placeholder={t("meeting.prepareAgendaPlaceholder")}
+                hideMeta
               />
             )}
             {tab === "brief" && (
-              <BriefPanel meeting={meeting} notes={notes} onMeetingUpdated={onMeetingUpdated} />
+              <BriefPanel
+                meeting={meeting}
+                notes={notes}
+                brief={brief}
+                busy={briefBusy}
+                onGenerate={generateBrief}
+              />
             )}
           </div>
         </div>
@@ -261,10 +358,11 @@ function AttendeePicker({
   }
 
   const byId = useMemo(() => new Map(people.map((p) => [p.id, p])), [people])
+  const empty = selectedIds.length === 0
 
   return (
-    <div className="pm-prepare-attendees">
-      <p className="pm-prepare-hint">{t("meeting.prepareAttendeesHint")}</p>
+    <div className={cn("pm-prepare-attendees", empty && "is-empty")}>
+      {!empty && <p className="pm-prepare-hint">{t("meeting.prepareAttendeesHint")}</p>}
       {selectedIds.length > 0 && (
         <div className="pm-prepare-chips">
           {selectedIds.map((id) => {
@@ -591,63 +689,23 @@ function BriefSectionCard({ section }: { section: BriefSection }) {
   )
 }
 
-const EMPTY_BRIEF: MeetingBrief = {
-  state: "none",
-  markdown: "",
-  error: null,
-  generated_at: "",
-  person_ids: [],
-}
-
 function BriefPanel({
   meeting,
   notes,
-  onMeetingUpdated,
+  brief,
+  busy,
+  onGenerate,
 }: {
   meeting: Meeting
   notes: string
-  onMeetingUpdated: (meeting: Meeting) => void
+  brief: MeetingBrief
+  busy: boolean
+  onGenerate: () => void
 }) {
   const t = useT()
-  const locale = useAppStore((s) => s.locale)
-  const selectedCount = (meeting.expected_people ?? []).length
+  const hasAttendees = (meeting.expected_people ?? []).length > 0
   const hasAgenda = !!notes.trim()
-  const [brief, setBrief] = useState<MeetingBrief>(meeting.brief ?? EMPTY_BRIEF)
-  const [busy, setBusy] = useState(false)
   const [dirtyCount, setDirtyCount] = useState<number | null>(null)
-  const briefKey = `${meeting.id}:${meeting.brief?.generated_at ?? ""}`
-  const keyRef = useRef(briefKey)
-
-  // Sync when the parent meeting object brings a newer brief.
-  useEffect(() => {
-    if (keyRef.current !== briefKey) {
-      keyRef.current = briefKey
-      if (meeting.brief) setBrief(meeting.brief)
-    }
-  }, [briefKey, meeting.brief])
-
-  useEffect(() => {
-    let alive = true
-    getMeetingBrief(meeting.id)
-      .then((b) => {
-        if (alive) setBrief(b)
-      })
-      .catch(() => {})
-    return () => {
-      alive = false
-    }
-  }, [meeting.id])
-
-  // Poll while the backend synthesizes.
-  useEffect(() => {
-    if (brief.state !== "generating") return
-    const id = window.setInterval(() => {
-      getMeetingBrief(meeting.id)
-        .then((b) => setBrief(b))
-        .catch(() => {})
-    }, 900)
-    return () => window.clearInterval(id)
-  }, [brief.state, meeting.id])
 
   // How many selected attendees need a profile refresh (cost transparency).
   useEffect(() => {
@@ -666,28 +724,7 @@ function BriefPanel({
     }
   }, [meeting.id, meeting.expected_people, brief.generated_at])
 
-  const generate = useCallback(async () => {
-    if (!selectedCount || busy) return
-    setBusy(true)
-    setBrief((prev) => ({ ...prev, state: "generating", error: null }))
-    try {
-      const next = await generateMeetingBrief(meeting.id, locale)
-      setBrief(next)
-      if (next.state === "ready") {
-        try {
-          onMeetingUpdated(await getMeeting(meeting.id))
-        } catch {
-          /* brief already in local state; meeting refresh is best-effort */
-        }
-      }
-    } catch {
-      setBrief((prev) => ({ ...prev, state: "error", error: "request failed" }))
-    } finally {
-      setBusy(false)
-    }
-  }, [busy, locale, meeting.id, onMeetingUpdated, selectedCount])
-
-  if (brief.state === "generating") {
+  if (busy || brief.state === "generating") {
     return (
       <div className="pm-prepare-brief">
         <div className="pm-prepare-brief-skeleton" aria-hidden>
@@ -707,31 +744,16 @@ function BriefPanel({
   }
 
   if (brief.state === "ready" || (brief.state === "error" && brief.markdown)) {
-    const stamp = brief.generated_at ? new Date(brief.generated_at) : null
     return (
       <div className="pm-prepare-brief">
-        <div className="pm-prepare-brief-head">
-          <span className="pm-prepare-brief-meta">
-            {brief.group_title
-              ? t("meeting.prepareFromGroup", { title: brief.group_title })
-              : t("meeting.prepareTabBrief")}
-            {stamp ? ` · ${stamp.toLocaleString()}` : ""}
-          </span>
-          <button
-            type="button"
-            className="pm-prepare-brief-refresh"
-            onClick={() => void generate()}
-            disabled={busy || !selectedCount}
-            title={t("meeting.prepareRegenerate")}
-          >
-            <RefreshCw className={cn("size-3.5", busy && "spin")} />
-          </button>
-        </div>
         {brief.state === "error" && (
           <p className="pm-prepare-brief-error">{t("meeting.prepareStaleWarning")}</p>
         )}
         <div className="pm-brief-list">
-          {orderBriefSections(parseBriefSections(brief.markdown)).map((section) => (
+          {dropAttendeesWithoutSelection(
+            orderBriefSections(parseBriefSections(brief.markdown)),
+            hasAttendees,
+          ).map((section) => (
             <BriefSectionCard key={`${section.kind}-${section.token}`} section={section} />
           ))}
         </div>
@@ -746,8 +768,8 @@ function BriefPanel({
         <button
           type="button"
           className="pm-prepare-cta"
-          onClick={() => void generate()}
-          disabled={!selectedCount || busy}
+          onClick={onGenerate}
+          disabled={busy}
         >
           {t("meeting.prepareRetry")}
         </button>
@@ -755,35 +777,22 @@ function BriefPanel({
     )
   }
 
+  // Nothing generated yet: hint + CTA centered in the tab body.
   return (
-    <div className="pm-prepare-brief">
+    <div className="pm-prepare-brief is-empty">
       <p className="pm-prepare-hint">{t("meeting.prepareBriefHint")}</p>
-      {selectedCount ? (
-        <>
-          <button
-            type="button"
-            className="pm-prepare-cta"
-            onClick={() => void generate()}
-            disabled={busy}
-          >
-            {brief.state === "none" && !brief.markdown
-              ? t("meeting.prepareGenerate")
-              : t("meeting.prepareRegenerate")}
-          </button>
-          {!hasAgenda && (
-            <p className="pm-prepare-brief-dirty">
-              {t("meeting.prepareAgendaNudge")}
-            </p>
-          )}
-          {dirtyCount ? (
-            <p className="pm-prepare-brief-dirty">
-              {t("meeting.prepareNDirty", { n: dirtyCount })}
-            </p>
-          ) : null}
-        </>
-      ) : (
-        <p className="pm-prepare-empty">{t("meeting.prepareNoSelection")}</p>
-      )}
+      <button
+        type="button"
+        className="pm-prepare-cta"
+        onClick={onGenerate}
+        disabled={busy}
+      >
+        {t("meeting.prepareGenerate")}
+      </button>
+      {!hasAgenda && <p className="pm-prepare-brief-dirty">{t("meeting.prepareAgendaNudge")}</p>}
+      {dirtyCount ? (
+        <p className="pm-prepare-brief-dirty">{t("meeting.prepareNDirty", { n: dirtyCount })}</p>
+      ) : null}
     </div>
   )
 }

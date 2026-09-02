@@ -2245,8 +2245,7 @@ Rules:
 - At most 3 items per speaker; prefer fewer and stronger.
 - Use generic placeholders ("Project X", "entity A") instead of concrete project or person names.
 - A speaker with only small talk, purely topical remarks, or very little speech gets an empty list — that is a valid answer.
-- Output ONLY a JSON object mapping each speaker id to its array, no markdown fence, e.g.
-  {{"spk0": ["asks about staffing before agreeing to any timeline"], "spk1": []}}
+- Output ONLY a JSON object mapping each speaker id — EXACTLY as written in the "## <speaker_id>" headers above, never renamed or prefixed — to its array, no markdown fence.
 
 Meeting context: {meeting_title} ({meeting_date})
 Speakers:
@@ -2307,6 +2306,8 @@ Observation cards (oldest first):
 #     todos_block  — open todos from the group's meetings, stale first
 #                    (empty when the meeting has no group or no open todos)
 #     persons_block — one entry per pre-selected attendee
+#                    (empty when no attendee is pre-selected; the empty input
+#                    makes the model omit the Attendees section)
 MEETING_PREP_BRIEF_PROMPT = """Write a one-page pre-meeting brief. The user walks into this meeting in two minutes; the brief is their preparation sheet, organized around what THEY plan to discuss (the agenda below), not a generic recap of last time.
 
 Structure — emit each section as a markdown H2 with EXACTLY this English wording (the headings are UI tokens: never translate, reword, or number them). Omit any section whose input is empty or absent:

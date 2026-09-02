@@ -210,47 +210,53 @@ export function NodeCard({
           )}
         </div>
 
-        {isMeetingAnchor && onCreateMeetingTodos && (
-          <button
-            type="button"
-            className="pm-timeline-node-action relative opacity-0 group-hover/card:opacity-100 transition-opacity"
-            onClick={(e) => {
-              e.stopPropagation()
-              onCreateMeetingTodos()
-            }}
-            title={t("fileMgmt.createTodosSummary")}
-          >
-            <ListTodo className="h-3.5 w-3.5" />
-          </button>
-        )}
+        {/* Hover-only actions: absolutely positioned so they take no layout
+            room; the opaque (inherited) surface covers the title while shown. */}
+        {(isMeetingAnchor && onCreateMeetingTodos) || onCreateChain || onMergeBranch ? (
+          <div className="pm-timeline-node-actions">
+            {isMeetingAnchor && onCreateMeetingTodos && (
+              <button
+                type="button"
+                className="pm-timeline-node-action"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onCreateMeetingTodos()
+                }}
+                title={t("fileMgmt.createTodosSummary")}
+              >
+                <ListTodo className="h-3.5 w-3.5" />
+              </button>
+            )}
 
-        {onCreateChain && (
-          <button
-            type="button"
-            className="pm-timeline-node-action relative"
-            onClick={(e) => {
-              e.stopPropagation()
-              onCreateChain()
-            }}
-            title={t("fileMgmt.startBranch")}
-          >
-            <GitBranchPlus className="h-3.5 w-3.5" />
-          </button>
-        )}
+            {onCreateChain && (
+              <button
+                type="button"
+                className="pm-timeline-node-action"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onCreateChain()
+                }}
+                title={t("fileMgmt.startBranch")}
+              >
+                <GitBranchPlus className="h-3.5 w-3.5" />
+              </button>
+            )}
 
-        {onMergeBranch && (
-          <button
-            type="button"
-            className="pm-timeline-node-action is-merge relative"
-            onClick={(e) => {
-              e.stopPropagation()
-              onMergeBranch()
-            }}
-            title={t("fileMgmt.mergeBranch")}
-          >
-            <GitMerge className="h-3.5 w-3.5" />
-          </button>
-        )}
+            {onMergeBranch && (
+              <button
+                type="button"
+                className="pm-timeline-node-action is-merge"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onMergeBranch()
+                }}
+                title={t("fileMgmt.mergeBranch")}
+              >
+                <GitMerge className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        ) : null}
       </div>
 
       {tipOpen &&

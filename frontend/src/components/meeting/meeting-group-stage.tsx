@@ -243,11 +243,7 @@ export function MeetingGroupStage({
 
       <div className="relative min-h-0 min-w-0">
         <section className="absolute inset-0 flex min-h-0 flex-col overflow-hidden rounded-[20px] bg-[var(--pm-float,#fdfbf7)] shadow-[var(--pm-shadow)]">
-          <div className="pm-meeting-rail-head">
-            <h3 className="pm-meeting-rail-title m-0 min-w-0 truncate">{t("meeting.groupMembers")}</h3>
-            <span className="pm-meta tabular-nums shrink-0">{group?.members.length || 0}</span>
-          </div>
-          <div className="pm-meeting-group-actions mx-3 mb-2">
+          <div className="pm-meeting-group-actions mx-3 mt-3 mb-2">
             <button type="button" className="pm-meeting-group-action" onClick={() => void addNew()}>
               {t("meeting.addNewMeeting")}
             </button>
