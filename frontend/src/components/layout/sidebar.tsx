@@ -28,9 +28,9 @@ export function Sidebar() {
   const t = useT()
   const navItems: Array<{ view: SidebarView; label: string }> = [
     { view: "chat", label: t("nav.chat") },
+    { view: "meeting", label: t("nav.meeting") },
     { view: "database", label: t("nav.library") },
     { view: "recall", label: t("nav.recall") },
-    { view: "meeting", label: t("nav.meeting") },
     { view: "llm_provider", label: t("nav.settings") },
   ]
   const { sidebarView, setSidebarView } = useAppStore(

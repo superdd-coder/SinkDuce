@@ -1084,7 +1084,10 @@ export function TimelineView({
     let bestSameRow: Hit | null = null
 
     for (const c of pool) {
-      const rect = c.rect.current
+      // Live DOM rect — the cached rect goes stale once the live drag preview
+      // reorders cards, which made drops land on the wrong chain.
+      const nodeEl = (c as { node?: { current?: Element | null } }).node?.current ?? null
+      const rect = (nodeEl as HTMLElement | null)?.getBoundingClientRect() ?? c.rect.current
       if (!rect) continue
       const cx = rect.left + rect.width / 2
       const cy = rect.top + rect.height / 2
@@ -1856,10 +1859,10 @@ export function TimelineView({
     msgFocus,
   ])
 
-  // Connector remeasure key — while dragging we hide SVG (stale paths look broken);
-  // after drop, include full geometry so paths reattach.
+  // Connector remeasure key — include the live drag order so paths re-anchor
+  // every frame the preview reorders cards (cards really move in the DOM).
   const layoutKey = dragN
-    ? `dragging:${dragN.node_id}`
+    ? `dragging:${dragN.node_id}|d${JSON.stringify(dragItems ?? {})}`
     : binfo
         .map(
           b =>
@@ -1875,12 +1878,8 @@ export function TimelineView({
 
   // Measure closed-loop connectors: parent → first event; last event → merge (if done).
   useLayoutEffect(() => {
-    // Hide connectors during drag — cards move under frozen/wrong paths otherwise
-    if (dragN) {
-      setConnectors(prev => (prev.length === 0 ? prev : []))
-      return
-    }
-
+    // Keep connectors alive during drag: cards really move in the DOM and the
+    // layoutKey includes the live drag order, so paths re-anchor in step.
     const measure = () => {
       const root = layoutRef.current
       const mainEl = mainRowRef.current
