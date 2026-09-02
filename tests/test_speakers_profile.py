@@ -283,6 +283,73 @@ class TestRegenerate:
         assert fake.calls == []
 
 
+class TestParseJsonObject:
+    def test_bare_slot_keys_map_directly(self):
+        from src.speakers.profile import _parse_json_object
+
+        assert _parse_json_object('{"0": ["a"], "1": []}', ["0", "1"]) == {
+            "0": ["a"],
+            "1": [],
+        }
+
+    def test_spk_prefixed_keys_alias_to_bare_slots(self):
+        from src.speakers.profile import _parse_json_object
+
+        """Models echo the prompt example's "spkN" keys even when the blocks
+        use bare ids ("0" — DashScope realtime style). The alias must map
+        them back or every observation is silently dropped."""
+        assert _parse_json_object('{"spk0": ["a"], "spk1": []}', ["0", "1"]) == {
+            "0": ["a"],
+            "1": [],
+        }
+
+    def test_unrecognizable_keys_are_a_parse_failure(self):
+        """Content under unmappable keys must NOT become an all-empty card —
+        return None so the meeting stays uncarded and gets retried."""
+        from src.speakers.profile import _parse_json_object
+
+        assert _parse_json_object('{"speaker0": ["a"]}', ["0"]) is None
+
+    def test_legitimately_empty_response_is_not_a_failure(self):
+        from src.speakers.profile import _parse_json_object
+
+        assert _parse_json_object('{"0": [], "1": []}', ["0", "1"]) == {"0": [], "1": []}
+
+
+class TestBareSlotExtraction:
+    def test_dashscope_style_slots_keep_observations(self, speakers_dir, meetings_dir):
+        """Regression: bare slot ids ("0") + a model answering with "spk0"
+        keys used to produce all-empty cards, so profiles skipped meetings."""
+        from src.speakers.profile import regenerate_profile
+        from src.speakers.store import create_person
+
+        person = create_person("Zhang")
+        _seed_meeting("Kickoff", {"0": ["hello world"]}, {"0": person.id})
+
+        fake = _FakeLLM()  # answers with the "spk0" key style
+        profile = regenerate_profile(person.id, llm=fake)
+        assert profile.text == "PROFILE(default)"
+        assert profile.source_count == 1
+
+    def test_unmappable_answer_not_cached(self, speakers_dir, meetings_dir):
+        from src.speakers.profile import get_card, regenerate_profile
+        from src.speakers.store import create_person
+
+        person = create_person("Zhang")
+        mid = _seed_meeting("Kickoff", {"0": ["hello world"]}, {"0": person.id})
+
+        drifted = _FakeLLM(obs_map={"speaker0": ["asks sharp questions"]})
+        profile = regenerate_profile(person.id, llm=drifted)
+        assert profile.text == ""  # nothing aggregated — card stayed unmade
+        assert get_card(mid) is None
+
+        # Next run retries the extraction instead of serving an empty cache.
+        retry = _FakeLLM()
+        profile = regenerate_profile(person.id, llm=retry)
+        assert len(retry.extraction_calls) == 1
+        assert profile.text == "PROFILE(default)"
+
+
 class TestRecentCap:
     def test_only_recent_five_meetings_distilled(self, speakers_dir, meetings_dir):
         from src.speakers.profile import regenerate_profile

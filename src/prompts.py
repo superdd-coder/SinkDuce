@@ -2245,8 +2245,7 @@ Rules:
 - At most 3 items per speaker; prefer fewer and stronger.
 - Use generic placeholders ("Project X", "entity A") instead of concrete project or person names.
 - A speaker with only small talk, purely topical remarks, or very little speech gets an empty list — that is a valid answer.
-- Output ONLY a JSON object mapping each speaker id to its array, no markdown fence, e.g.
-  {{"spk0": ["asks about staffing before agreeing to any timeline"], "spk1": []}}
+- Output ONLY a JSON object mapping each speaker id — EXACTLY as written in the "## <speaker_id>" headers above, never renamed or prefixed — to its array, no markdown fence.
 
 Meeting context: {meeting_title} ({meeting_date})
 Speakers:

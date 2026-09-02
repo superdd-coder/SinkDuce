@@ -248,11 +248,27 @@ def _parse_json_object(raw: str, slots: list[str]) -> dict[str, list[str]] | Non
 
     out: dict[str, list[str]] = {}
     for slot in slots:
-        value = parsed.get(slot, [])
+        value = parsed.get(slot)
+        if value is None:
+            # Models echo the prompt example's "spkN" key style even when the
+            # blocks use bare ids ("0" — DashScope realtime style); accept
+            # both forms so observations are never silently dropped.
+            value = parsed.get(f"spk{slot}")
         if not isinstance(value, list):
             value = []
         items = [str(item).strip() for item in value if str(item).strip()]
         out[slot] = items[:_MAX_OBSERVATIONS]
+    if not any(out.values()) and any(
+        isinstance(v, list) and any(str(i).strip() for i in v) for v in parsed.values()
+    ):
+        # The response carried content under keys we cannot map to any slot —
+        # a parse failure, not a legitimately empty meeting. Returning None
+        # keeps the meeting uncarded so the next run retries.
+        logger.warning(
+            "observation keys unmapped: response keys=%s slots=%s",
+            sorted(parsed), slots,
+        )
+        return None
     return out
 
 
