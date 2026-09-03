@@ -205,3 +205,84 @@ def test_health_wildcard_bind_advertises_loopback(monkeypatch):
     assert payload["host"] == "127.0.0.1"
     assert payload["port"] == 18900
     assert payload["mcp_url"] == "http://127.0.0.1:18900/mcp"
+
+
+# ── sysaudio helper lifecycle: no orphans after the app quits ──────────────
+
+
+def _free_tcp_port() -> int:
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.fixture()
+def reset_sysaudio_module():
+    import threading
+
+    from src import desktop_sysaudio as mod
+
+    original = (mod._stop, mod._thread, mod._proc)
+    mod._stop = threading.Event()
+    mod._thread = None
+    mod._proc = None
+    yield mod
+    mod._stop.set()
+    proc = mod._proc
+    if proc is not None and proc.poll() is None:
+        proc.kill()
+        proc.wait(5)
+    mod._stop, mod._thread, mod._proc = original
+
+
+def test_stop_sysaudio_watchdog_kills_spawned_helper(
+    tmp_path, monkeypatch, reset_sysaudio_module
+):
+    import time
+
+    mod = reset_sysaudio_module
+    fake = tmp_path / "fake-sysaudio"
+    fake.write_text("#!/bin/sh\nsleep 60\n")
+    fake.chmod(0o755)
+    port = _free_tcp_port()
+    monkeypatch.setenv("SINKDUCE_DATA", str(tmp_path))
+    monkeypatch.setenv("SINKDUCE_DESKTOP", "1")
+    monkeypatch.setenv("SINKDUCE_SYS_AUDIO", f"http://127.0.0.1:{port}/")
+    monkeypatch.setenv("SINKDUCE_SYSAUDIO_BIN", str(fake))
+
+    mod.start_sysaudio_watchdog()
+    deadline = time.time() + 10
+    while (mod._proc is None or mod._proc.poll() is not None) and time.time() < deadline:
+        time.sleep(0.1)
+    assert mod._proc is not None
+    assert mod._proc.poll() is None
+
+    proc = mod._proc
+    mod.stop_sysaudio_watchdog()
+    assert mod._proc is None
+    deadline = time.time() + 5
+    while proc.poll() is None and time.time() < deadline:
+        time.sleep(0.05)
+    assert proc.poll() is not None
+
+
+def test_shutdown_helper_terminates_detached_child(reset_sysaudio_module):
+    import subprocess
+    import time
+
+    mod = reset_sysaudio_module
+    proc = subprocess.Popen(["/bin/sh", "-c", "sleep 60"], start_new_session=True)
+    try:
+        with mod._lock:
+            mod._proc = proc
+        mod._shutdown_helper()
+        deadline = time.time() + 5
+        while proc.poll() is None and time.time() < deadline:
+            time.sleep(0.05)
+        assert proc.poll() is not None
+        assert mod._proc is None
+    finally:
+        if proc.poll() is None:
+            proc.kill()
