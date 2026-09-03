@@ -6,6 +6,7 @@ Tauri starts the helper once; if it exits, recording breaks until Cmd+Q.
 
 from __future__ import annotations
 
+import atexit
 import logging
 import os
 import socket
@@ -105,10 +106,32 @@ def _watch() -> None:
                         pass
                     else:
                         _proc = None
-                if _proc is None and not helper_listening(port):
+                if _proc is None and not _stop.is_set() and not helper_listening(port):
                     _proc = _spawn(bin_path, port)
         if _stop.wait(2.0):
             return
+
+
+def _shutdown_helper() -> None:
+    """Kill the helper we spawned — a detached child must not outlive us."""
+    global _proc
+    with _lock:
+        proc = _proc
+        _proc = None
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+        try:
+            proc.wait(2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(2)
+    except OSError:
+        pass
+
+
+atexit.register(_shutdown_helper)
 
 
 def start_sysaudio_watchdog() -> None:
@@ -127,3 +150,4 @@ def start_sysaudio_watchdog() -> None:
 
 def stop_sysaudio_watchdog() -> None:
     _stop.set()
+    _shutdown_helper()

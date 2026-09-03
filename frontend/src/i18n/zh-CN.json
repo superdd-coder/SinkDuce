@@ -988,6 +988,7 @@
     "selection": "选择",
     "addSection": "添加章节",
     "noSections": "还没有章节",
+    "removeReceipt": "从提取列表移除",
     "cancelEdit": "取消编辑",
     "editTitle": "编辑标题",
     "saveTitle": "保存标题",

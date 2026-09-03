@@ -23801,10 +23801,42 @@ button.pm-files-row-edit {
   letter-spacing: 0.04em;
   opacity: 0.7;
 }
-.pm-meeting-section-card-x {
-  flex-shrink: 0;
-  margin-left: auto;
-  opacity: 0.55;
+/* Custom receipt: explicit remove sits on the card's right edge — the card
+   body itself only toggles selection, so deletion never hides on a click. */
+.pm-meeting-section-card.is-custom {
+  padding-right: 26px;
+}
+.pm-meeting-section-card-remove {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  /* Above the card button (z-index: 1) — the card bg is ~transparent, so
+     without this the × shows through but every click lands on the card. */
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  color: inherit;
+  background: transparent;
+  opacity: 0.5;
+  transition:
+    opacity 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-meeting-section-card-remove:hover:not(:disabled) {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+.pm-meeting-section-card-remove:disabled {
+  opacity: 0.3;
+  cursor: default;
 }
 .pm-meeting-section-card .pm-meeting-section-card-name {
   flex: 1 1 auto;
