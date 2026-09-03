@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 import threading
 import uuid
@@ -28,6 +29,15 @@ logger = logging.getLogger(__name__)
 # share a process-wide cap (Settings Parallel, default 50).
 _embed_executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="embed-worker")
 _parse_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="parse-worker")
+# Local (MinerU-less) parse is pdfminer — pure-Python and GIL-bound. Running
+# it on the wide pool starved the event loop on small hosts (whole backend
+# unresponsive) and 5 concurrent page-image renders spiked RAM. Cloud parse
+# (httpx releases the GIL) keeps the wide pool; local parse gets a
+# CPU-sized pool instead.
+_local_parse_executor = ThreadPoolExecutor(
+    max_workers=max(1, min(3, (os.cpu_count() or 2) // 2)),
+    thread_name_prefix="local-parse-worker",
+)
 _cpu_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cpu-worker")
 _enrich_executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="enrich-worker")
 # Separate pools so one file's OCR never blocks that file's Vision.
@@ -1092,6 +1102,35 @@ async def consolidate_handler(task: Task, collection: str) -> dict:
     return {"message": "Consolidation done", "conflicts_count": len(conflicts)}
 
 
+def _is_mineru_ready(path: Path, collection: str) -> bool:
+    """Would this file parse via MinerU cloud? Cheap config-only check.
+
+    Used before dispatch to choose the parse pool (cloud → wide I/O pool,
+    local → small CPU pool) and inside the parse worker for the actual
+    branch. Read-only: collection creation stays in the worker.
+    """
+    cloud_parsing = True
+    try:
+        if services.db and services.db.collection_exists(collection):
+            cloud_parsing = bool(
+                services.db.get_collection_config(collection)
+                .get("cloud_parsing", True)
+            )
+    except Exception as e:
+        logger.warning(
+            "[%s] cloud_parsing lookup failed (%s); assuming enabled",
+            collection, e,
+        )
+    mineru_cfg = services.config.mineru if hasattr(services.config, "mineru") else None
+    return bool(
+        cloud_parsing
+        and mineru_cfg
+        and mineru_cfg.enabled
+        and bool(mineru_cfg.api_token)
+        and path.suffix.lower() in MINERU_SUPPORTED_EXTENSIONS
+    )
+
+
 async def upload_handler(task: Task, file_path: str, collection: str, filename_param: str, meeting_id: str | None = None, source_label: str | None = None, file_id: str | None = None, meeting_date: str | None = None, version_id: str | None = None) -> dict[str, Any]:
     """处理文件上传任务 - 使用流水线队列控制并发"""
     from src.tasks.task_manager import set_current_task, clear_current_task, check_cancelled
@@ -1153,13 +1192,7 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
             mineru_cfg = services.config.mineru if hasattr(services.config, "mineru") else None
             file_ext = path.suffix.lower()
 
-            mineru_ready = (
-                cloud_parsing
-                and mineru_cfg
-                and mineru_cfg.enabled
-                and bool(mineru_cfg.api_token)
-                and file_ext in MINERU_SUPPORTED_EXTENSIONS
-            )
+            mineru_ready = _is_mineru_ready(path, collection)
             # Cloud parse is slower — give it a wider band before images/chunk
             parse_hi = 28.0 if mineru_ready else 18.0
             logger.info(
@@ -1369,8 +1402,16 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
             )
             return chunks
 
-        # Use separate CPU thread pool for parsing; chunk ∥ Vision after that
-        doc, config, file_dir = await loop.run_in_executor(_parse_executor, _parse_and_prepare)
+        # Cloud parse → wide I/O pool (GIL released in httpx); local parse →
+        # small CPU pool so GIL-bound pdfminer can't starve the event loop.
+        # The pick reads Qdrant/collection config — keep it off the loop too.
+        parse_pool = await loop.run_in_executor(
+            None, lambda: (
+                _parse_executor if _is_mineru_ready(path, collection)
+                else _local_parse_executor
+            )
+        )
+        doc, config, file_dir = await loop.run_in_executor(parse_pool, _parse_and_prepare)
         # Parse/filter is done — let the next queued file start. Remaining
         # OCR / Vision / enrich of *this* file no longer occupy the upload slot.
         task_manager.release_upload_slot(task.id)

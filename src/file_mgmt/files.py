@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import shutil
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
 from typing import IO
 
@@ -1870,13 +1871,17 @@ def upload_file_to_folder(
 def upload_folder(
     collection_id: str,
     parent_folder_id: str | None,
-    files_data: list[tuple[bytes, str]],
+    files_data: Iterable[tuple[bytes, str]],
 ) -> list[FileSummary]:
     """Upload an entire folder preserving relative paths.
 
+    *files_data* may be any iterable — the folder-upload route passes a
+    generator that reads one file at a time so a large folder never sits
+    in RAM all at once.
+
     Args:
         parent_folder_id: destination folder, or empty/None for collection root
-        files_data: list of (bytes_content, relative_filename) tuples
+        files_data: iterable of (bytes_content, relative_filename) tuples
     """
     _actor_for("file.upload_folder", collection_id, folder_id=parent_folder_id)
     if isinstance(parent_folder_id, str):

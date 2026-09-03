@@ -491,22 +491,27 @@ async def upload_file_to_folder(
 
 
 @router.post("/{collection_id}/files/upload-folder", status_code=201)
-async def upload_entire_folder(
+def upload_entire_folder(
     collection_id: str,
     files: list[UploadFile] = File(...),
     parent_folder_id: Optional[str] = Form(None),
 ):
     """Upload an entire folder preserving relative paths.
 
+    Deliberately a sync (threadpool) route with per-file streaming: the
+    whole folder used to be buffered as bytes and processed on the event
+    loop, which on large folders spiked RAM by the folder size and froze
+    every other request until the upload finished.
+
     Empty / omitted ``parent_folder_id`` uses collection root.
     """
-    files_data: list[tuple[bytes, str]] = []
-    for f in files:
-        content = await f.read()
-        # Prefer webkitRelativePath when present (browser folder pick)
-        name = getattr(f, "filename", None) or "unnamed"
-        files_data.append((content, name))
-    return service.upload_folder(collection_id, parent_folder_id, files_data)
+
+    def _stream_files():
+        for f in files:
+            name = getattr(f, "filename", None) or "unnamed"
+            yield f.file.read(), name
+
+    return service.upload_folder(collection_id, parent_folder_id, _stream_files())
 
 
 @router.get("/{collection_id}/old-versions")

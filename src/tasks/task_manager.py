@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -192,6 +193,11 @@ class TaskManager:
         task.error = "Cancelled by user"
         task.message = "Cancelled"
         task.completed_at = datetime.now(timezone.utc)
+        # A queued (not yet dequeued) upload never reaches the executor's
+        # finally — clear its ledger row here so recovery won't resurrect it.
+        ttype, _ = self._task_args.get(task_id, ("", {}))
+        if ttype in self._UPLOAD_TYPES:
+            self._finish_upload_task_ledger(task_id)
         return True
 
     def clear_completed_tasks(self) -> None:
@@ -223,9 +229,33 @@ class TaskManager:
     async def _enqueue_task(self, task_id: str, task_type: str, kwargs: dict):
         """Route task to the appropriate queue."""
         if task_type in self._UPLOAD_TYPES:
+            # Ledger first so a crash between queueing and execution is recoverable
+            self._persist_upload_task(task_id, kwargs)
             await self._upload_queue.put((task_id, task_type, kwargs))
         else:
             await self._general_queue.put((task_id, task_type, kwargs))
+
+    def _persist_upload_task(self, task_id: str, kwargs: dict) -> None:
+        """Best-effort durable ledger write for upload tasks (see task_persistence)."""
+        task = self.tasks.get(task_id)
+        if task is None:
+            return
+        try:
+            from src.tasks.task_persistence import record_upload_task
+            record_upload_task(task.id, task.collection, {
+                "filename": task.filename, **kwargs,
+            })
+        except Exception as e:
+            logger.warning("Failed to persist upload task %s: %s", task_id, e)
+
+    @staticmethod
+    def _finish_upload_task_ledger(task_id: str) -> None:
+        """Best-effort ledger clear once an upload task reached a terminal state."""
+        try:
+            from src.tasks.task_persistence import finish_upload_task
+            finish_upload_task(task_id)
+        except Exception as e:
+            logger.warning("Failed to clear upload task ledger for %s: %s", task_id, e)
 
     # ── Upload queue (limited concurrent) ──────────────────────────────
 
@@ -282,6 +312,112 @@ class TaskManager:
                 self._upload_running -= 1
             else:
                 self._upload_slot_released.discard(task_id)
+            # Terminal (completed / failed / timed out / cancelled) — the
+            # ledger row must go or recovery would re-run the task.
+            self._finish_upload_task_ledger(task_id)
+
+    # ── Upload task crash recovery ─────────────────────────────────────
+
+    @staticmethod
+    def _version_is_current(collection_id: str, file_id: str, version_id: str) -> bool:
+        """True unless meta.db shows a newer current_version for the file.
+
+        A missing meta.db means the collection was deleted while the
+        process was down → False (drop the task). An unreadable meta.db
+        returns True so the handler surfaces the real error instead of
+        silently dropping the file.
+        """
+        try:
+            from src.file_mgmt.store import _db_path
+            path = _db_path(collection_id)
+            if not path.exists():
+                return False
+            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=10)
+            try:
+                row = conn.execute(
+                    "SELECT current_version_id FROM files WHERE file_id=?",
+                    (file_id,),
+                ).fetchone()
+            finally:
+                conn.close()
+            return bool(row) and row[0] == version_id
+        except Exception as e:
+            logger.warning(
+                "Version check failed for %s/%s (%s); will retry ingest",
+                file_id, version_id, e,
+            )
+            return True
+
+    async def recover_upload_tasks(self, settle_delay: float = 15.0) -> int:
+        """Re-enqueue upload tasks left in the durable ledger by a crash.
+
+        Only the newest pending task per (collection, file) is recovered —
+        superseded versions and duplicate uploads collapse into one. Tasks
+        whose file version is no longer current are dropped. Call after
+        ``start()`` once services are initialized; *settle_delay* lets
+        Qdrant and local models come up before the first recovered embed.
+        """
+        from src.tasks import task_persistence
+        rows = task_persistence.pending_upload_tasks()
+        if not rows:
+            return 0
+        logger.info("Recovering %d persisted upload task(s)", len(rows))
+
+        newest: dict[tuple[str, str], dict] = {}
+        for row in rows:
+            payload = row["payload"]
+            key = (
+                row["collection_id"],
+                payload.get("file_id") or payload.get("file_path") or row["task_id"],
+            )
+            prev = newest.get(key)
+            if prev is None or row["created_at"] >= prev["created_at"]:
+                newest[key] = row
+
+        keep_ids = {row["task_id"] for row in newest.values()}
+        for row in rows:
+            if row["task_id"] not in keep_ids:
+                # Superseded duplicate — drop so it can't win a later
+                # recovery once the newer row completes and is cleared.
+                logger.info(
+                    "Dropping superseded duplicate upload task %s", row["task_id"]
+                )
+                self._finish_upload_task_ledger(row["task_id"])
+        survivors = list(newest.values())
+        recovered = 0
+        # Settle BEFORE enqueueing: recovered tasks are the most likely to
+        # race a still-booting Qdrant, and a failed recovered task would
+        # lose its ledger row (terminal cleanup) — orphaning the file again.
+        if survivors and settle_delay > 0:
+            await asyncio.sleep(settle_delay)
+        for row in survivors:
+            task_id = row["task_id"]
+            if row["file_id"] and row["version_id"] and not self._version_is_current(
+                row["collection_id"], row["file_id"], row["version_id"]
+            ):
+                logger.info(
+                    "Dropping stale upload task %s (version superseded or collection gone)",
+                    task_id,
+                )
+                self._finish_upload_task_ledger(task_id)
+                continue
+            payload = dict(row["payload"])
+            filename = payload.pop("filename", "recovered-upload")
+            if task_id not in self.tasks:
+                self.tasks[task_id] = Task(
+                    id=task_id,
+                    filename=filename,
+                    collection=row["collection_id"],
+                    message="Requeued after restart",
+                )
+            self._task_args[task_id] = ("upload", payload)
+            asyncio.get_running_loop().create_task(
+                self._enqueue_task(task_id, "upload", payload)
+            )
+            recovered += 1
+
+        logger.info("Recovered %d upload task(s) from ledger", recovered)
+        return recovered
 
     # ── General queue (concurrent) ─────────────────────────────────────
 
