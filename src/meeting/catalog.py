@@ -5,6 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 
+def is_archived(meeting: Any) -> bool:
+    """Strict archived check — `is True` so mock/test doubles never match."""
+    return getattr(meeting, "archived", False) is True
+
+
 def ingested_meeting_ids(collection_id: str) -> list[str]:
     from src.meeting.store import list_meetings
 
@@ -13,6 +18,8 @@ def ingested_meeting_ids(collection_id: str) -> list[str]:
         return []
     out: list[str] = []
     for m in list_meetings():
+        if is_archived(m):
+            continue
         cols = list(getattr(m, "allocated_collections", None) or [])
         if col in cols:
             out.append(m.id)
@@ -27,6 +34,8 @@ def ingested_meeting_ids_many(collection_ids: list[str]) -> list[str]:
 
     out: list[str] = []
     for m in list_meetings():
+        if is_archived(m):
+            continue
         cols = list(getattr(m, "allocated_collections", None) or [])
         if wanted.intersection(str(c) for c in cols):
             out.append(m.id)
@@ -40,9 +49,14 @@ def visible_meeting_ids(
     group_id: str | None = None,
     meeting_id: str | None = None,
 ) -> list[str]:
-    """Meetings this surface may list or search."""
+    """Meetings this surface may list or search (archived ones are excluded)."""
+    from src.meeting.store import get_meeting, list_meetings
+
     mid = (meeting_id or "").strip()
     if mid:
+        meeting = get_meeting(mid)
+        if meeting is None or is_archived(meeting):
+            return []
         return [mid]
     gid = (group_id or "").strip()
     if gid:
@@ -51,7 +65,12 @@ def visible_meeting_ids(
         group = get_group(gid)
         if group is None:
             return []
-        return [m.meeting_id for m in group.members]
+        out = []
+        for m in group.members:
+            meeting = get_meeting(m.meeting_id)
+            if meeting is not None and not is_archived(meeting):
+                out.append(m.meeting_id)
+        return out
     selected = [str(c).strip() for c in (collections or []) if str(c).strip()]
     one = (collection or "").strip()
     if one:
@@ -60,9 +79,7 @@ def visible_meeting_ids(
         return ingested_meeting_ids(one)
     if selected:
         return ingested_meeting_ids_many(selected)
-    from src.meeting.store import list_meetings
-
-    return [m.id for m in list_meetings()]
+    return [m.id for m in list_meetings() if not is_archived(m)]
 
 
 def select_lookup_targets(

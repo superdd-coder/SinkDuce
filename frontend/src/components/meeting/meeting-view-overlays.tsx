@@ -31,7 +31,7 @@ export interface MeetingViewOverlaysProps {
   handleTranscribe: () => void
   sectionTip: MeetingSectionTip | null
   sideRailOpen: boolean
-  sideTab: "sections" | "transcript" | "speaker" | "groups"
+  sideTab: "sections" | "transcript" | "speaker"
 }
 
 export function MeetingViewOverlays({
@@ -84,7 +84,7 @@ export function MeetingViewOverlays({
           overlayClassName="pm-dialog-overlay--silk"
         >
           <DialogHeader>
-            <DialogKicker>{t("meeting.groupsTab")}</DialogKicker>
+            <DialogKicker>{t("meeting.groupTag")}</DialogKicker>
             <DialogTitle>{t("meeting.deleteGroupQ")}</DialogTitle>
             <DialogDescription>
               {t("meeting.deleteGroupBody")}

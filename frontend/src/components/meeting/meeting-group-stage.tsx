@@ -1,31 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type TransitionEvent } from "react"
-import { PanelRightClose } from "lucide-react"
+import { Archive, ArchiveRestore, Check, FilePlus2, PanelRightClose, Pencil, Trash2, X } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { useT } from "@/i18n/use-t"
-import { formatApiError } from "@/api/http"
+import { Button } from "@/components/ui/button"
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogKicker,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import {
-  addMeetingGroupMember,
-  createMeeting,
   getMeeting,
   getMeetingGroup,
   getMeetingTranscript,
-  removeMeetingGroupMember,
+  updateMeetingGroup,
   type Meeting,
   type MeetingGroup,
   type TranscriptSegment,
 } from "@/api/meeting"
 import { MeetingQuickChat } from "./meeting-quick-chat"
 import { TranscriptTab } from "./transcript-panel"
-import { MeetingPickList } from "./meeting-pick-list"
 import { MediaBar, type MediaBarHandle } from "./media-bar"
 
 function findTranscriptHit(
@@ -49,15 +38,20 @@ function findTranscriptHit(
 export function MeetingGroupStage({
   groupId,
   meetings,
-  onOpenMeeting,
   onGroupChanged,
-  onMeetingsChanged,
+  onRequestDeleteGroup,
+  onCreateMeetingInGroup,
+  onToggleArchiveGroup,
 }: {
   groupId: string
   meetings: Meeting[]
-  onOpenMeeting: (id: string) => void
   onGroupChanged: (g: MeetingGroup) => void
-  onMeetingsChanged?: () => void
+  /** Delete is confirmed by the parent dialog (cascade deletes member meetings). */
+  onRequestDeleteGroup: (groupId: string) => void
+  /** Create a fresh meeting inside this group and open it. */
+  onCreateMeetingInGroup: (groupId: string) => void
+  /** Archive/unarchive the group (cascades to member meetings). */
+  onToggleArchiveGroup: (groupId: string, archived: boolean) => void
 }) {
   const t = useT()
   const [group, setGroup] = useState<MeetingGroup | null>(null)
@@ -66,9 +60,10 @@ export function MeetingGroupStage({
   const overlayOpenRef = useRef(false)
   overlayOpenRef.current = overlayOpen
   const [segments, setSegments] = useState<TranscriptSegment[]>([])
-  const [joinOpen, setJoinOpen] = useState(false)
   const [focusRef, setFocusRef] = useState<{ id: string; ts: number } | undefined>()
   const [playbackTime, setPlaybackTime] = useState<number | null>(null)
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [titleDraft, setTitleDraft] = useState("")
   const mediaBarRef = useRef<MediaBarHandle | null>(null)
   const pendingSeekRef = useRef<number | null>(null)
   const noop = useRef(() => {}).current
@@ -88,6 +83,7 @@ export function MeetingGroupStage({
     setOverlayOpen(false)
     overlayOpenRef.current = false
     setSegments([])
+    setEditingTitle(false)
     pendingSeekRef.current = null
     reload()
   }, [groupId, reload])
@@ -176,104 +172,156 @@ export function MeetingGroupStage({
     }
   }
 
-  const removeMember = async (meetingId: string) => {
-    const g = await removeMeetingGroupMember(groupId, meetingId)
-    setGroup(g)
-    onGroupChanged(g)
-    if (overlayMeeting?.id === meetingId) closeOverlay()
+  const handleStartEditTitle = () => {
+    if (!group) return
+    setTitleDraft(group.title)
+    setEditingTitle(true)
   }
 
-  const addExisting = async (meetingId: string) => {
-    const g = await addMeetingGroupMember(groupId, meetingId)
-    setGroup(g)
-    onGroupChanged(g)
-    setJoinOpen(false)
-  }
-
-  const addNew = async () => {
+  const handleSaveTitle = async () => {
+    if (!group || !titleDraft.trim()) {
+      setEditingTitle(false)
+      return
+    }
     try {
-      const title = new Date().toLocaleString("zh-CN", {
-        year: "numeric", month: "2-digit", day: "2-digit",
-        hour: "2-digit", minute: "2-digit",
-      }).replace(/\//g, "-")
-      const created = await createMeeting(title)
-      const g = await addMeetingGroupMember(groupId, created.id)
-      setGroup(g)
-      onGroupChanged(g)
-      onMeetingsChanged?.()
-      toast.success(t("meeting.meetingCreated"))
-      onOpenMeeting(created.id)
+      const next = await updateMeetingGroup(group.id, titleDraft.trim())
+      setGroup(next)
+      onGroupChanged(next)
+      setEditingTitle(false)
     } catch (err) {
-      toast.error(t("common.failedWithError", { error: formatApiError(err, t) }))
+      toast.error(t("meeting.renameFailed", { error: String(err) }))
     }
   }
 
-  const statusLabel = (m: Meeting | undefined) => {
-    if (!m) return ""
-    if (m.status === "recording") return t("meeting.recording")
-    if (m.status === "transcribing") return t("meeting.transcribing")
-    if (m.processing_state === "summarizing") return t("meeting.summarizing")
-    if (m.status === "completed") return t("common.ready")
-    return t("meeting.draft")
+  const handleToggleArchive = () => {
+    if (!group) return
+    const next = !group.archived
+    // Flip locally so the button tracks the state; parent refreshes both lists.
+    setGroup({ ...group, archived: next })
+    onToggleArchiveGroup(group.id, next)
   }
 
-  const inGroup = new Set((group?.members || []).map((m) => m.meeting_id))
-  const joinCandidates = meetings.filter((m) => !inGroup.has(m.id))
+  const metaCreated = group?.created_at
+    ? new Date(group.created_at).toLocaleDateString(undefined, {
+        month: "short", day: "numeric", year: "numeric",
+        hour: "2-digit", minute: "2-digit",
+      })
+    : "—"
 
   return (
-    <div
-      className="grid h-full min-h-0 w-full gap-2.5"
-      style={{ gridTemplateColumns: "minmax(0,1fr) clamp(272px, 30vw, 360px)" }}
-    >
-      <div className="min-h-0 min-w-0 overflow-hidden rounded-[20px] bg-[var(--pm-float,#fdfbf7)] shadow-[var(--pm-shadow)]">
-        {group && (
-          <MeetingQuickChat
-            meetingId={group.id}
-            meetingTitle={group.title}
-            open
-            onOpen={() => {}}
-            onClose={() => {}}
-            layout="dock"
-            sessionKind="group"
-            onGroupCite={(n, sentenceId, meetingId) => void openOverlay(n, sentenceId, meetingId)}
-            citeMeetings={citeMeetings}
-          />
-        )}
+    <div className="pm-meeting-group-stage">
+      <div className="pm-meeting-group-head">
+        <div className="pm-meeting-title-card pm-meeting-group-title-card" data-meeting-title>
+        <div className="pm-meeting-head">
+          {editingTitle ? (
+            <div className="flex items-center gap-1 flex-1 min-w-0">
+              <input
+                className="pm-meeting-title-input"
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void handleSaveTitle()
+                  if (e.key === "Escape") setEditingTitle(false)
+                }}
+                autoFocus
+              />
+              <Button variant="ghost" size="icon-sm" className="shrink-0" onClick={() => void handleSaveTitle()} aria-label={t("meeting.saveTitle")}>
+                <Check className="size-3.5" />
+              </Button>
+              <Button variant="ghost" size="icon-sm" className="shrink-0" onClick={() => setEditingTitle(false)} aria-label={t("meeting.cancelEdit")}>
+                <X className="size-3.5" />
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-start gap-1 min-w-0 flex-1">
+              <h2 className="pm-meeting-title">{group?.title || ""}</h2>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="shrink-0 opacity-50 hover:opacity-100 mt-0.5"
+                onClick={handleStartEditTitle}
+                aria-label={t("meeting.editTitle")}
+              >
+                <Pencil className="size-3.5" />
+              </Button>
+            </div>
+          )}
+
+          <div className="pm-meeting-meta-stack">
+            <div className="pm-meeting-meta-row">
+              <span className="pm-meeting-meta-key">{t("common.created")}</span>
+              <span className="pm-meeting-meta-val">{metaCreated}</span>
+            </div>
+            <div className="pm-meeting-meta-row">
+              <span className="pm-meeting-meta-key">{t("meeting.groupMetaMeetings")}</span>
+              <span className="pm-meeting-meta-val">
+                {t("meeting.groupCount", { n: group?.members.length ?? 0 })}
+              </span>
+            </div>
+          </div>
+          </div>
+        </div>
+
+        {/* Side action card: three full-width labeled buttons (create/archive/delete) */}
+        <div className="pm-meeting-title-actions" role="group" aria-label={t("meeting.groupTag")}>
+          <button
+            type="button"
+            className="pm-meeting-card-btn is-cta"
+            onClick={() => onCreateMeetingInGroup(groupId)}
+          >
+            <FilePlus2 aria-hidden />
+            <span>{t("meeting.createMeetingBtn")}</span>
+          </button>
+          <button
+            type="button"
+            className="pm-meeting-card-btn"
+            title={group?.archived ? t("meeting.unarchiveGroup") : t("meeting.archiveGroup")}
+            aria-label={group?.archived ? t("meeting.unarchiveGroup") : t("meeting.archiveGroup")}
+            onClick={handleToggleArchive}
+          >
+            {group?.archived ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
+            <span>{group?.archived ? t("meeting.unarchiveGroup") : t("meeting.archiveGroup")}</span>
+          </button>
+          <button
+            type="button"
+            className="pm-meeting-card-btn is-danger"
+            title={t("meeting.deleteGroup")}
+            aria-label={t("meeting.deleteGroup")}
+            onClick={() => onRequestDeleteGroup(groupId)}
+          >
+            <Trash2 aria-hidden />
+            <span>{t("meeting.deleteGroup")}</span>
+          </button>
+        </div>
       </div>
 
-      <div className="relative min-h-0 min-w-0">
-        <section className="absolute inset-0 flex min-h-0 flex-col overflow-hidden rounded-[20px] bg-[var(--pm-float,#fdfbf7)] shadow-[var(--pm-shadow)]">
-          <div className="pm-meeting-group-actions mx-3 mt-3 mb-2">
-            <button type="button" className="pm-meeting-group-action" onClick={() => void addNew()}>
-              {t("meeting.addNewMeeting")}
-            </button>
-            <button type="button" className="pm-meeting-group-action" onClick={() => setJoinOpen(true)}>
-              {t("meeting.addExistingMeeting")}
-            </button>
-          </div>
-          <div className="min-h-0 flex-1 overflow-hidden px-2 pb-2">
-            <MeetingPickList
-              items={(group?.members || []).map((mem) => {
-                const m = meetingById.get(mem.meeting_id)
-                return {
-                  id: mem.meeting_id,
-                  title: m?.title || mem.meeting_id,
-                  status: statusLabel(m),
-                  sortAt: m?.created_at || m?.updated_at,
-                }
-              })}
-              emptyText={t("meeting.groupMembersEmpty")}
-              onSelect={(id) => onOpenMeeting(id)}
-              onRemove={(id) => void removeMember(id)}
-              removeLabel={t("meeting.removeFromGroup")}
+      {/* Chat card + cite-click transcript column. The column reserves the
+          original right-sidebar width; the chat card glides narrower as it
+          opens (no overlay covering chat text). */}
+      <div className="pm-meeting-group-chat-zone">
+        <div className="pm-meeting-group-chat-card">
+          {group && (
+            <MeetingQuickChat
+              meetingId={group.id}
+              meetingTitle={group.title}
+              open
+              onOpen={() => {}}
+              onClose={() => {}}
+              layout="dock"
+              sessionKind="group"
+              onGroupCite={(n, sentenceId, meetingId) => void openOverlay(n, sentenceId, meetingId)}
+              citeMeetings={citeMeetings}
             />
-          </div>
-        </section>
+          )}
+        </div>
 
-        <section
-          className={cn("pm-meeting-tx-overlay", overlayOpen && "is-open")}
-          onTransitionEnd={finishOverlayExit}
-        >
+        <div className={cn("pm-meeting-tx-side-col", overlayOpen && "is-open")} aria-hidden={!overlayOpen}>
+          <div className="pm-meeting-tx-side-inner">
+            <section
+              className={cn("pm-meeting-tx-overlay", overlayOpen && "is-open")}
+              onTransitionEnd={finishOverlayExit}
+              aria-hidden={!overlayOpen}
+            >
           <div className="pm-meeting-tx-overlay-head">
             <h3 className="pm-meeting-tx-overlay-title">
               {overlayMeeting?.title || ""}
@@ -289,7 +337,7 @@ export function MeetingGroupStage({
             </button>
           </div>
           {overlayMeeting?.audio_path ? (
-            <div className="mx-3 mb-2 overflow-hidden rounded-[20px] bg-white px-3.5 py-2.5 shadow-[var(--pm-shadow-sm)]">
+            <div className="pm-meeting-tx-player mx-3 mb-2 overflow-hidden rounded-[20px] px-3.5 py-2.5">
               <MediaBar
                 ref={mediaBarRef}
                 meetingId={overlayMeeting.id}
@@ -324,31 +372,10 @@ export function MeetingGroupStage({
               showSearch
             />
           </div>
-        </section>
-      </div>
-
-      <Dialog open={joinOpen} onOpenChange={setJoinOpen}>
-        <DialogContent className="pm-meeting-join-dialog">
-          <DialogHeader className="pm-dialog-header--premium">
-            <DialogKicker>{t("meeting.groupsTab")}</DialogKicker>
-            <DialogTitle>{t("meeting.joinGroupTitle")}</DialogTitle>
-            <DialogDescription>{t("meeting.joinGroupHint")}</DialogDescription>
-          </DialogHeader>
-          <div className="pm-dialog-body min-w-0">
-            <MeetingPickList
-              items={joinCandidates.map((m) => ({
-                id: m.id,
-                title: m.title,
-                status: statusLabel(m),
-                sortAt: m.created_at || m.updated_at,
-              }))}
-              emptyText={t("meeting.joinGroupEmpty")}
-              filterPlaceholder={t("meeting.pickFilterMeetings")}
-              onSelect={(id) => void addExisting(id)}
-            />
+            </section>
           </div>
-        </DialogContent>
-      </Dialog>
+        </div>
+      </div>
     </div>
   )
 }

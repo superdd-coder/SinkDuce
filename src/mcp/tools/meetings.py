@@ -39,6 +39,7 @@ async def list_meetings(
     limit: int = 100,
     status: str | None = None,
     search: str = "",
+    include_archived: bool = False,
 ) -> str:
     """List meetings sorted by ``updated_at`` descending.
 
@@ -50,6 +51,7 @@ async def list_meetings(
         status: Filter by status — ``"created"`` / ``"recording"`` /
             ``"transcribing"`` / ``"completed"``. Omit for all.
         search: Case-insensitive title substring filter. Omit for all.
+        include_archived: Also return archived meetings (default false).
     """
     _LIGHT_FIELDS = {
         "id", "title", "status", "mode",
@@ -63,6 +65,8 @@ async def list_meetings(
         from src.meeting import store as mstore
 
         meetings = mstore.list_meetings()
+        if not include_archived:
+            meetings = [m for m in meetings if getattr(m, "archived", False) is not True]
         if status:
             meetings = [m for m in meetings if m.status.value == status]
         if search:
@@ -179,6 +183,8 @@ async def get_section(meeting_id: str, tab_id: str) -> str:
         m = mstore.get_meeting(meeting_id)
         if not m:
             return err(f"Meeting '{meeting_id}' not found")
+        if getattr(m, "archived", False) is True:
+            return err(f"Meeting '{meeting_id}' is archived; its summaries are not available")
 
         if tab_id == "general":
             if m.summary:
@@ -244,6 +250,8 @@ async def get_meeting_transcript(
         m = mstore.get_meeting(meeting_id)
         if not m:
             return err(f"Meeting '{meeting_id}' not found")
+        if getattr(m, "archived", False) is True:
+            return err(f"Meeting '{meeting_id}' is archived; its transcript is not available")
 
         # Prefer sentences.json (richer data: speaker diarization, sentence IDs)
         sentences = mstore.get_sentences(meeting_id)

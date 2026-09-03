@@ -1225,6 +1225,17 @@ def lookup_json_and_keys(
     from src.services import services
 
     meeting = store.get_meeting(meeting_id)
+    # `is True` (not truthiness): meetings can be test mocks whose attributes
+    # are Mock objects — only a real boolean True counts as archived.
+    if meeting is not None and getattr(meeting, "archived", False) is True:
+        body = {
+            "meeting_id": meeting_id,
+            "context": "",
+            "preview_unfiltered": "",
+            "hit_count": 0,
+            "error": "This meeting is archived; its transcript is not searchable.",
+        }
+        return json.dumps(body, ensure_ascii=False), set(), []
     mapping = (meeting.speaker_names if meeting else None) or {}
     scope = (speaker_scope or "auto").lower()
     spk = None

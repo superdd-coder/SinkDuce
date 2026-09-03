@@ -9,7 +9,7 @@ const stage = readFileSync(
 
 function overlaySource(): string {
   const start = stage.indexOf("const openOverlay")
-  const end = stage.indexOf("const removeMember")
+  const end = stage.indexOf("const handleStartEditTitle")
   assert.ok(start >= 0 && end > start, "openOverlay body not found")
   return stage.slice(start, end)
 }

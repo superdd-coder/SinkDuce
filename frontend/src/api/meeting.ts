@@ -97,6 +97,8 @@ export interface Meeting {
   hot_words_library_ids?: string[]
   expected_people?: string[]
   brief?: MeetingBrief | null
+  /** Kept on disk & browsable; hidden from LLM meeting query tools. */
+  archived?: boolean
   created_at: string
   updated_at: string
   transcript_index_status?: "" | "building" | "ready" | "failed"
@@ -121,6 +123,7 @@ export interface MeetingGroup {
   id: string
   title: string
   members: MeetingGroupMember[]
+  archived?: boolean
   created_at: string
   updated_at: string
   last_chat_at: string
@@ -149,11 +152,32 @@ export const removeMeetingGroupMember = (groupId: string, meetingId: string) =>
     method: "DELETE",
   })
 
-export const deleteMeetingGroup = (groupId: string) =>
-  request<{ message?: string }>(`/meeting-groups/${groupId}`, { method: "DELETE" })
+export const deleteMeetingGroup = (groupId: string, deleteMeetings = true) =>
+  request<{ message?: string }>(
+    `/meeting-groups/${groupId}?delete_meetings=${deleteMeetings ? "true" : "false"}`,
+    { method: "DELETE" },
+  )
+
+export const updateMeetingGroup = (groupId: string, title: string) =>
+  request<MeetingGroup>(`/meeting-groups/${groupId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  })
+
+export const archiveMeetingGroup = (groupId: string) =>
+  request<MeetingGroup>(`/meeting-groups/${groupId}/archive`, { method: "POST" })
+
+export const unarchiveMeetingGroup = (groupId: string) =>
+  request<MeetingGroup>(`/meeting-groups/${groupId}/unarchive`, { method: "POST" })
 
 export const listGroupsForMeeting = (meetingId: string) =>
   request<MeetingGroup[]>(`/meetings/${meetingId}/groups`)
+
+export const archiveMeeting = (id: string) =>
+  request<Meeting>(`/meetings/${id}/archive`, { method: "POST" })
+
+export const unarchiveMeeting = (id: string) =>
+  request<Meeting>(`/meetings/${id}/unarchive`, { method: "POST" })
 
 export const createMeeting = (title?: string) =>
   request<Meeting>("/meetings", {

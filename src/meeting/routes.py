@@ -172,14 +172,55 @@ async def get_meeting_group(group_id: str):
 
 
 @router.delete("/meeting-groups/{group_id}")
-async def delete_meeting_group(group_id: str):
+async def delete_meeting_group(group_id: str, delete_meetings: bool = True):
+    """Delete a group. By default the member meetings are deleted too."""
     from src.meeting.group_store import delete_group, get_group
 
-    if get_group(group_id) is None:
+    group = get_group(group_id)
+    if group is None:
         raise HTTPException(404, "Group not found")
+    if delete_meetings:
+        for member in list(group.members):
+            if store.get_meeting(member.meeting_id) is not None:
+                store.delete_meeting(member.meeting_id)
     _delete_group_session(group_id)
     delete_group(group_id)
     return {"message": "Group deleted"}
+
+
+@router.patch("/meeting-groups/{group_id}")
+async def rename_meeting_group(group_id: str, body: dict = Body()):
+    from src.meeting.group_store import rename_group
+
+    try:
+        group = rename_group(group_id, (body.get("title") or "").strip())
+    except FileNotFoundError:
+        raise HTTPException(404, "Group not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return _serialize_group(group)
+
+
+@router.post("/meeting-groups/{group_id}/archive")
+async def archive_meeting_group(group_id: str):
+    return await _set_group_archived(group_id, True)
+
+
+@router.post("/meeting-groups/{group_id}/unarchive")
+async def unarchive_meeting_group(group_id: str):
+    return await _set_group_archived(group_id, False)
+
+
+async def _set_group_archived(group_id: str, archived: bool):
+    from src.meeting.group_store import get_group, set_group_archived
+
+    if get_group(group_id) is None:
+        raise HTTPException(404, "Group not found")
+    group = set_group_archived(group_id, archived)
+    for member in list(group.members):
+        if store.get_meeting(member.meeting_id) is not None:
+            store.update_meeting(member.meeting_id, archived=archived)
+    return _serialize_group(group)
 
 
 @router.post("/meeting-groups/{group_id}/members")
@@ -336,6 +377,32 @@ async def update_meeting(meeting_id: str, body: dict = Body()):
     else:
         meeting = store.get_meeting(meeting_id)
     logger.info("[UPDATE] Meeting %s updated, status=%s", meeting_id, meeting.status.value)
+    return _serialize_meeting(meeting)
+
+
+@router.post("/meetings/{meeting_id}/archive")
+async def archive_meeting(meeting_id: str):
+    return _set_meeting_archived(meeting_id, True)
+
+
+@router.post("/meetings/{meeting_id}/unarchive")
+async def unarchive_meeting(meeting_id: str):
+    return _set_meeting_archived(meeting_id, False)
+
+
+def _set_meeting_archived(meeting_id: str, archived: bool):
+    if store.get_meeting(meeting_id) is None:
+        raise HTTPException(404, "Meeting not found")
+    meeting = store.update_meeting(meeting_id, archived=archived)
+    if not archived:
+        # Pulling one member out of the archive also un-archives any archived
+        # group that contains it (the group card returns to the list); the
+        # other members keep their own archived state.
+        from src.meeting.group_store import groups_for_meeting, set_group_archived
+
+        for group in groups_for_meeting(meeting_id):
+            if group.archived:
+                set_group_archived(group.id, False)
     return _serialize_meeting(meeting)
 
 

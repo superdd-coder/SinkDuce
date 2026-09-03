@@ -169,6 +169,25 @@ def touch_chat(group_id: str) -> MeetingGroup:
     return _save(group)
 
 
+def rename_group(group_id: str, title: str) -> MeetingGroup:
+    group = get_group(group_id)
+    if group is None:
+        raise FileNotFoundError(group_id)
+    name = (title or "").strip()
+    if not name:
+        raise ValueError("title is required")
+    group.title = name
+    return _save(group)
+
+
+def set_group_archived(group_id: str, archived: bool) -> MeetingGroup:
+    group = get_group(group_id)
+    if group is None:
+        raise FileNotFoundError(group_id)
+    group.archived = bool(archived)
+    return _save(group)
+
+
 def delete_group(group_id: str) -> bool:
     path = _group_path(group_id)
     if not path.exists():
