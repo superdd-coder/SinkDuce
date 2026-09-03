@@ -94,6 +94,7 @@ class MeetingGroup(BaseModel):
     id: str = ""
     title: str = ""
     members: list[MeetingGroupMember] = Field(default_factory=list)
+    archived: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     last_chat_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -141,6 +142,7 @@ class Meeting(BaseModel):
     hot_words_library_ids: list[str] = Field(default_factory=list)
     expected_people: list[str] = Field(default_factory=list)  # pre-selected attendees
     brief: MeetingBrief | None = None
+    archived: bool = False  # kept on disk, hidden from LLM meeting query tools
     transcript_index_status: str = ""  # "" | building | ready | failed
     transcript_index_error: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

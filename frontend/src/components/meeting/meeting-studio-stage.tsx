@@ -16,11 +16,10 @@ import {
   type MeetingQcSpinPhase,
 } from "./meeting-quick-chat"
 import { type Meeting, type TranscriptSegment, type LanguageHintOption } from "@/api/client"
-import { MeetingGroupsPanel } from "./meeting-groups-meta"
 import type { SidebarView } from "@/stores/app-store"
 import { useT } from "@/i18n/use-t"
 
-export type MeetingStudioSideTab = "sections" | "transcript" | "speaker" | "groups"
+export type MeetingStudioSideTab = "sections" | "transcript" | "speaker"
 export type MeetingStudioSideSurface = "tools" | "chat"
 
 export type MeetingStudioFocusRef = { id: string; ts: number; fromChat?: boolean }
@@ -103,8 +102,6 @@ export interface MeetingStudioStageProps {
   sideSurfaceExiting: boolean
   sideTab: MeetingStudioSideTab
   setSideTab: Dispatch<SetStateAction<MeetingStudioSideTab>>
-  onOpenGroup?: (groupId: string) => void
-  onGroupsChanged?: () => void
   setSideRailOpenWithMotion: (open: boolean) => void
   setSideRailOpen: Dispatch<SetStateAction<boolean>>
   handleRefClick: (sentenceId: string) => void
@@ -476,7 +473,7 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                             <Tabs
                               value={sideTab}
                               onValueChange={(v) => {
-                                if (v === "sections" || v === "transcript" || v === "speaker" || v === "groups") {
+                                if (v === "sections" || v === "transcript" || v === "speaker") {
                                   setSideTab(v)
                                 }
                               }}
@@ -486,9 +483,6 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                                 <TabsIndicator className="pm-tabs-indicator" renderBeforeHydration />
                                 <TabsTrigger value="sections" disabled={sideSurfaceExiting}>
                                   {t("meeting.sections")}
-                                </TabsTrigger>
-                                <TabsTrigger value="groups" disabled={sideSurfaceExiting}>
-                                  {t("meeting.groupTab")}
                                 </TabsTrigger>
                                 <TabsTrigger value="transcript" disabled={sideSurfaceExiting}>
                                   {t("common.transcript")}
@@ -814,20 +808,6 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                                   )}
                                 </div>
                               </div>
-                            </div>
-
-                            <div
-                              className={cn(
-                                "pm-meeting-side-panel",
-                                sideTab === "groups" && "is-active",
-                              )}
-                              aria-hidden={sideTab !== "groups"}
-                            >
-                              <MeetingGroupsPanel
-                                meetingId={meeting.id}
-                                onOpenGroup={p.onOpenGroup}
-                                onGroupsChanged={p.onGroupsChanged}
-                              />
                             </div>
 
                             <div

@@ -124,7 +124,7 @@ interface Props {
    * When a sentence-ref needs Transcript focus, parent opens the side panel
    * Transcript tab (main area no longer hosts Transcript / Speaker).
    */
-  onRequestSideTab?: (tab: "sections" | "transcript" | "speaker" | "groups") => void
+  onRequestSideTab?: (tab: "sections" | "transcript" | "speaker") => void
   /** Hide transcript/speaker panels here — parent hosts them in the side rail. */
   hostTranscriptInParent?: boolean
 }

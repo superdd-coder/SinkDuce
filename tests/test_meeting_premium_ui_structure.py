@@ -131,14 +131,17 @@ def test_meeting_stage_right_matches_collection_qc_width():
     assert ".pm-meeting-side-tabs" in css
 
 
-def test_meeting_side_tabs_group_follows_sections():
+def test_meeting_side_tabs_order_without_groups():
+    """Groups moved into the meeting rail — side rail hosts sections/tx/speaker only."""
     src = MEETING_STUDIO.read_text(encoding="utf-8")
+    assert 'TabsTrigger value="groups"' not in src
     i_sec = src.find('TabsTrigger value="sections"')
-    i_grp = src.find('TabsTrigger value="groups"')
     i_tx = src.find('TabsTrigger value="transcript"')
     i_spk = src.find('TabsTrigger value="speaker"')
-    assert min(i_sec, i_grp, i_tx, i_spk) > 0
-    assert i_sec < i_grp < i_tx < i_spk
+    assert min(i_sec, i_tx, i_spk) > 0
+    assert i_sec < i_tx < i_spk
+    # MeetingGroupsPanel side panel is gone from the meeting stage
+    assert "MeetingGroupsPanel" not in src
 
 
 def test_meeting_list_uses_rail_and_compact_new():

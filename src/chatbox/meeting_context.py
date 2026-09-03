@@ -229,15 +229,20 @@ def build_group_ephemeral_context(group_id: str) -> str:
             date = meeting.created_at.date().isoformat()
         status = (meeting.transcript_index_status if meeting else "") or ""
         idx = status if status else "missing"
+        archived = bool(
+            meeting is not None
+            and getattr(meeting, "archived", False) is True
+        )
+        marker = "  [archived; do not search]" if archived else ""
         lines.append(
-            f"{mem.n}  {title}     id: {mem.meeting_id}  {date}  index:{idx}"
+            f"{mem.n}  {title}     id: {mem.meeting_id}  {date}  index:{idx}{marker}"
         )
         names = speaker_display_map(mem.meeting_id) if meeting else {}
         if names:
             annotated = _annotate_me(names, me_speaker_ids(mem.meeting_id))
             mapped = " · ".join(f"{sid} {name}" for sid, name in annotated.items())
             lines.append(f"   speakers: {mapped}")
-        if status != "ready":
+        if status != "ready" and not archived:
             unindexed.append(f"{mem.n} {title}")
     if unindexed:
         lines.append("")

@@ -110,8 +110,9 @@ test("catalogs do not use doubled mustache placeholders", () => {
 test("group delete confirm copy is localized", () => {
   assert.equal(t("en", "meeting.deleteGroupQ"), "Delete group?")
   assert.equal(t("zh-CN", "meeting.deleteGroupQ"), "删除这个 Group？")
-  assert.match(t("en", "meeting.deleteGroupBody"), /Meetings stay/)
-  assert.match(t("zh-CN", "meeting.deleteGroupBody"), /会议/)
+  // Cascade delete: member meetings go with the group (never "Meetings stay")
+  assert.match(t("en", "meeting.deleteGroupBody"), /every meeting inside it/)
+  assert.match(t("zh-CN", "meeting.deleteGroupBody"), /组内所有会议/)
   assert.equal(t("en", "meeting.groupDeleted"), "Group deleted")
   assert.equal(t("zh-CN", "meeting.groupDeleted"), "Group 已删除")
 })

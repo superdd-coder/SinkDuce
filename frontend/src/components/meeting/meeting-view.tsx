@@ -28,6 +28,14 @@ import { MeetingGroupStage } from "./meeting-group-stage"
 import {
   listMeetingGroups,
   deleteMeetingGroup as apiDeleteMeetingGroup,
+  createMeetingGroup,
+  addMeetingGroupMember,
+  removeMeetingGroupMember,
+  archiveMeeting,
+  unarchiveMeeting,
+  archiveMeetingGroup,
+  unarchiveMeetingGroup,
+  createMeeting,
   type MeetingGroup,
 } from "@/api/meeting"
 import type { MediaBarHandle } from "./media-bar"
@@ -83,7 +91,6 @@ export function MeetingView({ active = true }: { active?: boolean }) {
 
   // Data
   const [meetings, setMeetings] = useState<Meeting[]>([])
-  const [railTab, setRailTab] = useState<"meetings" | "groups">("meetings")
   const [groups, setGroups] = useState<MeetingGroup[]>([])
   const [activeGroup, setActiveGroup] = useState<string | null>(null)
   const [meeting, setMeeting] = useState<Meeting | null>(null)
@@ -194,7 +201,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   const [selectedSummaryId, setSelectedSummaryId] = useState("tab_general")
   const [, setMainTab] = useState("summary")
   /** Right analysis rail: Sections | Transcript | Speaker | Group */
-  const [sideTab, setSideTab] = useState<"sections" | "transcript" | "speaker" | "groups">("sections")
+  const [sideTab, setSideTab] = useState<"sections" | "transcript" | "speaker">("sections")
   const [sideRailOpen, setSideRailOpen] = useState(true)
   /**
    * Only user-driven collapse/expand should silk-slide the main pad + side.
@@ -244,7 +251,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   const bindSectionRailActions = useCallback((actions: SectionRailActions) => {
     sectionRailActionsRef.current = actions
   }, [])
-  const requestSideTab = useCallback((tab: "sections" | "transcript" | "speaker" | "groups") => {
+  const requestSideTab = useCallback((tab: "sections" | "transcript" | "speaker") => {
     setSideRailOpenWithMotion(true)
     setSideTab(tab)
   }, [setSideRailOpenWithMotion])
@@ -815,7 +822,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     return () => window.clearTimeout(failSafe)
   }, [meetingSoftFaded, meeting?.id, activeMeeting])
 
-  const wantGroupStage = !!(activeGroup && railTab === "groups" && !activeMeeting)
+  const wantGroupStage = !!(activeGroup && !activeMeeting)
   useEffect(() => {
     const targetId = wantGroupStage ? activeGroup : null
     const paintedId = paintGroupStage ? paintGroupId : null
@@ -1363,16 +1370,109 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   const confirmDeleteGroup = async () => {
     if (!deleteGroupTarget) return
     const id = deleteGroupTarget
+    // Cascade deletes member meetings server-side — clear the stage if it
+    // was showing one of them.
+    const group = groups.find((g) => g.id === id)
+    const activeWasMember = !!(
+      group &&
+      activeMeeting &&
+      group.members.some((mem) => mem.meeting_id === activeMeeting)
+    )
     try {
       await apiDeleteMeetingGroup(id)
       if (activeGroup === id) setActiveGroup(null)
+      if (activeWasMember) setActiveMeeting(null)
       setDeleteGroupTarget(null)
       await fetchGroups()
+      await fetchMeetings()
       toast.success(t("meeting.groupDeleted"))
     } catch (err) {
       toast.error(t("common.failedWithError", { error: formatApiError(err, t) }))
     }
   }
+
+  const handleToggleArchiveMeeting = useCallback(
+    async (m: Meeting) => {
+      try {
+        const next = m.archived ? await unarchiveMeeting(m.id) : await archiveMeeting(m.id)
+        applyMeeting(next)
+        // Unarchiving a member also pulls its archived group card out of the
+        // archive fold — refresh both surfaces.
+        await Promise.all([fetchMeetings(), fetchGroups()])
+        toast.success(t(m.archived ? "meeting.meetingUnarchived" : "meeting.meetingArchived"))
+      } catch (err) {
+        toast.error(t("common.failedWithError", { error: formatApiError(err, t) }))
+      }
+    },
+    [applyMeeting, fetchMeetings, fetchGroups, t],
+  )
+
+  const handleCreateGroupFromMeeting = useCallback(
+    async (meetingId: string, title: string) => {
+      try {
+        await createMeetingGroup(meetingId, title)
+        await fetchGroups()
+        toast.success(t("meeting.groupCreated"))
+      } catch (err) {
+        toast.error(t("common.failedWithError", { error: formatApiError(err, t) }))
+      }
+    },
+    [fetchGroups, t],
+  )
+
+  const handleCreateMeetingInGroup = useCallback(
+    async (groupId: string) => {
+      try {
+        const created = await createMeeting()
+        await addMeetingGroupMember(groupId, created.id)
+        await Promise.all([fetchGroups(), fetchMeetings()])
+        toast.success(t("meeting.meetingCreated"))
+        setActiveGroup(groupId)
+        setActiveMeeting(created.id)
+      } catch (err) {
+        toast.error(t("common.failedWithError", { error: formatApiError(err, t) }))
+      }
+    },
+    [fetchGroups, fetchMeetings, t],
+  )
+
+  const handleDropMeetingInGroup = useCallback(
+    async (meetingId: string, groupId: string) => {
+      try {
+        await addMeetingGroupMember(groupId, meetingId)
+        await fetchGroups()
+      } catch (err) {
+        toast.error(t("common.failedWithError", { error: formatApiError(err, t) }))
+      }
+    },
+    [fetchGroups, t],
+  )
+
+  const handleRemoveMeetingFromGroup = useCallback(
+    async (meetingId: string, groupId: string) => {
+      try {
+        await removeMeetingGroupMember(groupId, meetingId)
+        await fetchGroups()
+      } catch (err) {
+        toast.error(t("common.failedWithError", { error: formatApiError(err, t) }))
+      }
+    },
+    [fetchGroups, t],
+  )
+
+  const handleToggleArchiveGroup = useCallback(
+    async (groupId: string, archived: boolean) => {
+      try {
+        await (archived ? archiveMeetingGroup(groupId) : unarchiveMeetingGroup(groupId))
+        // Group flag + every member meeting changed — refresh both surfaces.
+        await Promise.all([fetchGroups(), fetchMeetings()])
+        toast.success(t(archived ? "meeting.groupArchived" : "meeting.groupUnarchived"))
+      } catch (err) {
+        toast.error(t("common.failedWithError", { error: formatApiError(err, t) }))
+      }
+    },
+    [fetchGroups, fetchMeetings, t],
+  )
 
   /**
    * Transcript click: pass only start → continuous play.
@@ -1455,9 +1555,23 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     }
   }, [activeMeeting, fetchMeetings, fetchMeeting])
 
-  const handleSelectMeeting = useCallback((id: string) => {
-    setActiveMeeting(id)
-  }, [setActiveMeeting])
+  const handleSelectMeeting = useCallback(
+    (id: string) => {
+      setActiveMeeting(id)
+      // Keep the owning group bound so leaving the meeting returns to its page.
+      const owner = groups.find((g) => g.members.some((mem) => mem.meeting_id === id))
+      setActiveGroup(owner ? owner.id : null)
+    },
+    [setActiveMeeting, groups],
+  )
+
+  const handleSelectGroup = useCallback(
+    (id: string) => {
+      setActiveGroup(id)
+      setActiveMeeting(null)
+    },
+    [setActiveMeeting],
+  )
 
   const handleStartEditTitle = () => {
     if (!meeting) return
@@ -1758,14 +1872,9 @@ export function MeetingView({ active = true }: { active?: boolean }) {
           activeMeeting={activeMeeting}
           recordingMeetingId={recordingMeetingId}
           keepFocusOnCreate={!!(recorder.isRecording || recorder.isPaused)}
-          onSelect={(id: string) => {
-            setActiveGroup(null)
-            setRailTab("meetings")
-            handleSelectMeeting(id)
-          }}
+          onSelect={handleSelectMeeting}
           onCreated={(id: string, opts?: { stayOnCurrent?: boolean }) => {
             void fetchMeetings()
-            setRailTab("meetings")
             // While capturing, never switch the stage onto the new meeting —
             // that looked like the live session was “overwritten”.
             if (opts?.stayOnCurrent || recorder.isRecording || recorder.isPaused) {
@@ -1775,21 +1884,17 @@ export function MeetingView({ active = true }: { active?: boolean }) {
             setActiveMeeting(id)
           }}
           onDelete={handleDelete}
-          railTab={railTab}
-          onRailTab={(tab) => {
-            setRailTab(tab)
-            if (tab === "groups") void fetchGroups()
-          }}
           groups={groups}
           activeGroup={activeGroup}
-          onSelectGroup={(id) => {
-            setRailTab("groups")
-            setActiveGroup(id)
-            setActiveMeeting(null)
-          }}
+          onSelectGroup={handleSelectGroup}
           onDeleteGroup={(id) => {
             setDeleteGroupTarget(id)
           }}
+          onToggleArchiveMeeting={handleToggleArchiveMeeting}
+          onCreateGroupFromMeeting={handleCreateGroupFromMeeting}
+          onCreateMeetingInGroup={(gid) => void handleCreateMeetingInGroup(gid)}
+          onDropMeetingInGroup={(mid, gid) => void handleDropMeetingInGroup(mid, gid)}
+          onRemoveMeetingFromGroup={(mid, gid) => void handleRemoveMeetingFromGroup(mid, gid)}
         />
 
         <div className="pm-meeting-stage">
@@ -1805,9 +1910,12 @@ export function MeetingView({ active = true }: { active?: boolean }) {
             <MeetingGroupStage
               groupId={paintGroupId}
               meetings={meetings}
-              onOpenMeeting={handleSelectMeeting}
               onGroupChanged={() => { void fetchGroups() }}
-              onMeetingsChanged={fetchMeetings}
+              onRequestDeleteGroup={(gid) => setDeleteGroupTarget(gid)}
+              onCreateMeetingInGroup={(gid) => void handleCreateMeetingInGroup(gid)}
+              onToggleArchiveGroup={(gid, archived) =>
+                void handleToggleArchiveGroup(gid, archived)
+              }
             />
             </div>
           ) : null}
@@ -1976,12 +2084,6 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                 sideSurfaceExiting={sideSurfaceExiting}
                 sideTab={sideTab}
                 setSideTab={setSideTab}
-                onOpenGroup={(id) => {
-                  setRailTab("groups")
-                  setActiveGroup(id)
-                  setActiveMeeting(null)
-                }}
-                onGroupsChanged={() => void fetchGroups()}
                 setSideRailOpenWithMotion={setSideRailOpenWithMotion}
                 setSideRailOpen={setSideRailOpen}
                 handleRefClick={handleRefClick}
