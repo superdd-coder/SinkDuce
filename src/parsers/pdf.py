@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import logging
 import re
+import threading
 import uuid
 from pathlib import Path
 
@@ -54,6 +55,13 @@ def _table_data_to_markdown(data: list[list[str | None]]) -> str:
     return "\n".join(lines)
 
 
+# PDFium (pypdfium2, used by pdfplumber's page.to_image) corrupts the heap
+# when two threads render concurrently (`free(): invalid size` aborts the
+# process with no traceback). One process-wide lock: pdfminer text/table
+# extraction stays parallel, only the native render serializes.
+_PDFIUM_RENDER_LOCK = threading.Lock()
+
+
 def _ocr_page(page_image, lang: str = "") -> str:
     """Extract text from a scanned page via bundled RapidOCR."""
     from src.parsers.rapid_ocr import backlog_add, backlog_done, ocr_array
@@ -92,7 +100,8 @@ def _extract_page_images(page, page_number: int) -> list[ImageInfo]:
         # Render image region
         try:
             cropped = page.within_bbox(bbox)
-            pil_img = cropped.to_image(resolution=150).original
+            with _PDFIUM_RENDER_LOCK:
+                pil_img = cropped.to_image(resolution=150).original
             buf = io.BytesIO()
             pil_img.save(buf, format="PNG")
             image_bytes = buf.getvalue()
@@ -164,7 +173,8 @@ def _parse_page_elements(
                     max(a.bbox[2], b.bbox[2]), max(a.bbox[3], b.bbox[3]),
                 )
                 cropped = page.within_bbox(merged_bbox)
-                pil_img = cropped.to_image(resolution=150).original
+                with _PDFIUM_RENDER_LOCK:
+                    pil_img = cropped.to_image(resolution=150).original
                 buf = io.BytesIO()
                 pil_img.save(buf, format="PNG")
                 merged = ImageInfo(
@@ -219,7 +229,8 @@ def _parse_page_elements(
                         min(_page_h, y1 + my),
                     )
                     cropped = page.within_bbox(padded)
-                    pil_img = cropped.to_image(resolution=300).original
+                    with _PDFIUM_RENDER_LOCK:
+                        pil_img = cropped.to_image(resolution=300).original
                     buf = io.BytesIO()
                     pil_img.save(buf, format="PNG")
                     img = ImageInfo(
@@ -270,7 +281,9 @@ def _parse_page_elements(
     # Fallback to OCR if no text extracted (scanned page)
     if not full_text.strip():
         try:
-            ocr_text = _ocr_page(page.to_image(resolution=300).original)
+            with _PDFIUM_RENDER_LOCK:
+                page_image = page.to_image(resolution=300).original
+            ocr_text = _ocr_page(page_image)
             if ocr_text:
                 elements.append((0, "text", ocr_text))
                 full_text = ocr_text

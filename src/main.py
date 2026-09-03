@@ -91,6 +91,16 @@ async def lifespan(app: FastAPI):
     from src.meeting.service import reset_stale_processing_states
     await reset_stale_processing_states()
 
+    # Re-enqueue upload tasks persisted by a previous crash so uploaded
+    # files never sit un-ingested after a restart. Background + strong ref:
+    # the settle delay lets Qdrant/models come up before the first embed.
+    async def _recover_upload_tasks():
+        await task_manager.recover_upload_tasks()
+
+    task_manager._recovery_task = asyncio.get_running_loop().create_task(
+        _recover_upload_tasks()
+    )
+
     # Start the MCP staging store (content side-channel for upload_document_from_staging)
     from src.mcp.staging import staging_store as _staging_store
     await _staging_store.start()
