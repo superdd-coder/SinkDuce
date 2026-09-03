@@ -679,7 +679,8 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                                               isGenerating && "is-pending",
                                               isIngested && "is-ingested",
                                               (isEarly || (item.kind === "blueprint" && !item.selected)) && "is-preview",
-                                              isCustom && "is-picked",
+                                              isCustom && "is-custom",
+                                              isCustom && item.selected === false && "is-preview",
                                             )}
                                             title={
                                               isStreaming
@@ -710,7 +711,7 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                                               }
                                               if (isCustom) {
                                                 const idx = Number(item.id.replace("custom:", ""))
-                                                if (!Number.isNaN(idx)) actions.removeCustom(idx)
+                                                if (!Number.isNaN(idx)) actions.toggleCustom(idx)
                                               }
                                             }}
                                             onFocus={(e) => {
@@ -732,7 +733,7 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                                               <span
                                                 className={cn(
                                                   "pm-meeting-section-card-dot",
-                                                  (item.selected || isCustom) && "is-on",
+                                                  item.selected && "is-on",
                                                 )}
                                                 aria-hidden
                                               />
@@ -772,10 +773,25 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                                                 <Check className="size-2.5" strokeWidth={2.5} aria-hidden />
                                               </span>
                                             ) : null}
-                                            {isCustom ? (
-                                              <X className="pm-meeting-section-card-x size-3" aria-hidden />
-                                            ) : null}
                                           </button>
+                                          {isCustom && (
+                                            <button
+                                              type="button"
+                                              className="pm-meeting-section-card-remove"
+                                              disabled={sectionRailModel.busy}
+                                              title={t("meeting.removeReceipt")}
+                                              aria-label={t("meeting.removeReceipt")}
+                                              onClick={(e) => {
+                                                e.stopPropagation()
+                                                const idx = Number(item.id.replace("custom:", ""))
+                                                if (!Number.isNaN(idx)) {
+                                                  sectionRailActionsRef.current?.removeCustom(idx)
+                                                }
+                                              }}
+                                            >
+                                              <X className="size-3" aria-hidden />
+                                            </button>
+                                          )}
                                         </div>
                                       )
                                     })

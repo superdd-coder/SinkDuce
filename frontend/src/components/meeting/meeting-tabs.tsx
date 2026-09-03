@@ -170,6 +170,7 @@ export type SectionRailActions = {
   selectSection: (id: string) => void
   toggleBlueprint: (id: string) => void
   removeCustom: (index: number) => void
+  toggleCustom: (index: number) => void
   breakdown: () => void
 }
 
@@ -2143,7 +2144,9 @@ export function MeetingTabs({
   }, [selectedSummaryId, onActiveTabChange])
   const [loadingTabs, setLoadingTabs] = useState<Set<string>>(new Set())
   const [selectedBlueprintIds, setSelectedBlueprintIds] = useState<Set<string>>(new Set())
-  const [customReceipts, setCustomReceipts] = useState<Array<{ name: string; description: string }>>([])
+  const [customReceipts, setCustomReceipts] = useState<
+    Array<{ name: string; description: string; selected?: boolean }>
+  >([])
   const [addSectionOpen, setAddSectionOpen] = useState(false)
   const [addForm, setAddForm] = useState<{ name: string; description: string; blueprintId: string | null }>({
     name: "", description: "", blueprintId: null,
@@ -2390,6 +2393,7 @@ export function MeetingTabs({
       }
     }
     for (const c of customReceipts) {
+      if (c.selected === false) continue
       receipts.push({ source: "custom", name: c.name, description: c.description })
     }
     await doExtract(receipts)
@@ -2426,7 +2430,10 @@ export function MeetingTabs({
           return next
         })
       } else {
-        setCustomReceipts((prev) => [...prev, { name, description: addForm.description.trim() }])
+        setCustomReceipts((prev) => [
+          ...prev,
+          { name, description: addForm.description.trim(), selected: true },
+        ])
       }
       setAddForm({ name: "", description: "", blueprintId: null })
       setAddSectionOpen(false)
@@ -2776,15 +2783,6 @@ export function MeetingTabs({
           selected: selectedBlueprintIds.has(b.blueprint_id),
         })
       }
-      customReceipts.forEach((c, i) => {
-        items.push({
-          id: `custom:${i}`,
-          label: c.name,
-          hint: c.description || undefined,
-          kind: "custom",
-          selected: true,
-        })
-      })
     } else if (thinking) {
       const early = (bpStream.earlyBlueprint ?? [])
         .filter((b) => b.tab_name && b.tab_name.toLowerCase() !== "other")
@@ -2804,6 +2802,21 @@ export function MeetingTabs({
       }
     }
 
+    // Custom receipts render pre-breakdown even without a blueprint —
+    // canBreakdown counts them regardless, so omitting them here would
+    // show a Breakdown button above an empty list.
+    if (!hasSections) {
+      customReceipts.forEach((c, i) => {
+        items.push({
+          id: `custom:${i}`,
+          label: c.name,
+          hint: c.description || undefined,
+          kind: "custom",
+          selected: c.selected !== false,
+        })
+      })
+    }
+
     onSectionRailModelChange({
       thinking,
       busy,
@@ -2811,7 +2824,9 @@ export function MeetingTabs({
       hasSections,
       canBreakdown:
         !hasSections &&
-        (selectedBlueprintIds.size + customReceipts.length) > 0 &&
+        (selectedBlueprintIds.size +
+          customReceipts.filter((c) => c.selected !== false).length) >
+          0 &&
         !busy,
       items,
     })
@@ -2853,6 +2868,13 @@ export function MeetingTabs({
       },
       removeCustom: (index) => {
         setCustomReceipts((prev) => prev.filter((_, j) => j !== index))
+      },
+      toggleCustom: (index) => {
+        setCustomReceipts((prev) =>
+          prev.map((c, j) =>
+            j === index ? { ...c, selected: c.selected === false } : c,
+          ),
+        )
       },
       breakdown: () => { void handleBreakdown() },
     })
