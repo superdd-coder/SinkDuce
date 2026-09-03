@@ -100,7 +100,8 @@ export function EndChainDialog({
   useEffect(() => {
     if (!open) return
     setTitle("")
-    setGroupId(groups[0]?.group_id ?? "")
+    // Group is optional — default to none (matches AddNode / node sidebar)
+    setGroupId("")
     setEventTime("")
     setMessageBody("")
     setPending([])
@@ -218,26 +219,20 @@ export function EndChainDialog({
       toast.error(t("fileMgmt.mergeNameRequired"))
       return
     }
-    if (!groupId) {
-      toast.error(t("fileMgmt.groupRequired"))
-      return
-    }
     setLoading(true)
     let createdEndId: string | null = null
     try {
-      // Upload pending files into the selected group's folder first, then end_chain attaches
+      // Upload pending files (no group → collection root) then end_chain attaches
       const groupFolderId = groups.find((g) => g.group_id === groupId)?.folder_id
       const attachmentIds: string[] = []
       for (const att of pending) {
         if (att.kind === "existing") {
           attachmentIds.push(att.file_id)
         } else {
-          if (!groupFolderId) {
-            throw new Error("Selected group has no folder for uploads")
-          }
+          // Empty folder_id → root upload (orphan), attached to merge node below
           const uploaded = await uploadFileToFolder(
             collectionId,
-            groupFolderId,
+            groupFolderId ?? "",
             att.file,
           )
           attachmentIds.push(uploaded.file_id)
@@ -361,22 +356,19 @@ export function EndChainDialog({
             </div>
 
             <div>
-              <FieldLabel>
-                {t("common.group")} <span className="text-[var(--pm-danger)]">*</span>
-              </FieldLabel>
+              <FieldLabel>{t("common.group")}</FieldLabel>
               <DropdownSelect
                 size="sm"
                 value={groupId}
                 onChange={setGroupId}
-                placeholder={t("fileMgmt.noGroups")}
-                options={
-                  groups.length === 0
-                    ? [{ value: "", label: t("fileMgmt.noGroups") }]
-                    : groups.map((g) => ({
-                        value: g.group_id,
-                        label: systemFolderDisplayName(g.name, t),
-                      }))
-                }
+                placeholder={t("fileMgmt.noGroup")}
+                options={[
+                  { value: "", label: t("fileMgmt.noGroup") },
+                  ...groups.map((g) => ({
+                    value: g.group_id,
+                    label: systemFolderDisplayName(g.name, t),
+                  })),
+                ]}
               />
             </div>
 
@@ -648,7 +640,7 @@ export function EndChainDialog({
           <Button
             size="sm"
             onClick={() => void handleSubmit()}
-            disabled={loading || !groupId || !title.trim()}
+            disabled={loading || !title.trim()}
           >
             {loading ? t("fileMgmt.processing") : t("fileMgmt.endAndMerge")}
           </Button>
