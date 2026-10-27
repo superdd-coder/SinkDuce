@@ -4,6 +4,15 @@ Kept newest-first. CI extracts the section matching the release tag into
 `latest.json → notes` (shown in the desktop update dialog), so headings must
 stay in the exact `## vX.Y.Z` form.
 
+## v1.6.2
+
+- 从独立公开源码仓库发布，全功能社区版继续统一采用 AGPL-3.0-or-later
+- 更新中英文 README，补全报告批注与修订、对话附件、会议纪要导出、安装和开发说明
+- 桌面下载文档改用公开发布镜像，补充安装校验、本地模型下载与数据存储说明
+- Release from the independent public source repository, retaining the full-feature Community distribution under AGPL-3.0-or-later
+- Refresh both READMEs with report review, chat attachments, meeting exports, installation, and development instructions
+- Point desktop download instructions to the public release mirror and clarify checksums, local model downloads, and data storage
+
 ## v1.6.1
 
 - 改善报告修订阅读：表格内直接显示文字增删，短文本改动更紧凑，修订卡片定位和选中状态更清晰
