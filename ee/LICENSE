@@ -1,0 +1,9 @@
+SPDX-License-Identifier: AGPL-3.0-or-later
+Copyright (c) 2026 the SinkDuce copyright holder.
+
+The code in this directory is part of SinkDuce and is licensed under the
+GNU Affero General Public License, version 3 or (at your option) any later
+version. See the repository's LICENSE file for the complete license text.
+
+The ee/ directory is retained as a module boundary for future distribution
+assembly. Its functionality is included in the full community distribution.

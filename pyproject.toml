@@ -1,0 +1,99 @@
+[project]
+name = "sinkduce"
+version = "1.6.1"
+description = "One-click deployable RAG Agent system"
+license = { text = "AGPL-3.0-or-later" }
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+    "pyyaml>=6.0.2",
+    "qdrant-client>=1.13.0",
+    "openai>=1.60.0",
+    "cohere>=5.13.0",
+    # Official SDK high-level API is FastMCP under mcp.server.fastmcp.
+    # Cap <2 so Docker/pip cannot silent-upgrade to a major that dropped FastMCP.
+    "mcp>=1.26.0,<2",
+    "pdfplumber>=0.11.0",
+    "mammoth>=1.8.0",
+    "python-docx>=1.2.0",
+    "openpyxl>=3.1.0",
+    "python-pptx>=1.0.0",
+    "markdown>=3.7",
+    "chardet>=5.2.0",
+    "beautifulsoup4>=4.12.0",
+    "markdownify>=1.2.0",
+    "tiktoken>=0.8.0",
+    "httpx>=0.28.0",
+    "rapidocr==3.9.2",
+    "onnxruntime>=1.16.0",
+    "Pillow>=10.0.0",
+    "regex>=2024.0.0",
+    "dashscope>=1.20.0",
+    "resvg-py==0.5.0",
+]
+
+[project.optional-dependencies]
+# One-time host tools to export FunASR → ONNX (NOT used at Docker runtime).
+# Runtime inference is always [asr-onnx]. Install only when re-exporting models:
+#   pip install -e ".[asr-export]"
+asr-export = [
+    "funasr>=1.1.0",
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
+    "librosa>=0.10.0",
+    "soundfile>=0.12.0",
+    "onnx>=1.14.0",
+    "onnxscript>=0.1.0",
+]
+# Deprecated alias of asr-export (older docs / scripts).
+diarization = [
+    "funasr>=1.1.0",
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
+    "librosa>=0.10.0",
+    "soundfile>=0.12.0",
+    "onnx>=1.14.0",
+    "onnxscript>=0.1.0",
+]
+# Local ASR runtime: funasr-onnx + onnxruntime only (no torch).
+asr-onnx = [
+    "funasr-onnx>=0.4.0",
+    "onnxruntime>=1.16.0",
+    "librosa>=0.10.0",
+    "soundfile>=0.12.0",
+    "numpy>=1.24.0",
+]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.25.0",
+    "pytest-httpx>=0.35.0",
+    "ruff>=0.9.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src", "ee"]
+exclude = [
+    "ee/frontend/**",
+    "**/__pycache__",
+    "**/*.pyc",
+    "**/*.pyo",
+    "**/.DS_Store",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint.per-file-ignores]
+"src/main.py" = ["E402"]

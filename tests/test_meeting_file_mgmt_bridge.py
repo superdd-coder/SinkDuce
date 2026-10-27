@@ -1,0 +1,366 @@
+"""Meeting ↔ file-mgmt ↔ timeline bridge (design 2026-08-04).
+
+Covers:
+- nodes.external_ref get-or-create anchor
+- register under Meeting folder
+- empty-anchor delete
+"""
+
+from __future__ import annotations
+
+import shutil
+from pathlib import Path
+
+import pytest
+
+from src.file_mgmt.store import COLLECTIONS_DIR, get_db, init_collection_db
+from src.file_mgmt.service import (
+    delete_meeting_anchor_if_empty,
+    ensure_meeting_anchor_node,
+    get_node_by_external_ref,
+    meeting_external_ref,
+    register_ingested_source_file,
+    attach_file_to_node,
+    detach_file_from_node,
+)
+
+
+@pytest.fixture(autouse=True)
+def _cleanup():
+    existing: set[str] = set()
+    if COLLECTIONS_DIR.exists():
+        existing = {d.name for d in COLLECTIONS_DIR.iterdir() if d.is_dir()}
+    yield
+    if COLLECTIONS_DIR.exists():
+        for d in COLLECTIONS_DIR.iterdir():
+            if d.is_dir() and d.name not in existing:
+                shutil.rmtree(d, ignore_errors=True)
+
+
+def _setup(coll: str) -> None:
+    from src.collections.store import create_collection_meta
+
+    create_collection_meta(coll, f"Test {coll}")
+    init_collection_db(coll)
+
+
+def test_meeting_external_ref_format():
+    assert meeting_external_ref("abc") == "meeting:abc"
+
+
+def test_ensure_meeting_anchor_idempotent():
+    coll = "bridge-anchor-1"
+    _setup(coll)
+    mid = "meet_aaa"
+    n1 = ensure_meeting_anchor_node(coll, mid, title="Kickoff", event_time="2026-08-01")
+    n2 = ensure_meeting_anchor_node(coll, mid, title="Kickoff Renamed")
+    assert n1 == n2
+
+    looked = get_node_by_external_ref(coll, meeting_external_ref(mid))
+    assert looked is not None
+    assert looked.node_id == n1
+    assert looked.title == "Kickoff Renamed"
+
+    conn = get_db(coll)
+    try:
+        row = conn.execute(
+            "SELECT external_ref, title, group_id FROM nodes WHERE node_id=?",
+            (n1,),
+        ).fetchone()
+        assert row["external_ref"] == "meeting:meet_aaa"
+        assert row["title"] == "Kickoff Renamed"
+        # Bound to Meeting system group when present
+        grp = conn.execute(
+            "SELECT name FROM node_groups WHERE group_id=?", (row["group_id"],)
+        ).fetchone()
+        assert grp is None or grp["name"] == "Meeting"
+    finally:
+        conn.close()
+
+
+def test_meeting_anchor_one_node_per_chain():
+    """Same meeting may have separate anchors on main vs branch chain."""
+    from src.file_mgmt.service import create_chain, list_chains
+    from src.file_mgmt.models import ChainCreate
+
+    coll = "bridge-anchor-multi"
+    _setup(coll)
+    mid = "meet_multi"
+    chains = list_chains(coll)
+    main = next(c for c in chains if c.is_main)
+    # create a branch chain off first main node or via API-like helper
+    # need a parent node on main for branch — use ensure meeting on main first
+    n_main = ensure_meeting_anchor_node(
+        coll, mid, title="Multi", chain_id=main.chain_id
+    )
+    branch = create_chain(
+        coll,
+        ChainCreate(
+            parent_chain_id=main.chain_id,
+            parent_node_id=n_main,
+            title="Branch A",
+        ),
+    )
+    n_branch = ensure_meeting_anchor_node(
+        coll, mid, title="Multi", chain_id=branch.chain_id
+    )
+    assert n_main != n_branch
+    assert get_node_by_external_ref(
+        coll, meeting_external_ref(mid), chain_id=main.chain_id
+    ).node_id == n_main
+    assert get_node_by_external_ref(
+        coll, meeting_external_ref(mid), chain_id=branch.chain_id
+    ).node_id == n_branch
+    # same chain still idempotent
+    assert (
+        ensure_meeting_anchor_node(coll, mid, title="Multi", chain_id=branch.chain_id)
+        == n_branch
+    )
+
+
+def test_register_persists_meeting_display_label_without_json():
+    """After files.json stop-write, folder/attachment names use Meeting / Section."""
+    from src.collections.file_index import load as index_load, load_for_read
+    from src.file_mgmt.files import _attachment_display_fields, _row_to_file_out
+
+    coll = "bridge-label-1"
+    _setup(coll)
+    fid = "filelabel001"
+    source = "__meeting__:meet_x:tab_01"
+    register_ingested_source_file(
+        coll,
+        file_id=fid,
+        source=source,
+        storage_name="tab_01.md",
+        system_folder_name="Meeting",
+        source_label="Weekly / Decisions",
+    )
+
+    assert fid not in (index_load(coll) or {})
+    idx = load_for_read(coll)
+    assert idx[fid]["source"] == source
+    assert idx[fid]["source_label"] == "Weekly / Decisions"
+    assert idx[fid]["file_type"] == "meeting"
+
+    names = _attachment_display_fields(coll, fid, "tab_01.md", index=idx)
+    assert names["display_name"] == "Weekly / Decisions"
+    assert names["filename"] == "tab_01.md"
+
+    conn = get_db(coll)
+    try:
+        row = conn.execute("SELECT * FROM files WHERE file_id=?", (fid,)).fetchone()
+        assert _row_to_file_out(row, conn, coll, index=idx).display_name == "Weekly / Decisions"
+    finally:
+        conn.close()
+
+
+def test_unregister_finds_sqlite_source_without_json():
+    """Delete/re-ingest must find the file even when files.json was never written."""
+    from src.collections.file_index import load_for_read
+    from src.file_mgmt.service import unregister_files_for_source
+
+    coll = "bridge-unreg-1"
+    _setup(coll)
+    fid = "fileunreg001"
+    source = "__meeting__:meet_y:tab_02"
+    register_ingested_source_file(
+        coll,
+        file_id=fid,
+        source=source,
+        storage_name="tab_02.md",
+        system_folder_name="Meeting",
+        source_label="Standup / Action items",
+    )
+    assert fid in load_for_read(coll)
+
+    removed = unregister_files_for_source(coll, source, remove_disk=False)
+    assert fid in removed
+    assert fid not in load_for_read(coll)
+
+
+def test_register_meeting_folder_and_empty_anchor_delete():
+    coll = "bridge-reg-1"
+    _setup(coll)
+    mid = "meet_bbb"
+    fid = "file_bbb_001"
+    source = f"__meeting__:{mid}:tab_01"
+
+    # Seed files.json so unregister can find file_id
+    from src.collections.file_index import add as index_add, load as index_load
+
+    (COLLECTIONS_DIR / coll / "files" / fid).mkdir(parents=True, exist_ok=True)
+    (COLLECTIONS_DIR / coll / "files" / fid / "tab_01.md").write_text(
+        "# sec\n\nhello", encoding="utf-8"
+    )
+    index_add(coll, fid, source, "Meet / sec", "meeting", 0)
+
+    register_ingested_source_file(
+        coll,
+        file_id=fid,
+        source=source,
+        storage_name="tab_01.md",
+        system_folder_name="Meeting",
+    )
+
+    conn = get_db(coll)
+    try:
+        frow = conn.execute(
+            "SELECT file_id FROM files WHERE file_id=?", (fid,)
+        ).fetchone()
+        assert frow is not None
+        meeting_folder = conn.execute(
+            "SELECT folder_id FROM folders WHERE name='Meeting' AND is_system=1"
+        ).fetchone()
+        assert meeting_folder
+        path = conn.execute(
+            "SELECT 1 FROM file_paths WHERE file_id=? AND folder_id=?",
+            (fid, meeting_folder["folder_id"]),
+        ).fetchone()
+        assert path is not None
+    finally:
+        conn.close()
+
+    node_id = ensure_meeting_anchor_node(coll, mid, title="Board")
+    attach_file_to_node(coll, node_id, file_id=fid)
+
+    # Still has attachment → do not delete
+    assert delete_meeting_anchor_if_empty(coll, mid) is False
+
+    detach_file_from_node(coll, node_id, fid)
+    assert delete_meeting_anchor_if_empty(coll, mid) is True
+
+    conn = get_db(coll)
+    try:
+        gone = conn.execute(
+            "SELECT 1 FROM nodes WHERE external_ref=?",
+            (meeting_external_ref(mid),),
+        ).fetchone()
+        assert gone is None
+    finally:
+        conn.close()
+
+    # index still has entry until unregister
+    assert fid in (index_load(coll) or {})
+
+
+def test_delete_meeting_purges_sqlite_and_disk_without_json(tmp_path, monkeypatch):
+    """FM-02: DELETE meeting must drop meta.db + snapshot even if files.json is empty."""
+    import asyncio
+    from unittest.mock import MagicMock
+
+    from src.collections.file_index import load as index_load, load_for_read
+    from src.meeting import store as meeting_store
+    from src.meeting.routes import delete_meeting
+
+    meetings_dir = tmp_path / "meetings"
+    meetings_dir.mkdir()
+    monkeypatch.setattr(meeting_store, "MEETINGS_DIR", meetings_dir)
+
+    dummy_db = MagicMock()
+    dummy_db.delete_by_filter = MagicMock()
+    monkeypatch.setattr("src.services.services.db", dummy_db, raising=False)
+    monkeypatch.setattr("src.meeting.service.services.db", dummy_db, raising=False)
+
+    coll = "fm02-del-meet"
+    _setup(coll)
+    mid = meeting_store.create_meeting("Board review").id
+    tab_id = "tab_01"
+    fid = "filedelmeet01"
+    source = f"__meeting__:{mid}:{tab_id}"
+
+    snap = COLLECTIONS_DIR / coll / "files" / fid
+    snap.mkdir(parents=True, exist_ok=True)
+    (snap / "tab_01.md").write_text("# sec\n", encoding="utf-8")
+    register_ingested_source_file(
+        coll,
+        file_id=fid,
+        source=source,
+        storage_name="tab_01.md",
+        system_folder_name="Meeting",
+        source_label="Board review / Decisions",
+    )
+    meeting_store.update_meeting(
+        mid,
+        tabs=[
+            {
+                "tab_id": tab_id,
+                "name": "Decisions",
+                "associated_collection_id": coll,
+                "allocated_file_id": fid,
+            }
+        ],
+        allocated_collections=[coll],
+        allocated_file_ids=[fid],
+    )
+
+    assert fid not in (index_load(coll) or {})
+    assert fid in load_for_read(coll)
+    assert snap.is_dir()
+
+    result = asyncio.get_event_loop().run_until_complete(delete_meeting(mid))
+    assert result.get("message") == "Meeting deleted"
+    assert meeting_store.get_meeting(mid) is None
+    assert fid not in load_for_read(coll)
+    assert not snap.exists()
+    conn = get_db(coll)
+    try:
+        assert conn.execute(
+            "SELECT 1 FROM files WHERE file_id=?", (fid,)
+        ).fetchone() is None
+    finally:
+        conn.close()
+
+
+def test_delete_meeting_cleans_legacy_files_json(tmp_path, monkeypatch):
+    """FM-02: leftover files.json is cleaned; SQLite + disk stay primary."""
+    import asyncio
+    from unittest.mock import MagicMock
+
+    from src.collections.file_index import add as index_add, load as index_load
+    from src.meeting import store as meeting_store
+    from src.meeting.routes import delete_meeting
+
+    meetings_dir = tmp_path / "meetings"
+    meetings_dir.mkdir()
+    monkeypatch.setattr(meeting_store, "MEETINGS_DIR", meetings_dir)
+    dummy_db = MagicMock()
+    dummy_db.delete_by_filter = MagicMock()
+    monkeypatch.setattr("src.meeting.service.services.db", dummy_db, raising=False)
+
+    coll = "fm02-del-json"
+    _setup(coll)
+    mid = meeting_store.create_meeting("Legacy").id
+    tab_id = "tab_02"
+    fid = "filedeljson02"
+    source = f"__meeting__:{mid}:{tab_id}"
+
+    snap = COLLECTIONS_DIR / coll / "files" / fid
+    snap.mkdir(parents=True, exist_ok=True)
+    (snap / "tab_02.md").write_text("# old\n", encoding="utf-8")
+    register_ingested_source_file(
+        coll,
+        file_id=fid,
+        source=source,
+        storage_name="tab_02.md",
+        system_folder_name="Meeting",
+        source_label="Legacy / Notes",
+    )
+    index_add(coll, fid, source, "Legacy / Notes", "meeting", 0)
+    meeting_store.update_meeting(
+        mid,
+        allocated_collections=[coll],
+        allocated_file_ids=[fid],
+    )
+    assert fid in (index_load(coll) or {})
+
+    result = asyncio.get_event_loop().run_until_complete(delete_meeting(mid))
+    assert result.get("message") == "Meeting deleted"
+    assert fid not in (index_load(coll) or {})
+    assert not snap.exists()
+    conn = get_db(coll)
+    try:
+        assert conn.execute(
+            "SELECT 1 FROM files WHERE file_id=?", (fid,)
+        ).fetchone() is None
+    finally:
+        conn.close()

@@ -1,0 +1,200 @@
+import { useRef } from "react"
+import { Progress } from "@/components/ui/progress"
+import { Clock, Loader2, CheckCircle2, XCircle, StopCircle, RefreshCw } from "lucide-react"
+import { type TaskInfo } from "@/api/client"
+import { useT } from "@/i18n/use-t"
+
+interface UploadUIProps {
+  hasActiveTasks: boolean
+  allowedFileTypes?: string[]
+  onUpload: (files: FileList | null) => void
+}
+
+interface TaskQueueListProps {
+  hasActiveTasks: boolean
+  tasks: TaskInfo[]
+  onClearCompleted: () => Promise<{ message: string }>
+  onRefreshTasks: () => void
+  onCancelTask?: (taskId: string) => void
+  onRetryTask?: (taskId: string) => void
+}
+
+// Back-compat: keep the old UploadSection props/type export for any consumer
+// still importing the combined component. Renders only the upload UI; the
+// task queue is now expected to be rendered separately via <TaskQueueList />
+// inside the same scroll container as the file list.
+interface LegacyUploadSectionProps extends UploadUIProps, TaskQueueListProps {}
+
+function TaskStatusIcon({ status }: { status: string }) {
+  switch (status) {
+    case "pending":
+      return <Clock className="h-4 w-4 text-muted-foreground" />
+    case "processing":
+      return <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />
+    case "completed":
+      return <CheckCircle2 className="h-4 w-4 text-green-500" />
+    case "failed":
+      return <XCircle className="h-4 w-4 text-red-500" />
+    default:
+      return null
+  }
+}
+
+const ALL_FILE_TYPES = ["pdf", "txt", "md", "docx", "xlsx", "pptx", "csv"]
+
+export function UploadUI({ hasActiveTasks, allowedFileTypes, onUpload }: UploadUIProps) {
+  const t = useT()
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const effectiveTypes = allowedFileTypes && allowedFileTypes.length > 0 ? allowedFileTypes : ALL_FILE_TYPES
+  const acceptAttr = effectiveTypes.map(t => `.${t}`).join(",")
+  const typesLabel = effectiveTypes.map(t => t.toUpperCase()).join(", ")
+
+  return (
+    <div>
+      <div
+        className="[font:var(--type-label)] mb-2.5 text-muted-foreground/80"
+      >
+        {t("library.uploadFiles")}
+      </div>
+      <input
+        ref={fileRef}
+        type="file"
+        multiple
+        accept={acceptAttr}
+        className="hidden"
+        onChange={(e) => { onUpload(e.target.files); if (fileRef.current) fileRef.current.value = "" }}
+      />
+      <div
+        className="p-6 text-center cursor-pointer transition-colors hover:opacity-80 border border-dashed border-border"
+        onClick={() => fileRef.current?.click()}
+        onDrop={(e) => { e.preventDefault(); onUpload(e.dataTransfer.files) }}
+        onDragOver={(e) => e.preventDefault()}
+      >
+        <div className="[font:var(--type-label)] mb-1 text-muted-foreground">
+          {hasActiveTasks ? t("library.processingUploadMore") : t("library.dropFilesUpload")}
+        </div>
+        <div className="[font:var(--type-meta)] text-muted-foreground" style={{ opacity: 0.7 }}>
+          {typesLabel}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export function TaskQueueList({ hasActiveTasks, tasks, onClearCompleted, onRefreshTasks, onCancelTask, onRetryTask }: TaskQueueListProps) {
+  const t = useT()
+  const handleClearCompleted = async () => {
+    try {
+      await onClearCompleted()
+      onRefreshTasks()
+    } catch {
+      // ignore
+    }
+  }
+
+  if (tasks.length === 0) return null
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2.5">
+        <div
+          className="[font:var(--type-label)] text-muted-foreground/80"
+        >
+          {t("library.uploadQueue")}
+          {hasActiveTasks && (
+            <span className="ml-2 [font:var(--type-meta)] opacity-60">
+              · {t("library.nProcessing", { n: tasks.filter((task) => task.status === "processing").length })}
+            </span>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={handleClearCompleted}
+          disabled={!tasks.some((t) => t.status === "completed" || t.status === "failed")}
+          className="[font:var(--type-label)] cursor-pointer transition-opacity hover:opacity-80 text-muted-foreground"
+          style={{
+            background: "none",
+            border: "0.5px solid var(--color-border)",
+            padding: "3px 8px",
+            borderRadius: "2px",
+            opacity: tasks.some((t) => t.status === "completed" || t.status === "failed") ? 1 : 0.3,
+          }}
+        >
+          {t("common.clear")}
+        </button>
+      </div>
+
+      <div>
+        {tasks.map((task) => (
+          <div
+            key={task.id}
+            className="py-2.5 border-b border-b border-dashed border-border"
+          >
+            <div className="flex items-center gap-3">
+              <TaskStatusIcon status={task.status} />
+              <div className="flex-1 min-w-0">
+                <p className="[font:var(--type-ui)] truncate text-foreground">{task.filename}</p>
+                {task.message && (
+                  <p className="[font:var(--type-meta)] text-muted-foreground">{task.message}</p>
+                )}
+              </div>
+              {task.status === "completed" && task.result && (
+                <span className="[font:var(--type-meta)] shrink-0 text-primary">
+                  {t("library.nChunks", { n: task.result.chunks_count })}
+                </span>
+              )}
+              {task.status === "processing" && onCancelTask && (
+                <button
+                  type="button"
+                  className="shrink-0 cursor-pointer text-muted-foreground"
+                  style={{ background: "none", border: "none" }}
+                  onClick={() => onCancelTask(task.id)}
+                  title={t("common.stop")}
+                >
+                  <StopCircle className="h-3.5 w-3.5" />
+                </button>
+              )}
+              {task.status === "failed" && onRetryTask && (
+                <button
+                  type="button"
+                  className="shrink-0 cursor-pointer text-muted-foreground"
+                  style={{ background: "none", border: "none" }}
+                  onClick={() => onRetryTask(task.id)}
+                  title={t("common.retry")}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            {task.status === "processing" && (
+              <Progress value={task.progress} className="h-0.5 mt-2" />
+            )}
+            {task.status === "failed" && task.error && (
+              <p className="[font:var(--type-meta)] mt-1 pl-7" style={{ color: "#dc2626" }}>{task.error}</p>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// Back-compat: combined component for any consumer still using the old API.
+// New code should render <UploadUI /> and <TaskQueueList /> separately so the
+// task queue can scroll together with the file list.
+export function UploadSection(props: LegacyUploadSectionProps) {
+  return (
+    <div className="space-y-6">
+      <UploadUI hasActiveTasks={props.hasActiveTasks} allowedFileTypes={props.allowedFileTypes} onUpload={props.onUpload} />
+      <TaskQueueList
+        hasActiveTasks={props.hasActiveTasks}
+        tasks={props.tasks}
+        onClearCompleted={props.onClearCompleted}
+        onRefreshTasks={props.onRefreshTasks}
+        onCancelTask={props.onCancelTask}
+        onRetryTask={props.onRetryTask}
+      />
+    </div>
+  )
+}

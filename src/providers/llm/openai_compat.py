@@ -1,0 +1,560 @@
+from __future__ import annotations
+
+import logging
+import re
+from typing import Generator
+
+import httpx
+from openai import OpenAI
+
+from src.config import LLMProviderConfig
+from src.providers.base import LLMProvider
+from src.providers.llm.thinking import is_always_think_error
+from src.providers.llm.thinking import learned_thinking_mode
+from src.providers.llm.thinking import remember_thinking_mode
+from src.providers.registry import llm_registry
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_TEMPERATURE = 0.1
+_THINK_RE = re.compile(r"<think>[\s\S]*?</think>\s*", re.DOTALL)
+
+
+def _strip_think(text: str) -> str:
+    """Remove `<think>...</think>` tags from LLM output."""
+    return _THINK_RE.sub("", text).strip()
+
+
+def _extract_json_from_raw(raw: str) -> str | None:
+    """Try to extract a JSON object from raw text (may contain <think> tags).
+
+    Uses ``JSONDecoder.raw_decode()`` for proper validation — avoids false
+    positives from bare ``{`` characters in thinking text.  Returns the JSON
+    substring or ``None`` if no valid object is found.
+    """
+    import json as _json
+
+    decoder = _json.JSONDecoder()
+    for idx, ch in enumerate(raw):
+        if ch == "{":
+            try:
+                _obj, end = decoder.raw_decode(raw[idx:])
+                if isinstance(_obj, dict):
+                    return raw[idx : idx + end]
+            except (_json.JSONDecodeError, ValueError):
+                continue
+    return None
+
+
+# Qwen / DashScope thinking_budget (tokens).
+THINKING_BUDGETS = {"low": 1024, "medium": 4096, "high": 8192, "max": 8192}
+
+# DeepSeek Chat Completions: reasoning_effort is a top-level create() kwarg
+# (not extra_body). Official values: low | high | max (default high).
+# Settings Low/Medium/High map onto those three official levels.
+DEEPSEEK_REASONING_EFFORT = {
+    "low": "low",
+    "medium": "high",
+    "high": "max",
+    "max": "max",
+    "xhigh": "high",
+}
+
+
+def map_deepseek_reasoning_effort(effort: str | None) -> str | None:
+    """Map Settings / config effort onto DeepSeek's official values."""
+    return DEEPSEEK_REASONING_EFFORT.get((effort or "").strip().lower())
+
+
+def build_thinking_extra_body(
+    is_dashscope: bool, thinking: bool, effort: str | None = None
+) -> dict:
+    """Provider extra_body for thinking on/off (and DashScope budget)."""
+    if is_dashscope:
+        extra: dict = {"enable_thinking": thinking}
+        budget = THINKING_BUDGETS.get((effort or "").strip().lower())
+        if thinking and budget:
+            extra["thinking_budget"] = budget
+        return extra
+    return {"thinking": {"type": "enabled" if thinking else "disabled"}}
+
+
+def thinking_create_kwargs(
+    is_dashscope: bool, thinking: bool, effort: str | None = None
+) -> dict:
+    """Kwargs to merge into chat.completions.create().
+
+    DeepSeek official shape::
+
+        reasoning_effort="high",
+        extra_body={"thinking": {"type": "enabled"}}
+    """
+    out: dict = {"extra_body": build_thinking_extra_body(is_dashscope, thinking, effort)}
+    if not is_dashscope and thinking:
+        mapped = map_deepseek_reasoning_effort(effort)
+        if mapped:
+            out["reasoning_effort"] = mapped
+    return out
+
+
+@llm_registry.register("openai_compatible", display_name="OpenAI-Compatible")
+class OpenAICompatLLM(LLMProvider):
+    def __init__(self, config: LLMProviderConfig):
+        self._base_url = config.base_url.strip()
+        self._client = OpenAI(
+            base_url=self._base_url,
+            api_key=config.api_key.strip(),
+            timeout=httpx.Timeout(1800, connect=30),
+        )
+        self._model = (config.default_model or config.model).strip()
+        # Capability belongs to this provider/model pair, not to a model name
+        # that another configured provider may also use.
+        self.supports_vision = self._model in (config.visual_model_ids or [])
+        self._default_max_tokens = getattr(config, "max_tokens", 0) or 0
+        # Detect DashScope endpoints — they use a different thinking parameter
+        # format (`enable_thinking`) instead of DeepSeek's native format.
+        self._is_dashscope = "dashscope.aliyuncs.com" in self._base_url
+        # Thinking posture of the model: per-model learned entry (probe or
+        # runtime fallback) wins; the provider config field (probed for the
+        # default model) is the fallback. "" means unknown — the create-time
+        # retry learns it as a last resort.
+        mode = (getattr(config, "thinking_mode", "") or "").strip().lower()
+        if mode not in ("toggle", "always", "none"):
+            mode = ""
+        self._thinking_mode = learned_thinking_mode(self._base_url, self._model) or mode
+
+    def _build_thinking_extra(
+        self, thinking: bool, effort: str | None = None
+    ) -> dict:
+        return build_thinking_extra_body(self._is_dashscope, thinking, effort)
+
+    def _apply_thinking_kwargs(
+        self, kwargs: dict, thinking: bool | None, effort: str | None = None
+    ) -> None:
+        if thinking is None:
+            return
+        if self._thinking_mode == "none":
+            return
+        if self._thinking_mode == "always":
+            # Always-thinking models reject thinking-off (400/1210); the API
+            # contract is reasoning_effort (low/high/max) instead. "Off"
+            # degrades to the lowest effort — thinking cannot be disabled.
+            mapped = "low" if not thinking else map_deepseek_reasoning_effort(effort)
+            if mapped:
+                kwargs["reasoning_effort"] = mapped
+            return
+        kwargs.update(thinking_create_kwargs(self._is_dashscope, thinking, effort))
+
+    def _create_with_thinking_fallback(self, kwargs: dict, thinking: bool | None, effort: str | None, send):
+        """send(kwargs) with a one-shot adaptation to always-thinking models.
+
+        Primary classification happens at save time (thinking probe); this
+        retry covers models the probe could not classify.
+        """
+        try:
+            return send(kwargs)
+        except Exception as e:
+            if self._thinking_mode == "always" or not is_always_think_error(e):
+                raise
+            self._thinking_mode = "always"
+            remember_thinking_mode(self._base_url, self._model, "always")
+            logger.warning(
+                "LLM %s: model rejects thinking-off (always-thinks) — "
+                "adapting to reasoning_effort and remembering it",
+                self._model,
+            )
+            rebuilt = {
+                k: v for k, v in kwargs.items()
+                if k not in ("extra_body", "reasoning_effort")
+            }
+            self._apply_thinking_kwargs(rebuilt, thinking, effort)
+            return send(rebuilt)
+
+    def _resolve_temperature(self, temperature: float | None) -> float:
+        return temperature if temperature is not None else _DEFAULT_TEMPERATURE
+
+    def _resolve_max_tokens(self, max_tokens: int | None) -> int:
+        if max_tokens is not None and max_tokens > 0:
+            return max_tokens
+        if self._default_max_tokens > 0:
+            return self._default_max_tokens
+        return 0
+
+    def generate(self, prompt: str | list, system: str = "", temperature: float | None = None, max_tokens: int | None = None, response_format: dict | None = None, thinking: bool | None = None, thinking_effort: str | None = None) -> str:
+        if isinstance(prompt, list):
+            prompt_len = sum(len(p.get("text", "")) for p in prompt if isinstance(p, dict))
+        else:
+            prompt_len = len(prompt or "")
+        logger.info("LLM generate: model=%s prompt_len=%d max_tokens=%s thinking=%s effort=%s json_mode=%s multimodal=%s",
+                    self._model, prompt_len,
+                    max_tokens if max_tokens else (self._default_max_tokens or "none"),
+                    thinking, thinking_effort, bool(response_format),
+                    isinstance(prompt, list))
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        kwargs = dict(
+            model=self._model,
+            messages=messages,
+            temperature=self._resolve_temperature(temperature),
+        )
+        resolved_mt = self._resolve_max_tokens(max_tokens)
+        if resolved_mt > 0:
+            kwargs["max_tokens"] = resolved_mt
+        if response_format:
+            kwargs["response_format"] = response_format
+        self._apply_thinking_kwargs(kwargs, thinking, thinking_effort)
+
+        response = self._create_with_thinking_fallback(
+            kwargs, thinking, thinking_effort,
+            send=lambda kw: self._client.chat.completions.create(**kw),
+        )
+        if not response.choices:
+            return ""
+        msg = response.choices[0].message
+        text = msg.content or ""
+        # Some providers (e.g. DashScope with thinking mode) return
+        # empty content when thinking is enabled, putting the actual
+        # response inside reasoning_content.  Fall back to reasoning,
+        # and when json_mode was requested, try extracting JSON directly
+        # from the raw reasoning (answer may be inside think tags).
+        if not text.strip():
+            reasoning = getattr(msg, "reasoning_content", None)
+            if reasoning:
+                logger.info("LLM generate: content empty, using reasoning_content (%d chars)", len(reasoning))
+                # When json_mode was requested, try extracting JSON from raw
+                # reasoning FIRST (before stripping think tags).  DashScope
+                # may put the JSON answer inside <think>...</think> in
+                # reasoning_content, and _strip_think() would delete it.
+                if response_format:
+                    json_text = _extract_json_from_raw(reasoning)
+                    if json_text:
+                        logger.info("LLM generate: extracted JSON from raw reasoning (%d chars)", len(json_text))
+                        return json_text
+                stripped = _strip_think(reasoning)
+                if stripped.strip():
+                    text = stripped
+                else:
+                    text = reasoning
+        if not text.strip():
+            logger.warning("LLM generate: empty response from model=%s (content=%r, reasoning=%r)",
+                           self._model, msg.content, getattr(msg, "reasoning_content", None))
+            return ""
+        return _strip_think(text)
+
+    # Default visual description prompt — used when caller doesn't provide one
+    from src.prompts import VISUAL_PROMPT as _DEFAULT_VISUAL_PROMPT
+
+    def describe_image(self, image_base64: str, image_mime: str = "image/png", prompt: str = "") -> str:
+        """Generate a text description of an image using Vision API.
+
+        Args:
+            image_base64: Base64-encoded image data (without data URI prefix)
+            image_mime: MIME type of the image (default image/png)
+            prompt: Custom prompt; uses _DEFAULT_VISUAL_PROMPT if empty
+
+        Returns:
+            Generated description string
+        """
+        logger.info("LLM describe_image: model=%s mime=%s", self._model, image_mime)
+        text_prompt = prompt or self._DEFAULT_VISUAL_PROMPT
+        data_uri = f"data:{image_mime};base64,{image_base64}"
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": text_prompt,
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": data_uri},
+                    },
+                ],
+            }
+        ]
+        # Chat uses a 1800s client timeout. One Vision hang must not occupy
+        # an ingest worker / limiter slot for that long.
+        client = self._client.with_options(timeout=httpx.Timeout(90, connect=15))
+        kwargs = dict(
+            model=self._model,
+            messages=messages,
+            temperature=0.1,
+            max_tokens=1024,
+        )
+        # Describing an image never benefits from thinking: reasoning tokens
+        # sit in front of every one-line answer and multiply per-image
+        # latency (measured qwen3.7-flash 30.6s → 7.4s with it off).
+        self._apply_thinking_kwargs(kwargs, thinking=False)
+        response = self._create_with_thinking_fallback(
+            kwargs, thinking=False, effort=None,
+            send=lambda kw: client.chat.completions.create(**kw),
+        )
+        if not response.choices:
+            return ""
+        return _strip_think(response.choices[0].message.content or "")
+
+    def generate_stream_tagged(
+        self, prompt: str, system: str = "",
+        temperature: float | None = None, max_tokens: int | None = None,
+        response_format: dict | None = None, thinking: bool | None = None,
+        thinking_effort: str | None = None,
+    ) -> Generator[tuple[str, bool], None, None]:
+        """Stream with thinking-mode awareness.
+
+        Yields (text, is_thinking) tuples.  The consumer can render thinking
+        text in a collapsible section, then hide it when real content begins.
+
+        When thinking mode is off or the model doesn't emit think tags,
+        all tuples are (text, False).
+        """
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        kwargs = dict(
+            model=self._model,
+            messages=messages,
+            temperature=self._resolve_temperature(temperature),
+            stream=True,
+        )
+        resolved_mt = self._resolve_max_tokens(max_tokens)
+        if resolved_mt > 0:
+            kwargs["max_tokens"] = resolved_mt
+        if response_format:
+            kwargs["response_format"] = response_format
+        self._apply_thinking_kwargs(kwargs, thinking, thinking_effort)
+
+        stream = self._create_with_thinking_fallback(
+            kwargs, thinking, thinking_effort,
+            send=lambda kw: self._client.chat.completions.create(**kw),
+        )
+        in_think = False
+        seen_non_think = False  # first non-think token → transition
+        buf = ""
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                text = buf + chunk.choices[0].delta.content
+                buf = ""
+
+                if in_think:
+                    end_idx = text.find("</think>")
+                    if end_idx != -1:
+                        # Emit the thinking text before </think>
+                        think_text = text[:end_idx]
+                        if think_text:
+                            yield (think_text, True)
+                        text = text[end_idx + 8:]  # len("</think>") = 8
+                        in_think = False
+                        seen_non_think = True
+                    else:
+                        # Partial </think> at end — buffer it
+                        for i in range(1, min(8, len(text) + 1)):
+                            if "</think>".startswith(text[-i:]):
+                                buf = text[-i:]
+                                text = text[:-i]
+                                break
+                        if text:
+                            yield (text, True)
+                        continue
+
+                # Not in think block — strip any complete <think>...</think> spans
+                while "<think>" in text:
+                    before, after = text.split("<think>", 1)
+                    if before:
+                        yield (before, False)
+                        if not seen_non_think:
+                            seen_non_think = True
+                    end_idx = after.find("</think>")
+                    if end_idx != -1:
+                        think_inner = after[:end_idx]
+                        if think_inner:
+                            yield (think_inner, True)
+                        text = after[end_idx + 8:]
+                    else:
+                        # </think> not yet received — enter thinking mode
+                        text = after
+                        in_think = True
+                        break
+
+                # Buffer partial "<think>" at end
+                if not in_think:
+                    for i in range(1, min(7, len(text) + 1)):
+                        if "<think>".startswith(text[-i:]):
+                            buf = text[-i:]
+                            text = text[:-i]
+                            break
+
+                if text:
+                    if not seen_non_think:
+                        seen_non_think = True
+                    yield (text, False)
+
+    def generate_stream(self, prompt: str, system: str = "", temperature: float | None = None, max_tokens: int | None = None, response_format: dict | None = None, thinking: bool | None = None, thinking_effort: str | None = None) -> Generator[str, None, None]:
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        kwargs = dict(
+            model=self._model,
+            messages=messages,
+            temperature=self._resolve_temperature(temperature),
+            stream=True,
+        )
+        resolved_mt = self._resolve_max_tokens(max_tokens)
+        if resolved_mt > 0:
+            kwargs["max_tokens"] = resolved_mt
+        if response_format:
+            kwargs["response_format"] = response_format
+        self._apply_thinking_kwargs(kwargs, thinking, thinking_effort)
+
+        stream = self._create_with_thinking_fallback(
+            kwargs, thinking, thinking_effort,
+            send=lambda kw: self._client.chat.completions.create(**kw),
+        )
+        in_think = False
+        buf = ""  # buffer for partial tag matches
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                text = buf + chunk.choices[0].delta.content
+                buf = ""
+                # Strip think tags from streaming output
+                if in_think:
+                    end_idx = text.find("</think>")
+                    if end_idx != -1:
+                        text = text[end_idx + 8:]  # len("</think>") = 8
+                        in_think = False
+                    else:
+                        # Check if text ends with partial "</think>"
+                        for i in range(1, min(8, len(text) + 1)):
+                            if "</think>".startswith(text[-i:]):
+                                buf = text[-i:]
+                                text = text[:-i]
+                                break
+                        if not text and not buf:
+                            continue  # still inside think block
+                        elif not text:
+                            continue
+                # Check for opening think tag
+                while "<think>" in text:
+                    before, after = text.split("<think>", 1)
+                    end_idx = after.find("</think>")
+                    if end_idx != -1:
+                        text = before + after[end_idx + 8:]
+                    else:
+                        text = before
+                        in_think = True
+                        break
+                # Buffer partial "<think>" at the end
+                if not in_think:
+                    for i in range(1, min(7, len(text) + 1)):
+                        if "<think>".startswith(text[-i:]):
+                            buf = text[-i:]
+                            text = text[:-i]
+                            break
+                if text:
+                    yield text
+
+    # ── Batch API (for enrichment context generation) ────────────────────
+
+    def batch_submit(self, requests: list[dict]) -> str:
+        """Submit a batch of generation requests via OpenAI-compatible Batch API.
+
+        Each request: {"prompt": str, "system": str, "temperature": float | None, "max_tokens": int | None}
+        Returns batch_id string.
+        """
+        import json
+        import tempfile
+        import os
+
+        # Build JSONL — one request object per line
+        lines = []
+        for i, req in enumerate(requests):
+            body = {
+                "model": self._model,
+                "messages": [],
+                "temperature": req.get("temperature") or _DEFAULT_TEMPERATURE,
+            }
+            mt = req.get("max_tokens") or self._default_max_tokens
+            if mt > 0:
+                body["max_tokens"] = mt
+            if req.get("system"):
+                body["messages"].append({"role": "system", "content": req["system"]})
+            body["messages"].append({"role": "user", "content": req.get("prompt", "")})
+
+            lines.append(json.dumps({
+                "custom_id": str(i),
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": body,
+            }, ensure_ascii=False))
+
+        # Write to temp file
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8")
+        try:
+            tmp.write("\n".join(lines))
+            tmp.close()
+
+            # Upload file
+            with open(tmp.name, "rb") as f:
+                uploaded = self._client.files.create(file=f, purpose="batch")
+            logger.info("Batch: uploaded file %s (%d requests)", uploaded.id, len(requests))
+
+            # Create batch
+            batch = self._client.batches.create(
+                input_file_id=uploaded.id,
+                endpoint="/v1/chat/completions",
+                completion_window="24h",
+            )
+            logger.info("Batch: created batch %s", batch.id)
+            return batch.id
+        finally:
+            os.unlink(tmp.name)
+
+    def batch_poll(self, batch_id: str) -> list[str] | None:
+        """Poll batch status. Returns list of generated texts when complete, None if still running."""
+        try:
+            batch = self._client.batches.retrieve(batch_id)
+        except Exception as e:
+            logger.error("Batch: failed to retrieve %s: %s", batch_id, e)
+            return ["[batch error]"]
+
+        status = batch.status
+        logger.info("Batch: %s status=%s", batch_id, status)
+
+        if status in ("validating", "in_progress", "finalizing"):
+            return None  # still running
+
+        if status == "completed":
+            # Download results
+            output = self._client.files.content(batch.output_file_id).text
+            results = [""] * (batch.request_counts.total or 0)
+            for line in output.strip().split("\n"):
+                if not line.strip():
+                    continue
+                try:
+                    import json
+                    item = json.loads(line)
+                    idx = int(item.get("custom_id", -1))
+                    if idx >= 0 and idx < len(results):
+                        resp = item.get("response", {})
+                        body = resp.get("body", {})
+                        choices = body.get("choices", [])
+                        if choices:
+                            text = choices[0].get("message", {}).get("content", "")
+                            results[idx] = _strip_think(text or "")
+                except Exception:
+                    continue
+            return results
+
+        # failed, expired, cancelled
+        error_info = ""
+        if hasattr(batch, 'errors') and batch.errors:
+            error_info = f", errors={batch.errors}"
+        logger.error("Batch: %s ended with status=%s%s", batch_id, status, error_info)
+        raise RuntimeError(f"Batch {batch_id} failed with status={status}{error_info}")

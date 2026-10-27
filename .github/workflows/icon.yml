@@ -1,0 +1,44 @@
+# Compile the Icon Composer source icon (macOS 26 Liquid Glass) into Assets.car.
+#
+# Manual trigger only — run it whenever the icon changes, fetch the artifact,
+# and commit Assets.car back to desktop/icons/. actool that understands .icon
+# packages only ships with the full Xcode 26, so this runs on the macos-26
+# runner (10x billed on private repos, ~1 min per run).
+#
+#   gh workflow run liquid-glass-icon.yml
+#   gh run watch "$(gh run list --workflow=liquid-glass-icon.yml -L1 --json databaseId -q '.[0].databaseId')"
+#   gh run download <run-id> -n assets-car -D /tmp/icon-out
+#   cp /tmp/icon-out/Assets.car desktop/icons/Assets.car
+#
+# package_macos.sh picks desktop/icons/Assets.car up automatically when it
+# exists; without it the app falls back to the classic icns on every OS.
+name: liquid-glass-icon
+
+on:
+  workflow_dispatch:
+
+jobs:
+  compile:
+    runs-on: macos-26 # macos-latest's Xcode cannot compile .icon packages
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile .icon into Assets.car
+        run: |
+          mkdir -p out
+          # --app-icon must equal the .icon filename stem; it is also the
+          # authoritative CFBundleIconName written into the partial plist.
+          xcrun actool desktop/icons/SinkDuce.icon --compile out \
+            --output-partial-info-plist out/assetcatalog_generated_info.plist \
+            --app-icon SinkDuce --include-all-app-icons \
+            --enable-on-demand-resources NO --development-region en \
+            --target-device mac --minimum-deployment-target 26.0 --platform macosx
+          echo "---- assetcatalog_generated_info.plist (authoritative CFBundleIconName) ----"
+          plutil -p out/assetcatalog_generated_info.plist
+          test -s out/Assets.car
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: assets-car
+          path: out/Assets.car
+          if-no-files-found: error

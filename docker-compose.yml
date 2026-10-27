@@ -1,0 +1,66 @@
+# SinkDuce — Docker deployment (pulls pre-built images from Docker Hub).
+#
+# One-line bootstrap (installs WSL2 + Docker Desktop if missing, then deploys):
+#   macOS:   curl -fsSL https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/install.sh | sh   (desktop app)
+#   Windows: irm https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/install.ps1 | iex
+#
+# Quick start (no source code needed):
+#   mkdir sinkduce && cd sinkduce
+#   curl -O https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/docker-compose.yml
+#   docker compose up -d
+#   open http://localhost:18900
+#   UI → Download local models (fetches the ONNX pack from the SinkDuce mirror)
+#
+# Pin a specific version instead of :latest:
+#   SINKDUCE_IMAGE_TAG=v1.4.1 docker compose up -d
+#
+# Update to the latest build:
+#   docker compose pull && docker compose up -d
+#
+# Source builds (requires a clone of the private repo):
+#   docker compose -f docker-compose.build.yml up -d --build
+#
+# Nested layout (optional):
+#   my-sinkduce/
+#     docker-compose.yml      ← this file
+#     data/
+#     SinkDuce-build/         ← git clone of this repo
+#   Then from SinkDuce-build:
+#     SINKDUCE_DATA=../data docker compose -f docker-compose.build.yml up -d --build
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.13.2
+    restart: unless-stopped
+    volumes:
+      - ${SINKDUCE_DATA:-./data}/qdrant:/qdrant/storage
+    entrypoint: ["/bin/sh", "-c", "find /qdrant/storage -name .DS_Store -delete 2>/dev/null; exec ./entrypoint.sh"]
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=${QDRANT_GRPC_PORT:-6334}
+      - QDRANT__STORAGE__OPTIMIZERS__DEFAULT_SEGMENT_NUMBER=1
+
+  app:
+    image: ${SINKDUCE_IMAGE:-jethrohou/sinkduce}:${SINKDUCE_IMAGE_TAG:-latest}
+    pull_policy: ${SINKDUCE_PULL_POLICY:-always}
+    ports:
+      # 本机入口：只发布到宿主机回环，因此「能连上它」= 就在这台机器上。
+      # 本机浏览器经它同源静默领取主人钥匙（无需手抄）。
+      - "127.0.0.1:${API_PORT:-18900}:18900"
+      # 对外（局域网）入口：其他设备经它访问，需配对钥匙。
+      - "${EXTERNAL_PORT:-18901}:${EXTERNAL_PORT:-18901}"
+    volumes:
+      - ${SINKDUCE_DATA:-./data}:/app/data
+    environment:
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - SINKDUCE_CONTAINER=1
+      - SINKDUCE_EXTERNAL_PORT=${EXTERNAL_PORT:-18901}
+      # 远程模式（瘦壳）：.env 里 SINKDUCE_REMOTE_MODE=1 时，容器只跑
+      # 前端壳 + MCP Hub，不连 Qdrant、不加载模型。UI 只显示当前模式，
+      # 修改要去 .env 改完重新 compose up -d。
+      - SINKDUCE_REMOTE_MODE=${SINKDUCE_REMOTE_MODE:-0}
+      - HF_HOME=/app/data/models
+      - MODELSCOPE_CACHE=/app/data/models
+    depends_on:
+      - qdrant
+    restart: unless-stopped

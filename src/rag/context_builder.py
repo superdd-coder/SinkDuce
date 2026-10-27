@@ -1,0 +1,262 @@
+"""ContextBuilder — cluster-formatted context string for LLM consumption.
+
+Pure function with zero external dependencies.  Groups RetrievedChunks by
+collection → source → chunk_index and inserts gap indicators where chunks
+are missing from a contiguous range.
+"""
+
+from __future__ import annotations
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def build_context(chunks: list, gap_indicators: bool = True) -> str:
+    """Build a cluster-formatted context string from *chunks*.
+
+    Chunks can be ``RetrievedChunk`` objects (with ``.text``, ``.score``,
+    ``.metadata``) or plain dicts.
+
+    Format::
+
+        ## Database: {collection_name}
+        ### Source: {source_filename}
+        Uploaded: {upload_date}
+        Document summary: {chunk.metadata["summary"]}
+
+        [Chunk #1 · score: 0.92 · char_offset: 1200 · page: 3 · id: {point_id}]
+        [Context: {chunk.metadata["context"]}]
+        {chunk.text}
+
+        [Note: {n} intermediate chunks (#X–#Y) from {source} were omitted ...]
+
+    ``char_offset`` (when present) is the character index into extractable
+    document text — use it as ``get_document_text(..., offset=char_offset)``
+    to open a window near this passage.
+
+    When *gap_indicators* is False, the ``[Note: ...]`` lines are skipped.
+    """
+    logger.debug("[Context] %d chunks, gap_indicators=%s", len(chunks), gap_indicators)
+
+    if not chunks:
+        logger.debug("[Context] empty input → empty output")
+        return ""
+
+    # ── Normalise to a uniform intermediate representation ──────────
+    entries = []
+    for c in chunks:
+        if hasattr(c, "text"):
+            text = c.text
+            meta = c.metadata if hasattr(c, "metadata") else {}
+            score = getattr(c, "score", 0.0)
+        elif isinstance(c, dict):
+            text = c.get("text", "")
+            meta = c.get("metadata", {})
+            score = c.get("score", 0.0)
+        else:
+            continue
+
+        collection = meta.get("collection", "unknown")
+        source = meta.get("source", meta.get("filename", "unknown"))
+        chunk_index = meta.get("chunk_index", 0)
+        point_id = meta.get("id", "")
+        context = meta.get("context", "")
+        summary = meta.get("summary", "")
+        uploaded_at = meta.get("uploaded_at", "")
+        chunk_type = meta.get("chunk_type", "")
+        char_offset = meta.get("char_offset")
+        page_number = meta.get("page_number")
+        # Optional file_id for follow-up get_document_text
+        file_id = meta.get("file_id") or ""
+        if not file_id:
+            src = str(source or "")
+            if src.startswith("__file__:"):
+                file_id = src[len("__file__:"):]
+            elif src.startswith("file:"):
+                file_id = src[len("file:"):]
+
+        # Human label for ### Source: — cluster still keys on stable source id.
+        # Prefer live resolve (SQLite current name) over frozen payload label.
+        from src.collections.file_index import (
+            is_generic_display_name,
+            is_opaque_source_key,
+            resolve_display_name,
+        )
+
+        payload_label = meta.get("source_label") or meta.get("display_name")
+        pl_raw = str(payload_label).strip() if payload_label else ""
+        pl = pl_raw if pl_raw and not is_opaque_source_key(pl_raw) else None
+        source_display = ""
+        if collection and source:
+            try:
+                source_display = resolve_display_name(
+                    str(collection),
+                    str(source),
+                    payload_label=pl,
+                )
+            except Exception:
+                source_display = ""
+        if is_generic_display_name(source_display):
+            source_display = ""
+        if not source_display and pl and not is_generic_display_name(pl):
+            source_display = pl
+        if not source_display:
+            src_s = str(source or "")
+            if src_s.startswith("__meeting__:"):
+                source_display = "Meeting"
+            elif src_s.startswith("__note__:"):
+                source_display = "Note"
+            elif src_s.startswith("__file__:") or src_s.startswith("file:"):
+                source_display = "Document"
+            else:
+                base = src_s.replace("\\", "/").rsplit("/", 1)[-1] or src_s
+                source_display = (
+                    base if not is_opaque_source_key(base) else "Document"
+                )
+
+        entry = {
+            "text": text,
+            "score": score,
+            "collection": str(collection),
+            "source": str(source),
+            "source_display": source_display,
+            "chunk_index": int(chunk_index) if chunk_index else 0,
+            "point_id": str(point_id),
+            "context": str(context) if context else "",
+            "summary": str(summary) if summary else "",
+            "uploaded_at": str(uploaded_at) if uploaded_at else "",
+            "chunk_type": str(chunk_type) if chunk_type else "",
+            "file_id": str(file_id) if file_id else "",
+        }
+        if char_offset is not None and char_offset != "":
+            try:
+                entry["char_offset"] = int(char_offset)
+            except (TypeError, ValueError):
+                pass
+        if page_number is not None and page_number != "":
+            try:
+                entry["page_number"] = int(page_number)
+            except (TypeError, ValueError):
+                entry["page_number"] = page_number
+        entries.append(entry)
+
+    if not entries:
+        return ""
+
+    # ── Cluster: collection → source → sorted-by-chunk_index ────────
+    from collections import defaultdict
+    clusters: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
+    for e in entries:
+        clusters[e["collection"]][e["source"]].append(e)
+
+    # Sort each source's chunks by chunk_index
+    for col_sources in clusters.values():
+        for src in col_sources:
+            col_sources[src].sort(key=lambda e: e["chunk_index"])
+
+    # ── Detect how many distinct collections are present ────────────
+    distinct_collections = sorted(clusters.keys())
+    col_labels: dict[str, str] = {}
+
+    def _col_label(cid: str) -> str:
+        if cid in col_labels:
+            return col_labels[cid]
+        try:
+            from src.collections.store import collection_display_name
+
+            label = collection_display_name(cid)
+        except Exception:
+            label = cid
+        col_labels[cid] = (label or cid).strip() or cid
+        return col_labels[cid]
+
+    # ── Render ──────────────────────────────────────────────────────
+    parts: list[str] = []
+
+    # Multi-collection hint
+    if len(distinct_collections) > 1:
+        col_list = ", ".join(_col_label(c) for c in distinct_collections)
+        parts.append(
+            f"[IMPORTANT: The following context comes from {len(distinct_collections)} "
+            f"DIFFERENT collections: {col_list}. These are separate knowledge bases "
+            f"that may contain overlapping or conflicting information. When answering, "
+            f"be mindful of collection boundaries — note which collection each key "
+            f"fact originates from, and do not assume consistency across collections.]"
+        )
+
+    for collection_id in distinct_collections:
+        parts.append(f"## Database: {_col_label(collection_id)}")
+        sources = clusters[collection_id]
+
+        for source_name in sorted(sources.keys()):
+            source_chunks = sources[source_name]
+            if not source_chunks:
+                continue
+
+            first = source_chunks[0]
+            # Prefer human-readable label (not raw __file__:{id})
+            source_heading = first.get("source_display") or source_name
+
+            parts.append(f"### Source: {source_heading}")
+
+            if first.get("uploaded_at"):
+                parts.append(f"Uploaded: {first['uploaded_at']}")
+
+            if first.get("summary"):
+                # Summary shown once per source
+                parts.append("[Machine-generated document summary; verify facts against the original passages or images.]")
+                parts.append(f"Document summary: {first['summary']}")
+                parts.append("")
+
+            # ── Emit chunks with gap indicators ─────────────────────
+            indices = [e["chunk_index"] for e in source_chunks]
+            prev_idx: int | None = None
+            last_emitted_idx: int | None = None
+            gap_count = 0
+            gap_start: int | None = None
+
+            for i, entry in enumerate(source_chunks):
+                cur_idx = entry["chunk_index"]
+
+                # Check for gap from previous emitted chunk
+                if gap_indicators and prev_idx is not None and cur_idx > prev_idx + 1:
+                    # There is a gap between prev_idx+1 and cur_idx-1
+                    n_gap = cur_idx - prev_idx - 1
+                    gap_hint = (
+                        f"[Note: {n_gap} intermediate chunk{'s' if n_gap > 1 else ''} "
+                        f"(#{prev_idx + 1}–#{cur_idx - 1}) from {source_heading} were omitted "
+                        f"— content not directly relevant to the query.]"
+                    )
+                    parts.append(gap_hint)
+                    parts.append("")  # blank line after gap note
+
+                prev_idx = cur_idx
+
+                # Emit the chunk (position fields help follow-up get_document_text)
+                chunk_header = (
+                    f"[Chunk #{cur_idx} · score: {entry['score']:.2f}"
+                )
+                if "char_offset" in entry:
+                    chunk_header += f" · char_offset: {entry['char_offset']}"
+                if "page_number" in entry:
+                    chunk_header += f" · page: {entry['page_number']}"
+                if entry.get("file_id"):
+                    chunk_header += f" · file_id: {entry['file_id']}"
+                if entry["point_id"]:
+                    chunk_header += f" · id: {entry['point_id']}"
+                chunk_header += "]"
+                parts.append(chunk_header)
+
+                if entry["context"]:
+                    parts.append("[Machine-generated relevance hint; source evidence follows.]")
+                    parts.append(f"[Context: {entry['context']}]")
+
+                from src.parsers.image_utils import sanitize_image_readings
+
+                parts.append(sanitize_image_readings(entry["text"]))
+                parts.append("")  # blank line between chunks
+
+    result = "\n".join(parts).rstrip()
+    logger.debug("[Context] done — %d chars output", len(result))
+    return result

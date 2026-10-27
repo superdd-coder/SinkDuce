@@ -1,0 +1,248 @@
+# Third-Party Notices
+
+SinkDuce itself is licensed under the **GNU Affero General Public License v3.0 or later**
+(see [`LICENSE`](./LICENSE)).
+
+This document acknowledges **open-source third-party components** that SinkDuce depends on
+or redistributes (source tree, frontend production bundle, Python environment, and/or the
+official Docker image). It is provided for attribution and license-compliance purposes.
+
+> **Scope**
+>
+> - Lists **direct** runtime / production dependencies declared in `pyproject.toml` and
+>   `frontend/package.json`, plus selected system packages and services used by the
+>   official Docker Compose stack.
+> - Transitive dependencies are resolved by the package managers (`uv`/`pip`, `pnpm`) and
+>   retain their own license files in the installed packages. A full machine-readable dump
+>   can be regenerated with:
+>
+>   ```bash
+>   # Python (installed env)
+>   # use pip-licenses or similar against the venv if needed
+>
+>   # Frontend production deps
+>   cd frontend && pnpm licenses list --prod
+>   ```
+>
+> - **Remote commercial APIs** (e.g. OpenAI, Cohere, DashScope, MinerU cloud) are optional
+>   network services. Only their **client libraries** (if any) are open-source dependencies;
+>   use of the APIs is governed by each provider’s terms of service, not by this notice.
+
+---
+
+## Summary
+
+| Category | Open source? | Typical licenses |
+|----------|--------------|------------------|
+| Python runtime deps | Yes | MIT, BSD-2/3, Apache-2.0, 0BSD, MIT-CMU |
+| Python optional (`diarization`) | Yes | MIT, Apache-2.0 / BSD multi, ISC, BSD-3 |
+| Frontend production deps | Yes | MIT, Apache-2.0, ISC, OFL-1.1, … |
+| Docker system packages | Yes | LGPL/GPL (FFmpeg builds), LGPL (libgl1) |
+| Qdrant (Compose service) | Yes | Apache-2.0 |
+
+No proprietary / closed-source **library** is declared as a direct dependency of this project.
+
+---
+
+## 1. Python — direct dependencies (`pyproject.toml`)
+
+| Package | License (as published) | Project |
+|---------|------------------------|---------|
+| fastapi | MIT | https://github.com/fastapi/fastapi |
+| uvicorn | BSD-3-Clause | https://github.com/encode/uvicorn |
+| pydantic | MIT | https://github.com/pydantic/pydantic |
+| pydantic-settings | MIT | https://github.com/pydantic/pydantic-settings |
+| PyYAML | MIT | https://github.com/yaml/pyyaml |
+| qdrant-client | Apache-2.0 | https://github.com/qdrant/qdrant-client |
+| openai | Apache-2.0 | https://github.com/openai/openai-python |
+| cohere | MIT | https://github.com/cohere-ai/cohere-python |
+| mcp | MIT | https://modelcontextprotocol.io |
+| pdfplumber | MIT | https://github.com/jsvine/pdfplumber |
+| mammoth | BSD-2-Clause | https://github.com/mwilliamson/python-mammoth |
+| python-docx | MIT | https://github.com/python-openxml/python-docx |
+| openpyxl | MIT | https://openpyxl.readthedocs.io |
+| python-pptx | MIT | https://github.com/scanny/python-pptx |
+| Markdown | BSD-3-Clause | https://Python-Markdown.github.io/ |
+| chardet | 0BSD | https://github.com/chardet/chardet |
+| beautifulsoup4 | MIT | https://www.crummy.com/software/BeautifulSoup/ |
+| markdownify | MIT | https://github.com/matthewwithanm/python-markdownify |
+| tiktoken | MIT | https://github.com/openai/tiktoken |
+| httpx | BSD-3-Clause | https://github.com/encode/httpx |
+| rapidocr | Apache-2.0 | https://github.com/RapidAI/RapidOCR |
+| onnxruntime | MIT | https://github.com/microsoft/onnxruntime |
+| Pillow | MIT-CMU (HPND-derived) | https://github.com/python-pillow/Pillow |
+| regex | Apache-2.0 AND CNRI-Python | https://github.com/mrabarnett/mrab-regex |
+| dashscope | Apache-2.0 | https://github.com/aliyun/alibabacloud-dashscope-sdk / Aliyun DashScope |
+| resvg-py | MIT | https://github.com/baseplate-admin/resvg-py |
+
+### Optional: `asr-export` / `diarization` extra (host export only; not Docker runtime)
+
+| Package | License (as published) | Project |
+|---------|------------------------|---------|
+| funasr | MIT | https://github.com/modelscope/FunASR |
+| torch | BSD-3-Clause (with additional third-party notices) | https://github.com/pytorch/pytorch |
+| torchaudio | BSD | https://github.com/pytorch/audio |
+| librosa | ISC | https://github.com/librosa/librosa |
+| soundfile | BSD-3-Clause | https://github.com/bastibe/python-soundfile |
+
+### Dev / build (not required at runtime)
+
+| Package | License |
+|---------|---------|
+| pytest, pytest-asyncio, pytest-httpx | MIT |
+| ruff | MIT |
+| hatchling | MIT |
+
+---
+
+## 2. Frontend — direct production dependencies (`frontend/package.json`)
+
+| Package | License (as published) |
+|---------|------------------------|
+| react, react-dom | MIT |
+| react-router-dom | MIT |
+| zustand | MIT |
+| tailwindcss, @tailwindcss/vite, tailwind-merge, tw-animate-css | MIT |
+| @base-ui/react | MIT |
+| @dnd-kit/core, @dnd-kit/sortable, @dnd-kit/utilities | MIT |
+| @tiptap/* (core, react, starter-kit, extensions, pm) | MIT |
+| tiptap-markdown | MIT |
+| react-markdown, remark-gfm, remark-breaks, rehype-raw, rehype-stringify | MIT |
+| react-syntax-highlighter | MIT |
+| lucide-react | ISC |
+| class-variance-authority | Apache-2.0 |
+| clsx | MIT |
+| sonner | MIT |
+| qrcode.react | ISC |
+| unified, remark-parse, remark-rehype | MIT |
+| @types/react-syntax-highlighter | MIT |
+| shadcn | MIT |
+| @file-viewer/react, @file-viewer/preset-office, @file-viewer/renderer-text, @file-viewer/vite-plugin | Apache-2.0 |
+| **@fontsource-variable/geist** | **OFL-1.1** (SIL Open Font License) |
+| **@fontsource-variable/newsreader** | **OFL-1.1** (SIL Open Font License) |
+
+### Fonts (OFL-1.1) — attribution required when redistributing font software
+
+These fonts are bundled with the frontend and redistributed under the SIL Open Font License 1.1.
+The OFL requires that copyright notices and the license text accompany redistributed Font Software.
+
+| Font package | Copyright / project |
+|--------------|---------------------|
+| Geist (`@fontsource-variable/geist`) | Copyright 2024 The Geist Project Authors — https://github.com/vercel/geist-font |
+| Newsreader (`@fontsource-variable/newsreader`) | Copyright 2020 The Newsreader Project Authors — https://github.com/productiontype/Newsreader |
+| Noto Sans SC (`@fontsource-variable/noto-sans-sc`, transitive via `@file-viewer/renderer-pdf`) | Google Noto — via Fontsource |
+
+Full OFL text is included with each package under `frontend/node_modules/@fontsource-variable/*/LICENSE`.
+Geist and Newsreader copyright notices and full licenses also ship in
+`frontend/public/licenses/`, which Vite copies into web builds and desktop packages.
+The office viewer retains its bundled font notices in its vendor assets.
+
+### Notable transitive frontend licenses
+
+| Package | License | Note |
+|---------|---------|------|
+| pdfjs-dist (via file-viewer) | Apache-2.0 | PDF rendering |
+| lightningcss | MPL-2.0 | File-level copyleft; used as-is |
+| dompurify | MPL-2.0 OR Apache-2.0 | Dual-licensed |
+| jszip | MIT OR GPL-3.0-or-later | Dual-licensed; project may use under MIT |
+| caniuse-lite | CC-BY-4.0 | Browser compatibility data (primarily via tooling chain) |
+| khroma | MIT (upstream; package metadata omits license field) | https://github.com/fabiospampinato/khroma |
+
+---
+
+## 3. System packages (official Docker image)
+
+The application Docker image installs:
+
+| Package | Typical license | Purpose |
+|---------|-----------------|---------|
+| (none for OCR) | — | RapidOCR ONNX weights ship in the Python package |
+| ffmpeg | LGPL / GPL (build-dependent) | Audio/video processing for meeting features |
+| libgl1 | LGPL (Mesa / related) | Graphics support for native libs |
+| LibreOffice Writer | MPL-2.0, with separately licensed bundled components | Word/PDF report and meeting-summary export |
+| fonts-noto-cjk | OFL-1.1 | CJK text in exported documents |
+
+The macOS desktop package also redistributes a private, unmodified LibreOffice
+installation. Its original license and notice files are retained by
+`desktop/office_runtime.py`. LibreOffice licensing and source information is
+available at https://www.libreoffice.org/about-us/licenses/ and
+https://www.libreoffice.org/download/download-libreoffice/ (select the matching
+release's source downloads). These components retain their own licenses.
+Desktop Qdrant and FFmpeg sidecars likewise retain their upstream licenses;
+the FFmpeg license depends on the build selected by the packager.
+
+Base images:
+
+| Image | Notes |
+|-------|--------|
+| `python:3.11-slim` | PSF / Debian packages (various open-source licenses) |
+| `node:20-slim` | Build stage only |
+| `ghcr.io/astral-sh/uv` | Build tooling (Apache-2.0 / MIT — see Astral uv project) |
+
+---
+
+## 4. Infrastructure services (Docker Compose)
+
+| Component | License | Role |
+|-----------|---------|------|
+| [Qdrant](https://github.com/qdrant/qdrant) (`qdrant/qdrant`) | Apache-2.0 | Vector database |
+
+Qdrant runs as a **separate container**. It is not linked into the SinkDuce binary; it is an
+optional/required peer service for the default deployment.
+
+---
+
+## 5. Optional local ASR model weights (GitHub Release redistributed pack)
+
+SinkDuce may download or users may manually install a **pre-exported ONNX pack** from the
+GitHub Release tag `onnx-models-v*` (asset `sinkduce-onnx-models-v*.zip`). That archive is
+**not** trained by SinkDuce; it redistributes third-party weights for offline transcription.
+
+| Pack (under `data/models/onnx/`) | Upstream | License notes |
+|----------------------------------|----------|---------------|
+| FunAudioLLM--SenseVoiceSmall | [FunAudioLLM/SenseVoiceSmall](https://huggingface.co/FunAudioLLM/SenseVoiceSmall) | **Model-specific license** — [FunASR MODEL_LICENSE](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE) |
+| funasr--fsmn-vad | [funasr/fsmn-vad](https://huggingface.co/funasr/fsmn-vad) | Apache-2.0 (model card) |
+| funasr--ct-punc | [manyeyes ONNX conversion](https://huggingface.co/manyeyes/punc_ct-transformer_zh-cn-common-vocab272727-onnx) of [Alibaba DAMO CT-Transformer](https://modelscope.cn/models/damo/punc_ct-transformer_zh-cn-common-vocab272727-pytorch) | Apache-2.0 ([conversion project](https://github.com/manyeyes/AliCTTransformerPunc) and upstream model) |
+| funasr--campplus | [FunASR / ModelScope CAM++](https://modelscope.cn/models/damo/speech_campplus_sv_zh-cn_16k-common) | Apache-2.0 (model card). Also shipped in-tree at `src/meeting/transcription/onnx/campplus_models/`. |
+| funasr--paraformer-zh-streaming | [Alibaba DAMO Paraformer online](https://modelscope.cn/models/iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online) | Apache-2.0 (model card) |
+
+- **Packaging / layout for SinkDuce**: this project. A compliant archive includes `ATTRIBUTION.md` and full Apache-2.0 and FunASR model license texts under `LICENSES/`.
+- SenseVoice / VAD / punctuation / streaming Paraformer live under the `data/` volume (or `HF_HOME`); they are **not** in the default Docker image layers. CAM++ is also in that zip, and is additionally shipped in-tree (like RapidOCR) so speaker matching works without the ASR download.
+- Redistributors of the zip must retain model names, `ATTRIBUTION.md`, `LICENSES/`, and upstream READMEs where present, and honor each model’s license (especially SenseVoice's model-specific license).
+
+---
+
+## 6. License compatibility notes (informational)
+
+1. **SinkDuce is AGPL-3.0-or-later.** Combining AGPL-covered application code with
+   permissive dependencies (MIT/BSD/Apache-2.0/ISC/0BSD) is a common and generally accepted
+   practice. Redistributors must still honor **each** dependency’s notice and attribution
+   requirements in addition to AGPL obligations.
+2. **Apache-2.0** components: retain copyright, patent, trademark, and attribution notices;
+   include any upstream `NOTICE` file content if present when redistributing.
+3. **OFL-1.1 fonts**: may be embedded and redistributed with the app; do not sell the fonts
+   by themselves; keep OFL notices with the font files.
+4. **MPL-2.0** (e.g. lightningcss): file-level copyleft applies to modified MPL-covered files
+   if those modified files are distributed.
+5. **FFmpeg**: ensure the binary shipped in your deployment matches the license of the build
+   you redistribute (Debian packages document this under `/usr/share/doc/ffmpeg/`).
+
+This file is **not legal advice**. For production redistribution or dual-licensing questions,
+consult qualified counsel.
+
+---
+
+## 7. Regenerating this inventory
+
+When adding or upgrading dependencies:
+
+1. Confirm the package is open source and note its SPDX license.
+2. Update the tables in **§1** / **§2** for new **direct** dependencies.
+3. If a dependency uses **OFL**, **Apache-2.0 with NOTICE**, **MPL**, **LGPL**, or **GPL**,
+   call it out explicitly (as fonts and FFmpeg are above).
+4. When bumping the ONNX model release (`onnx-models-v*`), refresh **§5** and the
+   attribution block generated by `scripts/package_onnx_release.sh`.
+5. Re-run `cd frontend && pnpm licenses list --prod` and skim for unexpected
+   proprietary / non-OSI licenses.
+
+Last reviewed: **2026-10-27** (direct dependencies, export runtime and font notices); **2026-09-29** (ONNX model provenance and license texts).

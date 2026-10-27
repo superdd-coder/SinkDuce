@@ -1,0 +1,16 @@
+{
+  "identifier": "default",
+  "description": "Main window loads the backend's http://127.0.0.1 UI (a remote origin to Tauri) and talks to the local sidecar; remote context must cover the ports the shell may pick.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "allow-updater-begin",
+    "allow-updater-status",
+    "allow-updater-restart",
+    "allow-set-ui-locale",
+    "allow-restart-app"
+  ],
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  }
+}

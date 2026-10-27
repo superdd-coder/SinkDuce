@@ -1,0 +1,53 @@
+# GitHub Release is created AFTER Docker Hub publish succeeds.
+# See docker-publish.yml job "release" (needs: docker).
+#
+# This workflow is intentionally disabled so a tag push no longer opens a
+# Release while multi-arch image build is still running (in-app update
+# checker would prompt users before `docker compose pull` can succeed).
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish as GitHub Release (e.g. v1.1.1). Only use if Docker image is already on Hub."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: GitHub Release (manual)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Verify tag matches pyproject.toml
+        run: |
+          TAG="${{ inputs.tag }}"
+          TAG_VER="${TAG#v}"
+          TOML_VER=$(grep -E '^version\s*=' pyproject.toml | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
+          if [ "$TAG_VER" != "$TOML_VER" ]; then
+            echo "❌ Tag version '$TAG' does not match pyproject.toml version '$TOML_VER'"
+            exit 1
+          fi
+          echo "✅ Tag $TAG matches pyproject.toml $TOML_VER"
+          PKG_VER=$(python3 -c "import json; print(json.load(open('frontend/package.json'))['version'])")
+          if [ "$TAG_VER" != "$PKG_VER" ]; then
+            echo "❌ Tag version '$TAG' does not match frontend/package.json version '$PKG_VER'"
+            exit 1
+          fi
+          echo "✅ Tag $TAG matches frontend/package.json $PKG_VER"
+
+      - name: Create or update Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: ${{ inputs.tag }}
+          generate_release_notes: true
+          make_latest: true

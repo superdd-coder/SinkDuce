@@ -1,0 +1,398 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { ChevronDown, Play, Plus, Search, UserMinus, Users } from "lucide-react"
+import { cn } from "@/lib/utils"
+import { SoftMenu } from "@/components/ui/menu"
+import { toast } from "sonner"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
+import { PeopleManager } from "@/components/llm-provider/people-manager"
+import {
+  assignMeetingSpeaker,
+  getSpeakerPreview,
+  listPeople,
+  speakerPreviewAudioUrl,
+  type Meeting,
+  type SpeakerMatch,
+  type SpeakerPerson,
+} from "@/api/client"
+
+function personHue(id: string): string {
+  let h = 0
+  for (let i = 0; i < id.length; i++) h = (h * 33 + id.charCodeAt(i)) >>> 0
+  return `hsl(${h % 360} 38% 42%)`
+}
+
+function initialOf(label: string): string {
+  const t = label.trim()
+  return t ? t[0]!.toUpperCase() : "?"
+}
+
+export function PeoplePicker({
+  meetingId,
+  speakerId,
+  displayName,
+  match,
+  onAssigned,
+}: {
+  meetingId: string
+  speakerId: string
+  displayName?: string
+  match?: SpeakerMatch
+  onAssigned: (meeting: Meeting) => void
+}) {
+  const t = useT()
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState("")
+  const [people, setPeople] = useState<SpeakerPerson[]>([])
+  const [busy, setBusy] = useState(false)
+  const [disambiguator, setDisambiguator] = useState("")
+  const [playing, setPlaying] = useState<string | null>(null)
+  const [managerOpen, setManagerOpen] = useState(false)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const lastClip = useRef<Record<string, { meeting_id: string; start: number }>>({})
+  const anchorRef = useRef<HTMLButtonElement>(null)
+  const noteRef = useRef<HTMLInputElement>(null)
+
+  const label = displayName?.trim() || t("meeting.speakerN", { id: speakerId })
+  const assigned = Boolean(displayName?.trim())
+
+  const load = useCallback(async () => {
+    try {
+      setPeople(await listPeople())
+    } catch {
+      setPeople([])
+    }
+  }, [])
+
+  useEffect(() => {
+    if (open) void load()
+  }, [open, load])
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (anchorRef.current?.contains(t)) return
+      const menu = document.querySelector("[data-people-picker-menu]")
+      if (menu?.contains(t)) return
+      if ((e.target as HTMLElement | null)?.closest?.("[data-slot='dialog-content']")) return
+      setOpen(false)
+    }
+    const id = window.setTimeout(() => {
+      document.addEventListener("mousedown", onDown)
+    }, 0)
+    return () => {
+      window.clearTimeout(id)
+      document.removeEventListener("mousedown", onDown)
+    }
+  }, [open])
+
+  const stopPreview = useCallback(() => {
+    const el = audioRef.current
+    if (el) {
+      el.pause()
+      el.removeAttribute("src")
+      el.load()
+    }
+    audioRef.current = null
+    setPlaying(null)
+  }, [])
+
+  useEffect(() => () => {
+    audioRef.current?.pause()
+  }, [])
+
+  useEffect(() => {
+    if (open) return
+    stopPreview()
+    setDisambiguator("")
+  }, [open, stopPreview])
+
+  const byId = useMemo(() => new Map(people.map((p) => [p.id, p])), [people])
+  const q = query.trim().toLowerCase()
+
+  const topIds = (match?.top ?? []).map((t) => t.person_id)
+  const topRows = (match?.top ?? [])
+    .map((t) => {
+      const person = byId.get(t.person_id)
+      if (!person) return null
+      if (q && !`${person.display_name} ${person.disambiguator}`.toLowerCase().includes(q)) {
+        return null
+      }
+      return { person, score: t.score }
+    })
+    .filter((row): row is { person: SpeakerPerson; score: number } => row !== null)
+
+  const rest = people
+    .filter((p) => !topIds.includes(p.id))
+    .filter((p) => !q || `${p.display_name} ${p.disambiguator}`.toLowerCase().includes(q))
+    .slice()
+    .sort((a, b) => a.display_name.localeCompare(b.display_name, undefined, { sensitivity: "base" }))
+
+  const nameTaken = people.some(
+    (p) => p.display_name.trim().toLowerCase() === query.trim().toLowerCase(),
+  )
+
+  const assign = async (
+    body:
+      | { person_id: string | null }
+      | { new_person: { display_name: string; disambiguator?: string } }
+      | { display_name: string },
+  ) => {
+    setBusy(true)
+    try {
+      const meeting = await assignMeetingSpeaker(meetingId, speakerId, body)
+      onAssigned(meeting)
+      setOpen(false)
+      setQuery("")
+      setDisambiguator("")
+    } catch (err) {
+      toast.error(formatApiError(err, t) || t("meeting.failedAssignPerson"))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleApplyAuto = async (ev: React.MouseEvent) => {
+    ev.preventDefault()
+    ev.stopPropagation()
+    const personId = match?.top?.[0]?.person_id
+    if (!personId) {
+      toast.error(t("meeting.noPersonApply"))
+      return
+    }
+    await assign({ person_id: personId })
+  }
+
+  const handleTag = async () => {
+    const name = query.trim()
+    if (!name) return
+    await assign({ display_name: name })
+  }
+
+  const handleAdd = async () => {
+    const name = query.trim()
+    if (!name) {
+      setQuery("")
+      return
+    }
+    const note = disambiguator.trim()
+    if (nameTaken && !note) {
+      toast.error(t("meeting.addNoteApart"))
+      noteRef.current?.focus()
+      return
+    }
+    await assign({
+      new_person: { display_name: name, disambiguator: note || undefined },
+    })
+  }
+
+  const handlePlay = async (personId: string, ev: React.MouseEvent) => {
+    ev.preventDefault()
+    ev.stopPropagation()
+    document.querySelectorAll<HTMLAudioElement>("audio[data-meeting-audio]").forEach((el) => {
+      if (!el.paused) el.pause()
+    })
+    audioRef.current?.pause()
+    try {
+      const prev = lastClip.current[personId]
+      const clip = await getSpeakerPreview(personId, {
+        exclude_meeting: prev?.meeting_id,
+        exclude_start: prev?.start,
+      })
+      lastClip.current[personId] = { meeting_id: clip.meeting_id, start: clip.start }
+      const el = new Audio(speakerPreviewAudioUrl(personId, clip))
+      audioRef.current = el
+      setPlaying(personId)
+      el.addEventListener("ended", () => setPlaying((cur) => (cur === personId ? null : cur)))
+      el.addEventListener("error", () => {
+        setPlaying(null)
+        toast.error(t("meeting.noPlayableClip"))
+      })
+      await el.play()
+    } catch {
+      setPlaying(null)
+      toast.error(t("meeting.noPlayableClip"))
+    }
+  }
+
+  const row = (person: SpeakerPerson, score?: number) => (
+    <div key={person.id} className="pm-people-picker-row">
+      <button
+        type="button"
+        role="menuitem"
+        disabled={busy}
+        className="pm-people-picker-row-main"
+        onClick={() => void assign({ person_id: person.id })}
+      >
+        <span
+          className="pm-people-avatar"
+          style={{ background: personHue(person.id) }}
+          aria-hidden
+        >
+          {initialOf(person.label || person.display_name)}
+        </span>
+        <span className="min-w-0 flex-1 text-left">
+          <span className="pm-people-picker-name">{person.display_name || person.label}</span>
+          {person.disambiguator.trim() ? (
+            <span className="pm-people-picker-sub">{person.disambiguator.trim()}</span>
+          ) : null}
+        </span>
+        {score != null && (
+          <span className="pm-people-picker-score">{Math.round(score * 100)}</span>
+        )}
+      </button>
+      <button
+        type="button"
+        className={cn("pm-people-picker-play", playing === person.id && "is-on")}
+        aria-label={t("meeting.playSample", { name: person.label })}
+        onClick={(e) => void handlePlay(person.id, e)}
+      >
+        <Play className="size-3" />
+      </button>
+    </div>
+  )
+
+  return (
+    <div className="relative min-w-0 flex-1">
+      <div className="pm-people-picker-trigger-row">
+        <button
+          ref={anchorRef}
+          type="button"
+          className="pm-people-picker-trigger"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          aria-haspopup="listbox"
+        >
+          <span className="pm-people-picker-trigger-name">{label}</span>
+          <ChevronDown className="pm-people-picker-chev" />
+        </button>
+        {match?.auto && !match.enrolled && (
+          <button
+            type="button"
+            className="pm-people-auto-pill"
+            disabled={busy}
+            aria-label={t("meeting.applyAutoMatch")}
+            onClick={(e) => void handleApplyAuto(e)}
+          >
+            <span className="pm-people-auto-pill-idle">{t("meeting.auto")}</span>
+            <span className="pm-people-auto-pill-apply">{t("common.apply")}</span>
+          </button>
+        )}
+      </div>
+      <SoftMenu
+        open={open}
+        portal
+        anchorRef={anchorRef}
+        align="start"
+        data-people-picker-menu=""
+        className="pm-people-picker-menu"
+      >
+        <div className="pm-people-picker-compose">
+          <div className="pm-people-picker-search">
+            <Search className="size-3.5 shrink-0 opacity-40" />
+            <input
+              placeholder={t("meeting.searchOrAddName")}
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value)
+                if (!e.target.value.trim()) setDisambiguator("")
+              }}
+              onKeyDown={(e) => {
+                e.stopPropagation()
+                if (e.key === "Escape") setOpen(false)
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  void handleTag()
+                }
+              }}
+              autoFocus
+            />
+          </div>
+          {query.trim() ? (
+            <input
+              ref={noteRef}
+              className="pm-people-picker-note"
+              placeholder={
+                nameTaken
+                  ? t("meeting.noteApartPh")
+                  : t("meeting.notePh")
+              }
+              value={disambiguator}
+              onChange={(e) => setDisambiguator(e.target.value)}
+              onKeyDown={(e) => {
+                e.stopPropagation()
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  void handleTag()
+                }
+                if (e.key === "Escape") setOpen(false)
+              }}
+            />
+          ) : null}
+        </div>
+        <div className="pm-people-picker-list">
+          {topRows.length > 0 && (
+            <div className="pm-people-picker-sec">{t("meeting.mostSimilar")}</div>
+          )}
+          {topRows.map(({ person, score }) => row(person, score))}
+          {rest.length > 0 && (
+            <div className="pm-people-picker-sec">{t("common.directory")}</div>
+          )}
+          {rest.map((person) => row(person))}
+        </div>
+        {query.trim() ? (
+          <>
+            <button
+              type="button"
+              className="pm-people-picker-add"
+              disabled={busy}
+              onClick={() => void handleTag()}
+            >
+              {t("meeting.tagQuoted", { name: query.trim() })}
+            </button>
+            <button
+              type="button"
+              className="pm-people-picker-add"
+              disabled={busy}
+              onClick={() => void handleAdd()}
+            >
+              <Plus className="size-3.5 shrink-0" />
+              {t("meeting.addQuoted", { name: query.trim() })}
+            </button>
+          </>
+        ) : null}
+        {assigned && (
+          <button
+            type="button"
+            className="pm-people-picker-clear"
+            disabled={busy}
+            onClick={() => void assign({ person_id: null })}
+          >
+            <UserMinus className="size-3.5" />
+            {t("meeting.clearSelection")}
+          </button>
+        )}
+        <button
+          type="button"
+          className="pm-people-picker-manage"
+          onClick={() => {
+            setOpen(false)
+            setManagerOpen(true)
+          }}
+        >
+          <Users className="size-3.5" />
+          {t("meeting.managePeople")}
+        </button>
+      </SoftMenu>
+      <PeopleManager
+        open={managerOpen}
+        onOpenChange={(next) => {
+          setManagerOpen(next)
+          if (!next) void load()
+        }}
+        nested
+      />
+    </div>
+  )
+}

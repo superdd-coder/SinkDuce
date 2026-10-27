@@ -1,0 +1,432 @@
+"""DirectQueryModule — atomic retrieval across one or more collections.
+
+Routes each collection by its `chunk_mode` config (normal / parent_child),
+merges results by score, optionally reranks.  Does NOT perform text dedup.
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+from concurrent.futures import as_completed
+from dataclasses import dataclass, field
+
+from src.rag.retriever import RetrievedChunk
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DirectQueryResult:
+    """Result from DirectQueryModule.retrieve()."""
+    chunks: list[RetrievedChunk] = field(default_factory=list)
+    child_groups: dict[str, list[dict]] = field(default_factory=dict)
+    answer: str | None = None       # set when generate_answer=True
+    context: str = ""                # build_context(chunks), always set
+    candidate_chunks: list[RetrievedChunk] = field(default_factory=list)  # before rerank/cap
+    errors: list[dict] = field(default_factory=list)
+    trace: list[dict] = field(default_factory=list)
+
+
+
+
+class DirectQueryModule:
+    """Atomic retrieval entry point used by VariantFetcher and direct query."""
+
+    def __init__(self, retriever, db, reranker=None, llm=None):
+        self.retriever = retriever
+        self.db = db
+        self.reranker = reranker
+        self.llm = llm
+
+    # ── public entry point ──────────────────────────────────────────────
+
+    def retrieve(
+        self,
+        query: str,
+        collections: list[str],
+        top_k: int = 10,
+        search_mode: str = "dense",
+        rerank_enabled: bool = False,
+        rerank_top_k: int | None = None,
+        generate_answer: bool = False,
+        on_step=None,
+        min_score: float = 0.0,
+        sparse_llm_tokenize: bool = False,
+        embedding_overrides: dict | None = None,
+        llm_for_sparse=None,
+    ) -> DirectQueryResult:
+        """Retrieve chunks across *collections*, routing each by chunk_mode.
+
+        Parameters
+        ----------
+        rerank_enabled:
+            If True and a reranker is available, rerank results. Default False.
+            Callers should set this explicitly — it is NOT auto-enabled.
+        rerank_top_k:
+            Post-rerank truncation. When None and rerank is enabled, falls back
+            to the reranker's own default top_k.
+
+        on_step:
+            Optional callback(event: dict). Events: ``retrieve_start``,
+            ``retrieve_done``, ``synthesize_start``, ``synthesize_done``.
+
+        Returns a DirectQueryResult whose ``chunks`` are sorted by score
+        descending and truncated to *top_k* (or *rerank_top_k* after rerank).
+        """
+
+        def _emit(step: str, content: str = "", **meta):
+            if on_step:
+                try:
+                    on_step({"step": step, "content": content, **meta})
+                except Exception:
+                    pass
+
+        logger.debug("[Direct] retrieve q=%r cols=%s top_k=%d mode=%s rerank=%s rerank_top_k=%s min_score=%.2f",
+                    query[:120], collections, top_k, search_mode, rerank_enabled, rerank_top_k, min_score)
+
+        all_chunks: list[RetrievedChunk] = []
+        all_child_groups: dict[str, list[dict]] = {}
+        errors: list[dict] = []
+        trace: list[dict] = []
+
+        # RBAC 纵深防御（2026-09-17）：这里的 `collections` 由调用方决定
+        # （catalog 路由 / 工具参数 / 会话绑定 / 兜底"全部"）。上层本该已过可见性，
+        # 但**这是真正读向量的那一层**——一旦上层漏了（例如身份在线程池里丢成
+        # owner、或新调用方直接传了全量列表），泄露就在这里发生。所以在最底层
+        # 再收一次口：不可见的库**根本不进入检索**，与"不存在"同形。
+        # fail-closed：判定失败**不回落全量**，宁可这次检索空手而归。
+        try:
+            from src.identity import get_actor
+            from src.identity import visibility as _vis
+
+            visible = _vis.visible_collection_ids(get_actor())
+            if visible is not None:
+                before = len(collections)
+                collections = [c for c in collections if c in visible]
+                if len(collections) != before:
+                    logger.info(
+                        "[Direct] visibility filter: %d → %d collections",
+                        before, len(collections),
+                    )
+        except Exception:
+            logger.exception("[Direct] visibility gate failed — refusing to retrieve")
+            return DirectQueryResult()
+
+        if not collections:
+            # 全部被过滤掉 = 用户对这个库没读权限。返回空结果（不是报错），
+            # 与"这些库不存在"同形；上层会照常合成"没找到"的回答。
+            return DirectQueryResult()
+
+        # emit: step="retrieve_start", query, collections, top_k, search_mode
+        _emit("retrieve_start", f"Searching {len(collections)} collection(s)",
+              query=query[:200], collections=collections, top_k=top_k, search_mode=search_mode)
+
+        if embedding_overrides is None:
+            from src.rag.collection_utils import get_embedding_overrides
+            overrides = get_embedding_overrides(collections)
+        else:
+            overrides = embedding_overrides
+        _lock = threading.Lock()
+
+        def _record_trace(event):
+            with _lock:
+                trace.append(event)
+
+        def _retrieve_one(col: str):
+            """Retrieve from a single collection, returning (chunks, child_groups_dict)."""
+            try:
+                col_config = self.db.get_collection_config(col)
+            except Exception:
+                logger.warning("[Direct] cannot read config for col=%r, defaulting to normal", col)
+                col_config = {"chunk_mode": "normal"}
+
+            chunk_mode = col_config.get("chunk_mode", "normal")
+            emb_override = overrides.get(col)
+            logger.debug("[Direct] col=%s | mode=%s top_k=%d", col, chunk_mode, top_k)
+
+            try:
+                if chunk_mode == "parent_child":
+                    parent_chunks, child_groups = self._retrieve_parent_child(
+                        query, col, top_k,
+                        embedding=emb_override,
+                        min_score=min_score,
+                        search_mode=search_mode,
+                        sparse_llm_tokenize=sparse_llm_tokenize,
+                        llm_for_sparse=llm_for_sparse,
+                        on_trace=_record_trace,
+                    )
+                    for c in parent_chunks:
+                        c.metadata["collection"] = col
+                    return parent_chunks, child_groups
+                else:
+                    chunks = self._retrieve_normal(
+                        query, col, top_k,
+                        embedding_override=emb_override,
+                        search_mode=search_mode,
+                        min_score=min_score,
+                        sparse_llm_tokenize=sparse_llm_tokenize,
+                        llm_for_sparse=llm_for_sparse,
+                        on_trace=_record_trace,
+                    )
+                    for c in chunks:
+                        c.metadata["collection"] = col
+                    return chunks, {}
+            except Exception as exc:
+                logger.exception("[Direct] retrieval failed for col=%r, skipping", col)
+                with _lock:
+                    errors.append({"stage": "retrieve", "collection": col,
+                                   "error": type(exc).__name__})
+                return [], {}
+
+        if len(collections) <= 1:
+            # Single collection — no threading overhead
+            for col in collections:
+                chunks, child_groups = _retrieve_one(col)
+                all_chunks.extend(chunks)
+                for pid, children in child_groups.items():
+                    all_child_groups.setdefault(pid, []).extend(children)
+        else:
+            # ContextThreadPoolExecutor（不是裸池）：worker 里要读 get_actor()
+            # 做可见性判定，裸池会让身份退回 owner → 过滤关掉。见 src/async_ctx.py。
+            from src.async_ctx import ContextThreadPoolExecutor
+
+            with ContextThreadPoolExecutor(max_workers=len(collections)) as executor:
+                futures = {executor.submit(_retrieve_one, col): col for col in collections}
+                for f in as_completed(futures):
+                    chunks, child_groups = f.result()
+                    with _lock:
+                        all_chunks.extend(chunks)
+                        for pid, children in child_groups.items():
+                            all_child_groups.setdefault(pid, []).extend(children)
+
+        # Merge: sort by score descending, NO text dedup
+        all_chunks.sort(key=lambda c: c.score, reverse=True)
+        candidate_chunks = [RetrievedChunk(c.text, c.score, dict(c.metadata)) for c in all_chunks]
+
+        # ── Optional rerank ────────────────────────────────────────────
+        do_rerank = rerank_enabled and self.reranker and all_chunks
+        if do_rerank:
+            n_before = len(all_chunks)
+            try:
+                k = rerank_top_k if rerank_top_k else None
+                all_chunks = self.reranker.rerank(query, all_chunks, top_k=k)
+                logger.debug("[Direct] rerank: %d → %d chunks", n_before, len(all_chunks))
+            except Exception as e:
+                logger.warning(
+                    "[Direct] rerank failed (%s), using un-reranked results", e,
+                )
+                errors.append({"stage": "rerank", "error": type(e).__name__})
+                do_rerank = False
+
+        # ── Truncate ───────────────────────────────────────────────────
+        # Keep the post-rerank cap even when rerank fails. Otherwise each
+        # variant dumps retrieve top_k into the grader (40k+ prompts).
+        if rerank_enabled and rerank_top_k:
+            limit = rerank_top_k
+        else:
+            limit = top_k
+        all_chunks = all_chunks[:limit]
+
+        # ── Score threshold (only after rerank, which normalizes scores to 0-1) ──
+        # Raw RRF scores from hybrid are on a different scale — skip threshold there.
+        if min_score > 0 and do_rerank:
+            all_chunks = [c for c in all_chunks if c.score >= min_score]
+            logger.debug("[Direct] min_score=%.2f → %d chunks after threshold", min_score, len(all_chunks))
+
+        # Filter child_groups to only include parents kept after truncation
+        kept_ids = {c.metadata.get("id", "") for c in all_chunks}
+        filtered_groups = {
+            pid: children for pid, children in all_child_groups.items()
+            if pid in kept_ids
+        }
+
+        total_children = sum(len(v) for v in filtered_groups.values())
+        if total_children:
+            logger.debug("[Direct] done: %d parents, %d children, %d collections",
+                        len(all_chunks), total_children, len(collections))
+        else:
+            logger.debug("[Direct] done: %d chunks, %d collections",
+                        len(all_chunks), len(collections))
+
+        # emit: step="retrieve_done", chunks, collections
+        _emit("retrieve_done", f"{len(all_chunks)} chunks", chunks=len(all_chunks), collections=len(collections))
+
+        # ── Build context (always) ─────────────────────────────────────
+        from src.rag.context_builder import build_context as _bc
+        context = _bc(all_chunks) if all_chunks else ""
+
+        # ── Generate answer (optional) ─────────────────────────────────
+        answer: str | None = None
+        if generate_answer and self.llm and all_chunks:
+            # emit: step="synthesize_start", query
+            _emit("synthesize_start", "Generating answer", query=query[:200])
+            from src.prompts import DIRECT_ANSWER_USER
+            from src.rag.image_evidence import evidence_for_model
+            prompt = DIRECT_ANSWER_USER.format(
+                query=query,
+                context=context[:12000],
+            )
+            try:
+                prompt = evidence_for_model(prompt, all_chunks, self.llm)
+                answer = self.llm.generate(prompt, max_tokens=8192, thinking=True).strip()
+                logger.debug("[Direct] answer: %d chars", len(answer))
+                # emit: step="synthesize_done", answer_len
+                _emit("synthesize_done", f"{len(answer)} chars", answer_len=len(answer))
+            except Exception:
+                logger.exception("[Direct] answer generation failed")
+                _emit("synthesize_done", "failed", error=True)
+
+        return DirectQueryResult(
+            chunks=all_chunks, child_groups=filtered_groups,
+            answer=answer, context=context,
+            candidate_chunks=candidate_chunks, errors=errors, trace=trace,
+        )
+
+    # ── private helpers ─────────────────────────────────────────────────
+
+    def _retrieve_normal(
+        self,
+        query: str,
+        collection: str,
+        top_k: int,
+        *,
+        embedding_override=None,
+        search_mode: str = "dense",
+        min_score: float = 0.0,
+        sparse_llm_tokenize: bool = False,
+        llm_for_sparse=None,
+        on_trace=None,
+    ) -> list[RetrievedChunk]:
+        """Standard dense/hybrid retrieval for a single collection."""
+        llm = llm_for_sparse if sparse_llm_tokenize else None
+        return self.retriever.retrieve(
+            query,
+            collection=collection,
+            top_k=top_k,
+            embedding_override=embedding_override,
+            search_mode=search_mode,
+            min_score=min_score,
+            llm=llm,
+            on_trace=on_trace,
+        )
+
+    def _retrieve_parent_child(
+        self,
+        query: str,
+        collection: str,
+        top_k: int,
+        *,
+        embedding=None,
+        min_score: float = 0.0,
+        search_mode: str = "dense",
+        sparse_llm_tokenize: bool = False,
+        llm_for_sparse=None,
+        on_trace=None,
+    ) -> tuple[list[RetrievedChunk], dict[str, list[dict]]]:
+        """Parent-child retrieval for a single collection.
+
+        Searches child chunks, resolves parent_ids, and returns parent-level
+        RetrievedChunk objects (scored by best child score) plus child grouping.
+        """
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+        llm = llm_for_sparse if sparse_llm_tokenize else None
+
+        # Carry the archive/unassigned exclusion into parent-child retrieval
+        child_filter = Filter(
+            must=[
+                FieldCondition(key="chunk_type", match=MatchValue(value="child")),
+                self.retriever.exclusion_filter(),
+            ]
+        )
+        top_k = int(top_k) if top_k else 10
+        child_search_limit = max(top_k * 10, 50)
+
+        if search_mode == "hybrid":
+            child_chunks = self.retriever.retrieve(
+                query, collection=collection, top_k=child_search_limit,
+                embedding_override=embedding,
+                search_mode="hybrid", min_score=min_score,
+                filter_condition=child_filter, llm=llm,
+                on_trace=on_trace,
+            )
+            child_results = [
+                {"id": c.metadata.get("id", ""), "score": c.score,
+                 "payload": {**c.metadata, "text": c.text}}
+                for c in child_chunks
+            ]
+        else:
+            emb = embedding
+            if emb is None:
+                # Fall back to retriever's default embedding
+                query_vector = self.retriever.embedding.embed_query(query)
+            else:
+                query_vector = emb.embed_query(query)
+            child_results = self.db.search(
+                collection=collection,
+                query_vector=query_vector,
+                top_k=child_search_limit,
+                filter_condition=child_filter,
+            )
+            if on_trace:
+                on_trace({"kind": "retrieval", "collection": collection, "mode": "dense"})
+
+        if min_score > 0 and search_mode != "hybrid":
+            child_results = [r for r in child_results if r["score"] >= min_score]
+
+        if not child_results:
+            return [], {}
+
+        # Collect unique parent IDs
+        parent_ids = list({
+            r["payload"]["parent_id"]
+            for r in child_results
+            if r["payload"].get("parent_id")
+        })
+
+        if not parent_ids:
+            chunks = [RetrievedChunk(
+                text=r["payload"].get("text", ""),
+                score=r["score"],
+                metadata={k: v for k, v in r["payload"].items() if k != "text"},
+            ) for r in child_results]
+            return chunks, {}
+
+        # Retrieve parent chunks
+        parent_points = self.db.get_points_by_ids(collection, parent_ids)
+        parent_map = {p["id"]: p["payload"] for p in parent_points}
+
+        child_groups: dict[str, list[dict]] = {}
+        seen_parents: dict[str, RetrievedChunk] = {}
+
+        for r in child_results:
+            pid = r["payload"].get("parent_id")
+            if not pid:
+                continue
+
+            if pid not in child_groups:
+                child_groups[pid] = []
+            child_groups[pid].append({
+                "id": str(r["id"]),
+                "text": r["payload"].get("text", ""),
+                "score": r["score"],
+                "source": r["payload"].get("source", ""),
+                "source_label": r["payload"].get("source_label"),
+                "collection": collection,
+                "chunk_index": r["payload"].get("chunk_index", 0),
+                "chunk_type": "child",
+                "context": r["payload"].get("context"),
+                "parent_id": pid,
+            })
+
+            if pid not in seen_parents or r["score"] > seen_parents[pid].score:
+                parent_payload = parent_map.get(pid, r["payload"])
+                seen_parents[pid] = RetrievedChunk(
+                    text=parent_payload.get("text", ""),
+                    score=r["score"],
+                    metadata={k: v for k, v in parent_payload.items() if k != "text"} | {"id": pid},
+                )
+
+        results = sorted(seen_parents.values(), key=lambda c: c.score, reverse=True)
+        return results[:top_k], child_groups

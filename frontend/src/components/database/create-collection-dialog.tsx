@@ -1,0 +1,272 @@
+import { useState } from "react"
+import { Dialog, DialogContent, DialogHeader, DialogKicker, DialogTitle } from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { DropdownSelect } from "@/components/ui/dropdown-select"
+import { createCollection } from "@/api/client"
+import { toast } from "sonner"
+import { ChevronDown } from "lucide-react"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
+
+interface CreateCollectionDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onCreated: () => void
+}
+
+const FILE_TYPES = [
+  { ext: "pdf", label: "PDF" },
+  { ext: "txt", label: "TXT" },
+  { ext: "md", label: "Markdown" },
+  { ext: "docx", label: "Word" },
+  { ext: "xlsx", label: "Excel" },
+  { ext: "pptx", label: "PowerPoint" },
+  { ext: "csv", label: "CSV" },
+]
+
+export function CreateCollectionDialog({ open, onOpenChange, onCreated }: CreateCollectionDialogProps) {
+  const t = useT()
+  const [name, setName] = useState("")
+  const [dimensions, setDimensions] = useState("1536")
+  const [chunkMode, setChunkMode] = useState("normal")
+  const [parentStrategy, setParentStrategy] = useState("paragraph")
+  const [chunkSize, setChunkSize] = useState("512")
+  const [chunkOverlap, setChunkOverlap] = useState("64")
+  const [parentChunkSize, setParentChunkSize] = useState("1024")
+  const [parentChunkOverlap, setParentChunkOverlap] = useState("128")
+  const [childChunkSize, setChildChunkSize] = useState("256")
+  const [childChunkOverlap, setChildChunkOverlap] = useState("32")
+  const [allowedTypes, setAllowedTypes] = useState<string[]>([])
+  const [saving, setSaving] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+
+  const handleCreate = async () => {
+    if (!name.trim()) return
+    setSaving(true)
+    try {
+      const chunkConfig: Record<string, unknown> = {}
+      if (chunkMode === "parent_child") {
+        chunkConfig.chunk_mode = "parent_child"
+        chunkConfig.parent_strategy = parentStrategy
+        chunkConfig.parent_chunk_size = parseInt(parentChunkSize) || 1024
+        chunkConfig.parent_chunk_overlap = parseInt(parentChunkOverlap) || 128
+        chunkConfig.child_chunk_size = parseInt(childChunkSize) || 256
+        chunkConfig.child_chunk_overlap = parseInt(childChunkOverlap) || 32
+      } else {
+        chunkConfig.chunk_size = parseInt(chunkSize) || 512
+        chunkConfig.chunk_overlap = parseInt(chunkOverlap) || 64
+      }
+      if (allowedTypes.length > 0) chunkConfig.allowed_file_types = allowedTypes
+      const res = await createCollection(name.trim(), parseInt(dimensions), chunkConfig)
+      if (res.error) toast.error(res.error)
+      else {
+        toast.success(res.message || t("library.collectionCreated"))
+        setName("")
+        onOpenChange(false)
+        onCreated()
+      }
+    } catch (err) {
+      toast.error(t("common.failedWithError", { error: formatApiError(err, t) }))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="pm-dialog max-w-md">
+        <DialogHeader>
+          <DialogKicker>{t("nav.library")}</DialogKicker>
+          <DialogTitle>{t("library.createCollection")}</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4 py-1">
+          <div>
+            <label className="pm-field-label">{t("common.name")}</label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={t("library.namePh")}
+              className="h-8"
+            />
+          </div>
+
+          <button
+            type="button"
+            className="pm-meta flex items-center gap-2 hover:text-[var(--pm-ink)] transition-colors"
+            onClick={() => setAdvancedOpen(!advancedOpen)}
+          >
+            <ChevronDown
+              className={`h-3 w-3 transition-transform duration-200 ${
+                advancedOpen ? "rotate-0" : "-rotate-90"
+              }`}
+            />
+            {t("settings.advanced")}
+          </button>
+
+          <div
+            className={`grid transition-all duration-300 ease-[cubic-bezier(0.45,0.05,0.55,0.95)] ${
+              advancedOpen
+                ? "grid-rows-[1fr] opacity-100"
+                : "grid-rows-[0fr] opacity-0"
+            }`}
+          >
+            <div className="overflow-hidden">
+              <div className="space-y-4 pt-1">
+                <div>
+                  <label className="pm-field-label">{t("library.allowedTypes")}</label>
+                  <p className="pm-meta mb-2">{t("library.leaveEmptyAllTypes")}</p>
+                  <div className="flex flex-wrap gap-2">
+                    {FILE_TYPES.map((ft) => (
+                      <label
+                        key={ft.ext}
+                        className={`pm-field-chip ${
+                          allowedTypes.includes(ft.ext) ? "is-on" : ""
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          className="sr-only"
+                          checked={allowedTypes.includes(ft.ext)}
+                          onChange={() =>
+                            setAllowedTypes((prev) =>
+                              prev.includes(ft.ext)
+                                ? prev.filter((t) => t !== ft.ext)
+                                : [...prev, ft.ext]
+                            )
+                          }
+                        />
+                        {ft.label}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="pm-field-label">{t("library.dimensions")}</label>
+                    <DropdownSelect
+                      size="sm"
+                      value={dimensions}
+                      onChange={setDimensions}
+                      options={[64, 128, 256, 512, 768, 1024, 1536, 2048, 3072].map(
+                        (d) => ({ value: String(d), label: String(d) })
+                      )}
+                    />
+                  </div>
+                  <div>
+                    <label className="pm-field-label">{t("library.chunkMode")}</label>
+                    <DropdownSelect
+                      size="sm"
+                      value={chunkMode}
+                      onChange={setChunkMode}
+                      options={[
+                        { value: "normal", label: t("library.chunkModeNormal") },
+                        { value: "parent_child", label: t("library.chunkModeParentChild") },
+                      ]}
+                    />
+                  </div>
+                </div>
+
+                {chunkMode === "normal" ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="pm-field-label">{t("library.chunkSize")}</label>
+                      <Input
+                        value={chunkSize}
+                        onChange={(e) => setChunkSize(e.target.value)}
+                        placeholder="512"
+                        className="h-8"
+                      />
+                    </div>
+                    <div>
+                      <label className="pm-field-label">{t("library.chunkOverlap")}</label>
+                      <Input
+                        value={chunkOverlap}
+                        onChange={(e) => setChunkOverlap(e.target.value)}
+                        placeholder="64"
+                        className="h-8"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div>
+                      <label className="pm-field-label">{t("library.parentStrategy")}</label>
+                      <DropdownSelect
+                        size="sm"
+                        value={parentStrategy}
+                        onChange={setParentStrategy}
+                        options={[
+                          { value: "paragraph", label: t("library.strategyParagraph") },
+                          { value: "fixed_token", label: t("library.strategyFixedToken") },
+                          { value: "heading", label: t("library.strategyHeading") },
+                        ]}
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="pm-field-label">{t("library.parentChunkSize")}</label>
+                        <Input
+                          value={parentChunkSize}
+                          onChange={(e) => setParentChunkSize(e.target.value)}
+                          placeholder="1024"
+                          className="h-8"
+                        />
+                      </div>
+                      <div>
+                        <label className="pm-field-label">{t("library.parentChunkOverlap")}</label>
+                        <Input
+                          value={parentChunkOverlap}
+                          onChange={(e) => setParentChunkOverlap(e.target.value)}
+                          placeholder="128"
+                          className="h-8"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="pm-field-label">{t("library.childChunkSize")}</label>
+                        <Input
+                          value={childChunkSize}
+                          onChange={(e) => setChildChunkSize(e.target.value)}
+                          placeholder="256"
+                          className="h-8"
+                        />
+                      </div>
+                      <div>
+                        <label className="pm-field-label">{t("library.childChunkOverlap")}</label>
+                        <Input
+                          value={childChunkOverlap}
+                          onChange={(e) => setChildChunkOverlap(e.target.value)}
+                          placeholder="32"
+                          className="h-8"
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-1">
+          <Button
+            variant="ghost"
+            onClick={() => onOpenChange(false)}
+          >
+            {t("common.cancel")}
+          </Button>
+          <Button
+            onClick={handleCreate}
+            disabled={saving || !name.trim()}
+          >
+            {saving ? t("common.loading") : t("common.create")}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}

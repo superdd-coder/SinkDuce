@@ -1,0 +1,1997 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+import shutil
+import uuid
+from pathlib import Path
+
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import Response
+from pydantic import BaseModel
+
+from src.api.errors import ApiError
+
+from src.services import services
+from src.parsers import parse_directory
+from src.tasks import task_manager
+from src.tasks import history_store
+from src.tasks.handlers import consolidate_handler, doc_summary_handler, sparse_recalc_handler, upload_handler
+from src.rag.summary_manager import SummaryManager
+from src.collections import store as collection_store
+from src.config import DATA_DIR
+
+logger = logging.getLogger(__name__)
+
+# ── RBAC 守卫（2026-09-16）─────────────────────────────────────
+# 本模块的路由直接以路径/查询参数接收库 ID，之前完全没设防：不可见的库
+# 仍能列出文件、读分块、上传、删文档。这里集中两个助手，避免逐个 handler 写散。
+
+
+def _actor_or_none():
+    """当前 actor；无身份上下文（测试直接挂 router）→ None。"""
+    from src.identity import get_actor
+
+    return get_actor()
+
+
+def _assert_col_visible(collection_id: str) -> None:
+    """不可见 → 404（与"库不存在"同形）。"""
+    actor = _actor_or_none()
+    if actor is None:
+        return
+    from src.identity import visibility as _vis
+
+    _vis.assert_can_read(actor, collection_id)
+
+
+def _assert_col_write(collection_id: str, action: str) -> None:
+    """可见性 + 写档授权。**必须在任何副作用之前调用**。"""
+    actor = _actor_or_none()
+    if actor is None:
+        return
+    from src.identity import visibility as _vis
+    from src.identity.policy import authorize
+
+    _vis.assert_can_read(actor, collection_id)
+    authorize(actor, action, {"collection_id": collection_id})
+
+
+def _visible_collection_ids_contain(collection_id: str) -> bool:
+    """该 collection 是否对当前 actor 可见（无身份上下文 → True，测试场景）。"""
+    actor = _actor_or_none()
+    if actor is None:
+        return True
+    from src.identity import visibility as _vis
+
+    return _vis.is_collection_visible(actor, collection_id)
+
+
+def _filter_visible(ids):
+    """把一批 collection id 收窄到可见集（全局聚合端点用）。"""
+    actor = _actor_or_none()
+    if actor is None:
+        return list(ids)
+    from src.identity import visibility as _vis
+
+    return _vis.filter_collection_ids(actor, ids)
+
+
+from src.api.routes.identity import require_module
+
+router = APIRouter(dependencies=[Depends(require_module("database"))])
+
+#: Agent 视图端点（批次 4）：模块闸门与 MCP 工具同语义（chat OR database）。
+#: 挂主 router 会叠上 router 级 database 依赖（AND）→ chat-only 角色出现
+#: 「本地工具放行、跨盒子转发被拒」的裂缝（审查 #4）。
+agent_router = APIRouter(dependencies=[Depends(require_module("chat", "database"))])
+
+
+class IngestRetryRequest(BaseModel):
+    collection: str
+
+COLLECTIONS_DIR = DATA_DIR / "collections"
+
+def _files_dir(collection_id: str) -> Path:
+    return COLLECTIONS_DIR / collection_id / "files"
+
+# 注册任务处理器
+task_manager.register_handler("upload", upload_handler)
+task_manager.register_handler("consolidate", consolidate_handler)
+task_manager.register_handler("doc_summary", doc_summary_handler)
+task_manager.register_handler("sparse_recalc", sparse_recalc_handler)
+
+
+def _get_summary_manager() -> SummaryManager:
+    return SummaryManager(db=services.db)
+
+
+@router.post("/documents/upload")
+async def upload_document(
+    files: list[UploadFile] = File(...),
+    collection: str = "default",
+):
+    """上传文件 - 异步队列处理"""
+    _assert_col_write(collection, "file.upload")
+    # Resolve collection: try as ID first, then display name
+    col_meta = (collection_store.get_collection_meta(collection)
+                or collection_store.find_collection_by_name(collection))
+    collection_id = col_meta["id"] if col_meta else collection
+
+    # Check allowed file types for this collection
+    col_config = services.db.get_collection_config(collection_id) if services.db.collection_exists(collection_id) else {}
+    allowed = col_config.get("allowed_file_types")
+    if allowed:
+        rejected = []
+        for file in files:
+            ext = Path(file.filename).suffix.lower().lstrip(".")
+            if ext not in allowed:
+                rejected.append(f"{file.filename} (.{ext})")
+        if rejected:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File type not allowed for this database: {', '.join(rejected)}. Allowed: {', '.join(allowed)}",
+            )
+
+    tasks = []
+
+    for file in files:
+        # 保存文件 — 用 file_id 做目录，防同名冲突
+        safe_name = Path(file.filename).name
+        if not safe_name:
+            raise ApiError(400, "invalid_filename", "Invalid filename")
+        file_id = uuid.uuid4().hex
+        file_source = f"__file__:{file_id}"
+        file_dir = _files_dir(collection_id) / file_id
+        file_dir.mkdir(parents=True, exist_ok=True)
+        save_path = file_dir / safe_name
+        # Stream upload to disk in chunks via a thread so the event loop stays
+        # responsive while other API calls (e.g. list_files on switch) are in flight.
+        loop = asyncio.get_running_loop()
+        with open(save_path, "wb") as _fp:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                await loop.run_in_executor(None, _fp.write, chunk)
+
+        # 创建异步任务
+        task = task_manager.create_task(
+            filename=safe_name,
+            task_type="upload",
+            file_path=str(save_path),
+            collection=collection_id,
+            filename_param=file_source,
+            source_label=safe_name,
+            file_id=file_id,
+        )
+        # file_id：MCP upload_document 工具契约要回报它（get_document_text 等
+        # 的入口键）；task.to_dict() 不含（住在 kwargs 里）。加字段，向后兼容。
+        tasks.append({**task.to_dict(), "file_id": file_id})
+        # 多端同步：让其他设备为这个 file_id 画出「Ingesting」锁。锁派生于服务端
+        # 任务状态（非发起方本地乐观态），所以必须广播这个信号。见 events 设计 §9。
+        from src.events.emit import emit
+
+        emit(
+            "task.queued",
+            scope={"collection_id": collection_id},
+            payload={"task_id": task.id, "file_id": file_id, "filename": safe_name},
+        )
+
+    return {
+        "message": f"Queued {len(tasks)} files for processing",
+        "tasks": tasks,
+    }
+
+
+# ── Agent views (批次 4)：与 MCP 工具共用同一份信封 ─────────────
+
+
+@agent_router.get("/documents/text")
+def get_document_text_view(
+    collection: str = Query(...),
+    file_id: str = Query(""),
+    source: str = Query(""),
+    version_id: str = Query(""),
+    offset: int = Query(0),
+    limit: int = Query(10000),
+):
+    """Agent 形状的文档正文（`get_document_text` 工具同款信封：身份解析 →
+    R6/R5 隐藏闸门 → 提取 → 字符窗口分页）。失败也回 200 + {"error": …}
+    （与 collections create/delete 同一约定——错误形状与工具侧逐字段一致）。"""
+    from src.documents_views import document_text_view
+
+    return document_text_view(
+        collection,
+        file_id=file_id,
+        source=source,
+        version_id=version_id,
+        offset=offset,
+        limit=limit,
+    )
+
+
+@agent_router.post("/documents/{collection}/definitive")
+def set_document_definitive_view(collection: str, body: dict = Body()):
+    """Agent 形状的文档 definitive 开关（`set_document_definitive` 工具同款
+    信封；file-mgmt 路径 + 摘要路径 + 防抖 consolidate）。body: {source, definitive?}。"""
+    from src.documents_views import document_definitive_view
+
+    return document_definitive_view(
+        collection,
+        source=str(body.get("source") or ""),
+        definitive=bool(body.get("definitive", True)),
+    )
+
+
+@router.get("/documents/tasks", dependencies=[Depends(require_module("tasks"))])
+async def get_tasks(
+    collection: str | None = None,
+    status: str | None = None,
+    task_type: str | None = None,
+    limit: int | None = None,
+):
+    """获取任务状态，可按collection过滤
+
+    RBAC：任务列表含 collection / filename，属跨库聚合——必须按可见集收窄，
+    否则不可见库的存在与文件名会从这里漏出去。
+    """
+    if collection:
+        _assert_col_visible(collection)
+    # Resolve collection ID (try ID first, then display name)
+    collection_id = None
+    if collection:
+        col_meta = (collection_store.get_collection_meta(collection)
+                    or collection_store.find_collection_by_name(collection))
+        collection_id = col_meta["id"] if col_meta else collection
+
+    tasks = task_manager.get_all_tasks(collection_id)
+    result = []
+    for t in tasks:
+        ttype, targs = task_manager._task_args.get(t.id, ("unknown", {}))
+        entry = t.to_dict_with_type(ttype)
+        # RBAC：全局任务列表（无 collection 过滤）要按可见集收窄——任务条目带
+        # collection/filename，等于把不可见库的存在与文件名漏出去。
+        if collection_id is None:
+            task_col = entry.get("collection") or targs.get("collection")
+            if task_col and not _visible_collection_ids_contain(task_col):
+                continue
+        # 多端同步：Ingesting 锁以 file_id 为键从服务端任务状态派生（见 events 设计 §9），
+        # 所以任务列表必须告诉前端每个任务属于哪个文件。file_id 住在 kwargs 里，
+        # 只有这里能拿到。非入库任务没有它，返回 None。
+        entry["file_id"] = targs.get("file_id")
+        result.append(entry)
+    # 过滤/截断：这三个参数是给**跨盒子转发**用的 —— MCP 工具面支持
+    # status / task_type / limit，若这里不支持，转发只能静默忽略（给出
+    # "看起来对、其实错"的结果）。加在 REST 上让远端能忠实执行同一语义。
+    # 过滤顺序与工具本体一致：先 status → 再 task_type → 最后按创建时间倒序截断。
+    if status is not None:
+        result = [t for t in result if t.get("status") == status]
+    if task_type is not None:
+        result = [t for t in result if t.get("task_type") == task_type]
+    if limit is not None:
+        result.sort(key=lambda t: t.get("created_at") or "", reverse=True)
+        result = result[: max(0, int(limit))]
+
+    return {
+        "tasks": result,
+        "total": len(result),
+        "pending": len(task_manager.get_pending_tasks(collection_id)),
+        "processing": len(task_manager.get_processing_tasks(collection_id)),
+    }
+
+
+@router.get("/documents/tasks/{task_id}", dependencies=[Depends(require_module("tasks"))])
+async def get_task(task_id: str):
+    """获取单个任务状态"""
+    from src.identity import get_actor
+    from src.tasks.access import can_see_task
+
+    task = task_manager.get_task(task_id)
+    # RBAC（2026-09-18）：任务可见性继承其所属库；不可见 → 404（与"不存在"同形，
+    # 不泄露"存在但无权"）。此前该端点无判定 —— 而 task_id 可由 MCP list_tasks 得到，
+    # 形成"能拿到 id 就能读内容"的链条。
+    if not task or not can_see_task(get_actor(), task_id, task):
+        raise ApiError(404, "task_not_found", "Task not found")
+    return task.to_dict()
+
+
+@router.delete("/documents/tasks/completed", dependencies=[Depends(require_module("tasks"))])
+async def clear_completed_tasks():
+    """清除已完成的任务"""
+    before = len(task_manager.tasks)
+    task_manager.clear_completed_tasks()
+    after = len(task_manager.tasks)
+    # 多端同步：其他设备也要把已完成任务清掉（见 events 设计 §5）。
+    from src.events.emit import emit
+
+    emit("task.cleared", scope={"collection_id": None})
+    # removed/remaining：MCP 工具契约（clear_completed_tasks）返回这两个计数，
+    # 放在 REST 上让跨盒子转发拿到的与本地同形（加字段，向后兼容）。
+    return {
+        "message": "Cleared completed tasks",
+        "removed": before - after,
+        "remaining": after,
+    }
+
+
+@router.post("/documents/tasks/{task_id}/cancel", dependencies=[Depends(require_module("tasks"))])
+async def cancel_task(task_id: str):
+    """取消正在运行的任务"""
+    from src.identity import get_actor
+    from src.tasks.access import can_see_task
+
+    # RBAC：看不见的任务不能取消（**在动手之前**判——破坏先于授权是最糟的）。
+    _t = task_manager.get_task(task_id)
+    if not _t or not can_see_task(get_actor(), task_id, _t):
+        raise ApiError(404, "task_not_found", "Task not found")
+    if task_manager.cancel_task(task_id):
+        # 多端同步：任务状态变了，其他设备要跟着刷新（见 events 设计 §5）。
+        from src.events.emit import emit
+
+        emit("task.cancelled", scope={"collection_id": None}, payload={"task_id": task_id})
+        return {"message": "Task cancelled"}
+    raise ApiError(400, "task_not_cancellable", "Task not found or cannot be cancelled")
+
+
+@router.post("/documents/tasks/{task_id}/retry", dependencies=[Depends(require_module("tasks"))])
+async def retry_task(task_id: str):
+    """重试失败的任务"""
+    from src.identity import get_actor
+    from src.tasks.access import can_see_task
+
+    # RBAC：看不见的任务不能重试（同为写操作，同样在动手之前判）。
+    _t = task_manager.get_task(task_id)
+    if not _t or not can_see_task(get_actor(), task_id, _t):
+        raise ApiError(404, "task_not_found", "Task not found")
+    task = task_manager.retry_task(task_id)
+    if task:
+        # 多端同步：重试成功=重新入队，对端要重新画出锁并继续轮询（见 events §9/§11）。
+        from src.events.emit import emit
+
+        emit(
+            "task.retried",
+            scope={"collection_id": task.collection},
+            payload={"task_id": task.id},
+        )
+        return {"message": "Task re-queued", "task": task.to_dict()}
+    raise ApiError(400, "task_not_retryable", "Task not found or not in failed state")
+
+
+# ── Ingest history (persistent upload records + retry) ──────────────
+
+
+def _resolve_retry_file_path(collection_id: str, kwargs: dict) -> str | None:
+    """Locate a re-ingestable source file for a history record.
+
+    Prefers the original upload path; falls back to the current version
+    blob from meta.db (rename / re-version keep the file, the old path
+    may not).  Returns None when the content is truly gone.
+    """
+    original = (kwargs or {}).get("file_path") or ""
+    if original and Path(original).is_file():
+        return original
+    file_id = (kwargs or {}).get("file_id") or ""
+    if not file_id:
+        return None
+    try:
+        from src.file_mgmt.storage_paths import (
+            ensure_layout_migrated,
+            resolve_version_blob,
+        )
+        from src.file_mgmt.store import get_db
+
+        ensure_layout_migrated(collection_id)
+        conn = get_db(collection_id)
+        try:
+            row = conn.execute(
+                """SELECT fv.version_id, fv.storage_file_id
+                   FROM files f
+                   JOIN file_versions fv ON fv.version_id = f.current_version_id
+                   WHERE f.file_id=?""",
+                (file_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row:
+            blob = resolve_version_blob(
+                collection_id, file_id, row["version_id"], row["storage_file_id"]
+            )
+            if blob is not None and blob.is_file():
+                return str(blob)
+    except Exception:
+        logger.warning(
+            "[IngestHistory] version blob resolve failed for %s/%s",
+            collection_id, file_id, exc_info=True,
+        )
+    return None
+
+
+@router.get("/documents/ingest-history")
+def get_ingest_history(collection: str):
+    """Upload history for a collection: every file ingest with status, stage, error."""
+    _assert_col_visible(collection)
+    # Resolve collection: try as ID first, then display name
+    col_meta = (collection_store.get_collection_meta(collection)
+                or collection_store.find_collection_by_name(collection))
+    collection_id = col_meta["id"] if col_meta else collection
+    return {
+        "records": history_store.list_records(collection_id),
+        "counts": history_store.status_counts(collection_id),
+    }
+
+
+@router.post("/documents/ingest-history/{record_id}/retry")
+def retry_ingest_history(record_id: str, body: IngestRetryRequest):
+    """Re-ingest a failed upload: clear half-written chunks, then re-enqueue."""
+    col_meta = (collection_store.get_collection_meta(body.collection)
+                or collection_store.find_collection_by_name(body.collection))
+    collection_id = col_meta["id"] if col_meta else body.collection
+
+    record = history_store.get_record(collection_id, record_id)
+    if record is None:
+        raise ApiError(404, "record_not_found", "Ingest history record not found")
+    if record.get("status") != "failed":
+        raise ApiError(400, "record_not_retryable", "Only failed ingests can be retried")
+
+    kwargs = dict(record.get("kwargs") or {})
+    file_path = _resolve_retry_file_path(collection_id, kwargs)
+    if not file_path:
+        raise ApiError(400, "source_file_missing",
+                       "Original file no longer exists on disk")
+
+    # Clear whatever the failed attempt half-wrote (chunks only — the file
+    # record in meta.db / Library stays untouched).
+    source = kwargs.get("filename_param") or f"__file__:{record.get('file_id', '')}"
+    deleted = 0
+    try:
+        deleted = services.db.delete_by_filter(collection_id, key="source", value=source)
+    except Exception:
+        logger.warning("[IngestHistory] chunk cleanup failed for %s", source, exc_info=True)
+
+    kwargs.pop("collection", None)
+    kwargs["file_path"] = file_path
+    task = task_manager.create_task(
+        filename=record.get("filename") or "retry",
+        task_type="upload",
+        collection=collection_id,
+        **kwargs,
+    )
+    updated = history_store.retry_record(collection_id, record_id, new_task_id=task.id)
+    if updated is None:
+        raise ApiError(400, "record_not_retryable", "Record is no longer retryable")
+    logger.info(
+        "[IngestHistory] retry %s → task=%s (cleared %d old chunks)",
+        record_id, task.id, deleted,
+    )
+    return {"message": "Re-ingest queued", "record": updated, "task_id": task.id}
+
+
+@router.post("/documents/upload-folder")
+async def upload_folder(
+    path: str,
+    collection: str = "default",
+):
+    """上传文件夹 - 异步队列处理"""
+    _assert_col_write(collection, "file.upload")
+    # Resolve collection: try as ID first, then display name
+    col_meta = (collection_store.get_collection_meta(collection)
+                or collection_store.find_collection_by_name(collection))
+    collection_id = col_meta["id"] if col_meta else collection
+
+    if not services.db.collection_exists(collection_id):
+        services.db.create_collection(collection_id, vector_size=services.embedding.dimensions)
+
+    from src.config import DATA_DIR
+    from src.paths import confine
+
+    try:
+        folder = confine(Path(path), DATA_DIR / "collections" / collection_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Folder path must be under this collection's data directory",
+        )
+    if not folder.is_dir():
+        return {"error": f"Not a directory: {path}"}
+
+    docs = parse_directory(folder)
+    tasks = []
+
+    for doc in docs:
+        task = task_manager.create_task(
+            filename=doc.source_path,
+            task_type="upload",
+            file_path=doc.source_path,
+            collection=collection_id,
+            filename_param=doc.source_path,
+        )
+        tasks.append(task.to_dict())
+
+    return {
+        "message": f"Queued {len(tasks)} documents for processing",
+        "tasks": tasks,
+    }
+
+
+
+@router.get("/documents/{collection}/{file_id}/images/{image_id}")
+def get_document_image(collection: str, file_id: str, image_id: str):
+    """Serve a document image from disk.
+
+    URL pattern: /api/documents/{collection}/{file_id}/images/{image_id}
+    Images live under ``files/{file_id}/{version_id}/images/`` (or legacy
+    ``files/{file_id}/images/``).
+    """
+    _assert_col_visible(collection)
+    from src.file_mgmt.storage_paths import find_image_file
+
+    img_path = find_image_file(collection, file_id, image_id)
+    if img_path is None:
+        raise HTTPException(status_code=404, detail=f"Image {image_id} not found")
+
+    content = img_path.read_bytes()
+    import mimetypes
+
+    mime, _ = mimetypes.guess_type(str(img_path))
+    mime = mime or f"image/{img_path.suffix.lstrip('.') or 'png'}"
+    return Response(
+        content=content,
+        media_type=mime,
+        headers={
+            "Content-Disposition": f'inline; filename="{img_path.name}"',
+            "Content-Length": str(len(content)),
+            "Cache-Control": "public, max-age=86400",
+        },
+    )
+
+@router.delete("/documents/{collection}/{doc_source:path}")
+async def delete_document(collection: str, doc_source: str):
+    _assert_col_write(collection, "file.delete")
+    # Resolve collection: try as ID first, then display name
+    col_meta = (collection_store.get_collection_meta(collection)
+                or collection_store.find_collection_by_name(collection))
+    collection_id = col_meta["id"] if col_meta else collection
+
+    logger.info("[DELETE] Deleting document '%s' from collection='%s'", doc_source, collection_id)
+    deleted_count = services.db.delete_by_filter(collection_id, key="source", value=doc_source)
+    logger.info("[DELETE] %d chunks deleted from Qdrant", deleted_count)
+
+    # Bump sparse recalc counter
+    if deleted_count > 0:
+        try:
+            from src.tasks.handlers import _schedule_sparse_recalc
+            col_config = services.db.get_collection_config(collection_id)
+            sc = col_config.get("sparse_recalc_counter", 0) + deleted_count
+            threshold = col_config.get("sparse_recalc_threshold", 5000)
+            services.db.update_collection_config(collection_id, {"sparse_recalc_counter": sc})
+            logger.info("[SparseRecalc] counter col=%s delta=+%d counter=%d", collection_id, deleted_count, sc)
+            if sc >= threshold:
+                _schedule_sparse_recalc(collection_id, reason="after delete")
+        except Exception as e:
+            logger.warning("[SparseRecalc] counter update failed (non-fatal): %s", e)
+
+    # Delete the source file directory via file index lookup
+    try:
+        from src.collections.file_index import load as load_file_index, remove_by_source as remove_file_index
+        idx = load_file_index(collection_id)
+        # Find file_id by source
+        for fid, entry in idx.items():
+            if entry.get("source") == doc_source:
+                file_dir = _files_dir(collection_id) / fid
+                if file_dir.exists():
+                    shutil.rmtree(file_dir)
+                remove_file_index(collection_id, doc_source)
+                logger.info("[DELETE] Source file deleted: %s -> %s", doc_source, file_dir)
+                break
+    except Exception as e:
+        logger.warning("[DELETE] File index cleanup failed (non-fatal): %s", e)
+
+    # Take snapshot BEFORE doc summary cleanup (for debounce net-change detection)
+    pre_snapshot: dict[str, bool] = {}
+    try:
+        from src.api.routes.info import _snapshot_includes
+        pre_snapshot = _snapshot_includes(collection_id)
+    except Exception:
+        pass
+
+    # Clean up doc summary for this document (non-blocking, best effort)
+    try:
+        logger.info("[DELETE] Cleaning up doc_summary for '%s'", doc_source)
+        sm = _get_summary_manager()
+        sm.delete_doc_summary(collection_id, doc_source)
+        logger.info("[DELETE] Doc summary cleaned up")
+    except Exception as e:
+        logger.warning("[DELETE] Doc summary cleanup failed (non-fatal): %s", e)
+
+    # Clean up meeting allocation if this file came from a meeting.
+    # Meeting-sourced files use the format __meeting__:{meeting_id}:{tab_id}.
+    try:
+        import re as _re
+
+        meeting_match = _re.match(r"^__meeting__:([a-f0-9]+):(tab_\w+)$", doc_source)
+        if meeting_match:
+            mid = meeting_match.group(1)
+            tid = meeting_match.group(2)
+
+            from src.meeting import store as meeting_store
+            meeting = meeting_store.get_meeting(mid)
+            if meeting and meeting.tabs:
+                updated_tabs: list[dict] = []
+                for t in meeting.tabs:
+                    td = t if isinstance(t, dict) else t.model_dump()
+                    if td.get("tab_id") == tid:
+                        td["allocated_file_id"] = ""
+                        td["associated_collection_id"] = ""
+                        td["associated_collection_name"] = ""
+                    updated_tabs.append(td)
+
+                # Rebuild meeting-level tracking arrays from tabs
+                alloc_cols: list[str] = []
+                alloc_fids: list[str] = []
+                for td in updated_tabs:
+                    cid = td.get("associated_collection_id", "")
+                    fid = td.get("allocated_file_id", "")
+                    if cid and fid:
+                        alloc_cols.append(cid)
+                        alloc_fids.append(fid)
+
+                meeting_store.update_meeting(
+                    mid,
+                    tabs=updated_tabs,
+                    allocated_collections=alloc_cols,
+                    allocated_file_ids=alloc_fids,
+                )
+                logger.info(
+                    "[DELETE] Cleaned meeting tab %s/%s allocation (remaining: %d)",
+                    mid[:12], tid, len(alloc_fids),
+                )
+    except Exception as e:
+        logger.warning("[DELETE] Meeting allocation cleanup failed (non-fatal): %s", e)
+
+    # Schedule debounced consolidation (replaces old counter-based trigger).
+    # Only enter the debounce flow if the deleted file was a "definitive"
+    # document — i.e. it actually contributed to the collection summary
+    # (had a doc_summary with include_in_summary != False). Deleting a
+    # non-definitive file (no summary, or summary with include=False)
+    # cannot change the consolidated output, so skip the 10s timer entirely.
+    try:
+        from src.api.routes.info import schedule_debounced_consolidate
+        was_definitive = pre_snapshot.get(doc_source) is True
+        if was_definitive:
+            schedule_debounced_consolidate(collection_id, pre_snapshot)
+        else:
+            logger.info(
+                "[DELETE] '%s' was not definitive (not in pre_snapshot or include=False), "
+                "skipping debounce", doc_source,
+            )
+    except Exception as e:
+        logger.warning("[DELETE] Debounce schedule failed (non-fatal): %s", e)
+
+    # Trigger coverage refresh after deletion.
+    # If upload tasks are running, skip — the last upload will trigger
+    # coverage with the correct (post-delete) file list.
+    if services.catalog:
+        def _trigger():
+            try:
+                from src.tasks.task_manager import task_manager
+                active = len(task_manager.get_active_tasks(
+                    collection=collection_id, task_types=["upload", "doc_summary"],
+                ))
+                if active > 0:
+                    logger.info("[Coverage] SKIP delete %r (%d active tasks → last one will trigger)",
+                                doc_source, active)
+                    services.catalog.mark_dirty(collection_id)
+                else:
+                    services.catalog.update_coverage(collection_id)
+            except Exception:
+                logger.exception("[Coverage] delete trigger failed for %s", doc_source)
+
+        import threading
+        threading.Thread(target=_trigger, daemon=True).start()
+
+    return {
+        "message": f"Deleted chunks from {doc_source} in {collection_id}",
+        # deleted_chunks：MCP 工具契约（delete_document）要回报删了多少块，
+        # 值本来就在作用域里。加字段，向后兼容。
+        "deleted_chunks": deleted_count,
+    }
+
+
+def _current_version_meta(
+    collection_id: str, file_id: str
+) -> tuple[Path | None, bool]:
+    """Return (current version path, files.unsupported) for a managed file.
+
+    *unsupported* is **current-version only** (ingest eligibility). Historical
+    version blobs under the same file_id must still be previewable via
+    ``storage_file`` regardless of this flag.
+    """
+    try:
+        from src.file_mgmt.store import get_db
+        from src.file_mgmt.storage_paths import (
+            ensure_layout_migrated,
+            resolve_version_blob,
+        )
+
+        ensure_layout_migrated(collection_id)
+        conn = get_db(collection_id)
+        try:
+            row = conn.execute(
+                """SELECT fv.storage_file_id, fv.version_id, f.unsupported
+                   FROM files f
+                   JOIN file_versions fv ON fv.version_id = f.current_version_id
+                   WHERE f.file_id=?""",
+                (file_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return None, False
+        p = resolve_version_blob(
+            collection_id,
+            file_id,
+            row["version_id"],
+            row["storage_file_id"],
+        )
+        return p, bool(row["unsupported"])
+    except Exception:
+        logger.debug(
+            "Could not resolve current version for %s/%s",
+            collection_id,
+            file_id,
+            exc_info=True,
+        )
+        return None, False
+
+
+def _current_version_file(collection_id: str, file_id: str) -> Path | None:
+    """Resolve the on-disk path of the file's *current* version (file-mgmt).
+
+    Multiple version blobs may coexist under ``files/{file_id}/``; always prefer
+    the ``storage_file_id`` of ``files.current_version_id`` so preview matches
+    the latest upload (including unsupported types that never rewrite parsed.txt).
+    """
+    path, _ = _current_version_meta(collection_id, file_id)
+    return path
+
+
+def _is_current_storage_file(
+    collection_id: str, file_id: str, storage_file: str | None
+) -> bool:
+    """True when *storage_file* is the file's current version blob name.
+
+    Compares DB ``storage_file_id`` even when the on-disk blob is missing
+    (e.g. unsupported image never written / deleted) so preview flags stay correct.
+    """
+    if not storage_file:
+        return False
+    want = Path(storage_file).name
+    cur = _current_version_file(collection_id, file_id)
+    if cur is not None:
+        return cur.name == want
+    # Disk missing — still resolve name from current version row
+    try:
+        from src.file_mgmt.store import get_db
+
+        conn = get_db(collection_id)
+        try:
+            row = conn.execute(
+                """SELECT fv.storage_file_id FROM files f
+                   JOIN file_versions fv ON fv.version_id = f.current_version_id
+                   WHERE f.file_id=?""",
+                (file_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row and row["storage_file_id"]:
+            return Path(row["storage_file_id"]).name == want
+    except Exception:
+        pass
+    return False
+
+
+def _file_id_from_source(source: str) -> str | None:
+    if source.startswith("__file__:"):
+        return source[len("__file__:") :]
+    return None
+
+
+def _find_file_path(
+    source: str,
+    collection_id: str | None = None,
+    *,
+    storage_file: str | None = None,
+    version_id: str | None = None,
+    prefer_original: bool = False,
+) -> Path | None:
+    """Find the on-disk path for a document source.
+
+    Optional *storage_file* / *version_id* force a specific version blob under
+    the managed file directory (e.g. a non-current version from the Log).
+
+    When *prefer_original* is True (Raw preview), never substitute ``parsed.txt``
+    for Office binaries — File Viewer needs the real ``.docx`` / ``.xlsx`` / etc.
+    """
+    from src.collections.file_index import load_for_read as load_file_index
+
+    # Explicit version pin — never fall through to current if missing.
+    if (
+        (storage_file or version_id)
+        and collection_id
+        and source.startswith("__file__:")
+    ):
+        from src.file_mgmt.storage_paths import (
+            ensure_layout_migrated,
+            resolve_version_blob,
+            storage_basename,
+        )
+
+        ensure_layout_migrated(collection_id)
+        fid = source[len("__file__:") :]
+        safe = storage_basename(storage_file) if storage_file else ""
+
+        # 1) Pin by version_id (preferred — unique)
+        if version_id:
+            try:
+                from src.file_mgmt.store import get_db
+
+                conn = get_db(collection_id)
+                try:
+                    vr = conn.execute(
+                        """SELECT version_id, storage_file_id FROM file_versions
+                           WHERE file_id=? AND version_id=?""",
+                        (fid, version_id),
+                    ).fetchone()
+                finally:
+                    conn.close()
+                if vr:
+                    p = resolve_version_blob(
+                        collection_id,
+                        fid,
+                        vr["version_id"],
+                        vr["storage_file_id"] or safe or None,
+                    )
+                    if p is not None:
+                        return p
+                # version dir may hold blob even if DB name drifted
+                p = resolve_version_blob(
+                    collection_id, fid, version_id, safe or None
+                )
+                if p is not None:
+                    return p
+            except Exception:
+                logger.debug(
+                    "version_id resolve failed for %s/%s/%s",
+                    collection_id,
+                    fid,
+                    version_id,
+                    exc_info=True,
+                )
+            if storage_file is None and not safe:
+                return None
+
+        # 2) Pin by storage basename — often shared across versions after re-upload
+        # of the same display name. Prefer version_id when given; else current.
+        if safe and safe != "parsed.txt":
+            try:
+                from src.file_mgmt.store import get_db
+
+                conn = get_db(collection_id)
+                try:
+                    crow = conn.execute(
+                        "SELECT current_version_id FROM files WHERE file_id=?",
+                        (fid,),
+                    ).fetchone()
+                    current_vid = (
+                        (crow["current_version_id"] if crow else None) or None
+                    )
+                    vrows = conn.execute(
+                        """SELECT version_id, storage_file_id FROM file_versions
+                           WHERE file_id=? ORDER BY version_no ASC""",
+                        (fid,),
+                    ).fetchall()
+                finally:
+                    conn.close()
+                matches = [
+                    vr
+                    for vr in vrows
+                    if storage_basename(vr["storage_file_id"]) == safe
+                    or (vr["storage_file_id"] or "") == storage_file
+                ]
+                # Order: explicit version_id → current_version_id → highest version_no
+                ordered: list = []
+                if version_id:
+                    ordered.extend(
+                        vr for vr in matches if vr["version_id"] == version_id
+                    )
+                if current_vid:
+                    ordered.extend(
+                        vr
+                        for vr in matches
+                        if vr["version_id"] == current_vid
+                        and vr not in ordered
+                    )
+                ordered.extend(vr for vr in reversed(matches) if vr not in ordered)
+
+                for vr in ordered:
+                    p = resolve_version_blob(
+                        collection_id,
+                        fid,
+                        vr["version_id"],
+                        vr["storage_file_id"],
+                    )
+                    if p is not None:
+                        return p
+            except Exception:
+                logger.debug(
+                    "storage_file resolve failed for %s/%s", collection_id, fid,
+                    exc_info=True,
+                )
+            # Legacy flat last chance for this basename only
+            p_flat = _files_dir(collection_id) / fid / safe
+            if p_flat.is_file():
+                return p_flat
+            # Do not hard-fail when version_id was also tried above — fall through
+            # only if neither storage nor version resolved.
+            if version_id or storage_file:
+                return None
+        if version_id:
+            return None
+
+    def _preview_for_file_dir(
+        d: Path, *, current_name: str | None = None
+    ) -> Path | None:
+        """Best path inside a version dir (or legacy flat managed file dir)."""
+        if not d.is_dir():
+            return None
+        if current_name:
+            cur = d / Path(current_name).name
+            if cur.is_file() and cur.name != "parsed.txt":
+                if prefer_original:
+                    # Raw: always the real blob (docx/xlsx/pptx/pdf/md/…)
+                    return cur
+                # Source-oriented: prefer parsed.txt for Office when fresher
+                # (legacy callers that want text without re-parse).
+                suffix = cur.suffix.lower()
+                parsed = d / "parsed.txt"
+                if (
+                    suffix not in {".pdf", ".txt", ".md", ".csv", ".tsv"}
+                    and parsed.is_file()
+                    and parsed.stat().st_mtime >= cur.stat().st_mtime
+                ):
+                    return parsed
+                return cur
+        # Legacy: PDF first for iframe
+        for f in sorted(d.iterdir()):
+            if f.is_file() and f.suffix.lower() == ".pdf":
+                return f
+        if not prefer_original:
+            parsed = d / "parsed.txt"
+            if parsed.is_file():
+                return parsed
+        for f in sorted(d.iterdir()):
+            if (
+                f.is_file()
+                and f.name != "parsed.txt"
+                and not f.name.endswith(".extracted.txt")
+            ):
+                return f
+        return None
+
+    def _resolve_in_collection(col: str, src: str) -> Path | None:
+        # Managed file source: __file__:{file_id}
+        if src.startswith("__file__:"):
+            fid = src[len("__file__:") :]
+            cur = _current_version_file(col, fid)
+            if cur is not None:
+                return _preview_for_file_dir(cur.parent, current_name=cur.name)
+            return _preview_for_file_dir(_files_dir(col) / fid)
+
+        idx = load_file_index(col)
+        for fid, entry in idx.items():
+            if entry.get("source") == src:
+                cur = _current_version_file(col, fid)
+                if cur is not None:
+                    return _preview_for_file_dir(cur.parent, current_name=cur.name)
+                return _preview_for_file_dir(_files_dir(col) / fid)
+        return None
+
+    # If we know the collection, look up directly
+    if collection_id:
+        found = _resolve_in_collection(collection_id, source)
+        if found is not None:
+            return found
+
+    # Fallback: search all collections
+    if COLLECTIONS_DIR.is_dir():
+        for col_dir in COLLECTIONS_DIR.iterdir():
+            # RBAC：兜底遍历必须限定在可见集内——否则给一个文件名就能
+            # 从任意（包括不可见的）库读出内容。
+            if not _visible_collection_ids_contain(col_dir.name):
+                continue
+            if not col_dir.is_dir():
+                continue
+            found = _resolve_in_collection(col_dir.name, source)
+            if found is not None:
+                return found
+
+    return None
+
+
+def _read_legacy_text(source: str, collection_id: str) -> str | None:
+    """Read chunk text from Qdrant for legacy sources not in files.json."""
+    try:
+        from src.services import services as _svc
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
+        pts, _ = _svc.db.scroll_points(
+            collection_id, limit=1,
+            with_payload=["text"],
+            with_vectors=False,
+            scroll_filter=Filter(
+                must=[FieldCondition(key="source", match=MatchValue(value=source))]
+            ),
+        )
+        if pts:
+            return pts[0].get("payload", {}).get("text", "")
+    except Exception:
+        pass
+    return None
+
+
+@router.get("/documents/preview/{filename:path}")
+def preview_file(
+    filename: str,
+    collection: str | None = None,
+    storage_file: str | None = None,
+    version_id: str | None = None,
+):
+    # Handle full paths - extract just the name part
+    # Note: __file__:{id} uses colon — do not Path().name-strip the source key
+    source_key = filename
+    if not filename.startswith("__") and "/" in filename:
+        source_key = Path(filename).name
+    # Raw preview: always prefer the original blob (never parsed.txt for Office).
+    file_path = _find_file_path(
+        source_key,
+        collection,
+        storage_file=storage_file,
+        version_id=version_id,
+        prefer_original=True,
+    )
+
+    # When a specific history blob was requested, do not substitute legacy text
+    # or scan other collections — that would silently show the wrong version.
+    if not file_path and storage_file:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Version blob not found: {Path(storage_file).name}. "
+                "This old version may have been overwritten before unique "
+                "storage names were introduced, or the file was never kept on disk."
+            ),
+        )
+
+    # Legacy fallback: source not in files.json
+    if not file_path and collection:
+        legacy_text = _read_legacy_text(filename, collection)
+        if legacy_text:
+            import tempfile
+            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
+            tmp.write(legacy_text)
+            tmp.close()
+            file_path = Path(tmp.name)
+
+    # 兜底遍历的公共准备（两个 fallback 块共用）。
+    # RBAC：兜底遍历必须限定在可见集内——否则给一个文件名就能
+    # 从任意（包括不可见的）库读出内容。
+    # ⚠️⚠️ 两条实测教训（2026-09-19 真实走查抓到，一次请求 ~30s）：
+    # 1. 可见集必须**循环外算一次**——is_collection_visible 内部走
+    #    find_collection_by_qdrant_name → 全目录扫描，逐目录调用 = 平方；
+    # 2. 候选集用 **Qdrant 真实库**，不是 COLLECTIONS_DIR 目录名——
+    #    legacy 文本只可能存在于真实库（chunk 在 Qdrant 里），而目录里
+    #    还躺着数千个测试残留尸体目录；逐尸体打一次 Qdrant/读一次
+    #    files.json 是纯粹的浪费。
+    from src.identity.visibility import visible_collection_ids as _vis_ids
+
+    _actor = _actor_or_none()
+    _visible_names = _vis_ids(_actor) if _actor is not None else None
+    try:
+        _real_cols = [c for c in services.db.list_collections()
+                      if not c.startswith("__")]
+    except Exception:
+        _real_cols = []
+
+    # Fallback: search all collections for legacy source
+    if not file_path:
+        for _col in _real_cols:
+            if _visible_names is not None and _col not in _visible_names:
+                continue
+            legacy_text = _read_legacy_text(filename, _col)
+            if legacy_text:
+                import tempfile
+                tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
+                tmp.write(legacy_text)
+                tmp.close()
+                file_path = Path(tmp.name)
+                break
+
+    if not file_path:
+        raise ApiError(404, "file_not_found", "File not found")
+    if not file_path.is_file():
+        raise ApiError(404, "file_not_found", "File not found")
+
+    # Never serve shared parse cache as "original" even if path resolution fails open
+    if file_path.name == "parsed.txt":
+        raise HTTPException(
+            status_code=404,
+            detail="Original file blob not found (only parsed text cache exists)",
+        )
+
+    suffix = file_path.suffix.lower()
+    content = file_path.read_bytes()
+
+    media_map = {
+        ".pdf": "application/pdf",
+        ".txt": "text/plain; charset=utf-8",
+        ".md": "text/markdown; charset=utf-8",
+        ".markdown": "text/markdown; charset=utf-8",
+        ".csv": "text/csv; charset=utf-8",
+        ".tsv": "text/tab-separated-values; charset=utf-8",
+        ".json": "application/json",
+        ".jsonl": "application/x-ndjson",
+        ".html": "text/html; charset=utf-8",
+        ".htm": "text/html; charset=utf-8",
+        ".log": "text/plain; charset=utf-8",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".doc": "application/msword",
+        ".docm": "application/vnd.ms-word.document.macroEnabled.12",
+        ".dotx": "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".xls": "application/vnd.ms-excel",
+        ".xlsm": "application/vnd.ms-excel.sheet.macroEnabled.12",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".ppt": "application/vnd.ms-powerpoint",
+        ".pptm": "application/vnd.ms-powerpoint.presentation.macroEnabled.12",
+    }
+    media = media_map.get(suffix, "application/octet-stream")
+
+    safe_ascii_name = _ascii_filename(file_path.name)
+    return Response(
+        content=content,
+        media_type=media,
+        headers={
+            # Latin-1 only in raw header values — Chinese/CJK names must use
+            # RFC 5987 filename* or an ASCII fallback (Starlette encodes headers
+            # as latin-1 and raises 400 on non-ASCII header bytes).
+            "Content-Disposition": _content_disposition_inline(file_path.name),
+            "Content-Length": str(len(content)),
+            "Accept-Ranges": "bytes",
+            "X-Content-Type-Options": "nosniff",
+            # ASCII-only: File Viewer uses this for extension routing when present
+            "X-File-Name": safe_ascii_name,
+        },
+    )
+
+
+def _ascii_filename(filename: str) -> str:
+    """ASCII-safe basename for HTTP headers (latin-1 constraint)."""
+    name = Path(filename).name or "file"
+    ascii_name = (
+        name.encode("ascii", "replace")
+        .decode("ascii")
+        .replace('"', "_")
+        .replace("\\", "_")
+        .replace("?", "_")
+    )
+    # Prefer keeping extension for File Viewer routing
+    if not ascii_name or ascii_name in {".", ".."} or all(c in "._?" for c in ascii_name):
+        suf = Path(name).suffix
+        ascii_name = f"file{suf}" if suf else "file.bin"
+    return ascii_name
+
+
+def _content_disposition_inline(filename: str) -> str:
+    """Build a Content-Disposition value safe for HTTP headers (latin-1)."""
+    from urllib.parse import quote
+
+    name = Path(filename).name or "file"
+    ascii_name = _ascii_filename(name)
+    # RFC 5987 UTF-8 filename*
+    utf8_star = quote(name, safe="")
+    return f"inline; filename=\"{ascii_name}\"; filename*=UTF-8''{utf8_star}"
+
+
+@router.get("/documents/extracted/{filename:path}")
+def get_extracted_text(
+    filename: str,
+    collection: str | None = None,
+    storage_file: str | None = None,
+    version_id: str | None = None,
+):
+    """Return parsed/extracted text as JSON with format metadata.
+
+    Response: { "text": "...", "format": "markdown" | "text" }
+
+    Optional *storage_file* selects a specific version blob for preview
+    (Log → version-update message detail / All Files → Old versions).
+
+    Optional *version_id* pins Qdrant stitch to that version when multiple
+    history rows share the same storage basename (legacy overwrite case).
+    """
+    source_key = filename
+    if not filename.startswith("__") and "/" in filename:
+        source_key = Path(filename).name
+    file_path = _find_file_path(
+        source_key,
+        collection,
+        storage_file=storage_file,
+        version_id=version_id,
+    )
+
+    # Pinned history blob missing → never substitute Qdrant/legacy text from
+    # another version (that is how unsupported old .png showed random Source).
+    if not file_path and (storage_file or version_id):
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Version blob not found: "
+                f"{Path(storage_file).name if storage_file else (version_id or '')}. "
+                "No Source text is available for this version."
+            ),
+        )
+
+    # Legacy fallback: source not in files.json → read from Qdrant
+    if not file_path and collection:
+        legacy_text = _read_legacy_text(filename, collection)
+        if legacy_text:
+            import tempfile
+            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
+            tmp.write(legacy_text)
+            tmp.close()
+            file_path = Path(tmp.name)
+
+    # 兜底遍历的公共准备（两个 fallback 块共用）。
+    # RBAC：兜底遍历必须限定在可见集内——否则给一个文件名就能
+    # 从任意（包括不可见的）库读出内容。
+    # ⚠️⚠️ 两条实测教训（2026-09-19 真实走查抓到，一次请求 ~30s）：
+    # 1. 可见集必须**循环外算一次**——is_collection_visible 内部走
+    #    find_collection_by_qdrant_name → 全目录扫描，逐目录调用 = 平方；
+    # 2. 候选集用 **Qdrant 真实库**，不是 COLLECTIONS_DIR 目录名——
+    #    legacy 文本只可能存在于真实库（chunk 在 Qdrant 里），而目录里
+    #    还躺着数千个测试残留尸体目录；逐尸体打一次 Qdrant/读一次
+    #    files.json 是纯粹的浪费。
+    from src.identity.visibility import visible_collection_ids as _vis_ids
+
+    _actor = _actor_or_none()
+    _visible_names = _vis_ids(_actor) if _actor is not None else None
+    try:
+        _real_cols = [c for c in services.db.list_collections()
+                      if not c.startswith("__")]
+    except Exception:
+        _real_cols = []
+
+    # Fallback: search all collections for legacy source
+    if not file_path:
+        for _col in _real_cols:
+            if _visible_names is not None and _col not in _visible_names:
+                continue
+            legacy_text = _read_legacy_text(filename, _col)
+            if legacy_text:
+                import tempfile
+                tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
+                tmp.write(legacy_text)
+                tmp.close()
+                file_path = Path(tmp.name)
+                break
+
+    if not file_path:
+        raise ApiError(404, "file_not_found", "File not found")
+
+    # Get file_type from files.json index
+    from src.collections.file_index import load_for_read as load_file_index
+    fmt = "text"
+    lookup_src = source_key
+    if COLLECTIONS_DIR.is_dir():
+        # 同上：可见集一次 + 只看 Qdrant 真库（尸体目录不读 files.json）
+        for _col in _real_cols:
+            if _visible_names is not None and _col not in _visible_names:
+                continue
+            col_dir = COLLECTIONS_DIR / _col
+            if not col_dir.is_dir():
+                continue
+            idx = load_file_index(col_dir.name)
+            for fid, entry in idx.items():
+                if entry.get("source") == lookup_src:
+                    fmt = entry.get("file_type", "text")
+                    break
+
+    suffix = file_path.suffix.lower()
+    text_suffixes = {".txt", ".md", ".csv", ".tsv", ".json", ".jsonl", ".html", ".htm", ".log"}
+    # PDF re-parse is slow; Office (docx/xlsx/pptx) parse is usually acceptable
+    # for Source when cache is missing.
+    heavy_pdf = {".pdf"}
+    office_parse = {".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls"}
+
+    # Shared parsed.txt for *supported current* version only.
+    # Historical storage_file / version_id must never fall through to the
+    # current parsed.txt or a shared ".extracted.txt" from a later overwrite.
+    use_shared_parsed = True
+    fid = _file_id_from_source(source_key) if collection else None
+    is_historical = False
+    if collection and fid:
+        _, cur_unsupported = _current_version_meta(collection, fid)
+        cur_vid: str | None = None
+        try:
+            from src.file_mgmt.store import get_db as _get_db
+
+            _conn = _get_db(collection)
+            try:
+                _crow = _conn.execute(
+                    "SELECT current_version_id FROM files WHERE file_id=?",
+                    (fid,),
+                ).fetchone()
+                if _crow:
+                    cur_vid = _crow["current_version_id"]
+            finally:
+                _conn.close()
+        except Exception:
+            cur_vid = None
+
+        if version_id and cur_vid and version_id != cur_vid:
+            is_historical = True
+            use_shared_parsed = False
+        elif version_id and not cur_vid:
+            is_historical = True
+            use_shared_parsed = False
+        elif storage_file and not _is_current_storage_file(
+            collection, fid, storage_file
+        ):
+            # Non-current blob name → historical even when *current* is unsupported
+            # (otherwise we would serve the latest shared .extracted.txt).
+            is_historical = True
+            use_shared_parsed = False
+        elif cur_unsupported:
+            use_shared_parsed = False
+    elif storage_file or version_id:
+        use_shared_parsed = False
+        is_historical = True
+
+    def _respond(
+        body: str,
+        body_fmt: str,
+        *,
+        preview_hint: str | None = None,
+    ) -> dict:
+        """Fill blank image file_ids then build the extract response."""
+        out_text = body
+        if fid and out_text:
+            out_text = _fill_empty_image_file_ids(out_text, fid)
+        payload: dict = {"text": out_text, "format": body_fmt}
+        if preview_hint:
+            payload["preview_hint"] = preview_hint
+        return payload
+
+    # Version-isolated dir (files/{file_id}/{version_id}/) — safe for current
+    # and historical; do not use sibling versions' caches.
+    version_isolated = bool(
+        version_id and file_path.parent.name == version_id
+    )
+
+    if use_shared_parsed or version_isolated:
+        parsed_path = file_path.parent / "parsed.txt"
+        if parsed_path.is_file():
+            return _respond(parsed_path.read_text(encoding="utf-8"), fmt)
+
+    # Per-blob extract cache next to this version's blob
+    blob_cache = file_path.parent / f"{file_path.name}.extracted.txt"
+    if is_historical and version_id and not version_isolated:
+        # Legacy flat layout: scope cache by version_id prefix
+        scoped = (
+            file_path.parent
+            / f"{file_path.name}.{version_id[:12]}.extracted.txt"
+        )
+        if scoped.is_file():
+            blob_cache = scoped
+    if blob_cache.is_file():
+        try:
+            return _respond(
+                blob_cache.read_text(encoding="utf-8"),
+                "markdown" if suffix in {".md", ".docx", ".pdf"} else "text",
+            )
+        except Exception:
+            pass
+    # Current version flat layout: unscoped .extracted.txt
+    if not is_historical:
+        legacy_blob_cache = file_path.parent / f"{file_path.name}.extracted.txt"
+        if legacy_blob_cache.is_file() and legacy_blob_cache != blob_cache:
+            try:
+                return _respond(
+                    legacy_blob_cache.read_text(encoding="utf-8"),
+                    "markdown" if suffix in {".md", ".docx", ".pdf"} else "text",
+                )
+            except Exception:
+                pass
+
+    if suffix in text_suffixes:
+        try:
+            return _respond(
+                file_path.read_text(encoding="utf-8", errors="replace"),
+                "markdown" if suffix == ".md" else "text",
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to read file: {e}")
+
+    # Historical: always try version_id stitch first (unique per version even when
+    # multiple rows share one on-disk basename after legacy overwrite).
+    if is_historical and collection:
+        stitched = _stitch_version_text_from_chunks(
+            collection,
+            source_key,
+            storage_file or file_path.name,
+            version_id=version_id,
+        )
+        if stitched:
+            try:
+                blob_cache.write_text(stitched, encoding="utf-8")
+            except Exception:
+                pass
+            fmt_out = (
+                "pdf"
+                if suffix in heavy_pdf
+                else ("markdown" if suffix in {".docx", ".doc", ".md"} else "text")
+            )
+            return _respond(stitched, fmt_out)
+        # Historical PDF: re-parse when blob is version-isolated (unique path)
+        # or storage basename is not the current version's name. Same basename
+        # on flat disk is ambiguous — only then return empty + prefer Raw.
+        if suffix in heavy_pdf:
+            same_name_as_current = _is_current_storage_file(
+                collection, fid or "", storage_file or file_path.name
+            )
+            if version_isolated or not same_name_as_current:
+                pass  # fall through to full re-parse of this blob
+            else:
+                return _respond("", "pdf", preview_hint="raw")
+
+    from src.parsers import PARSERS
+
+    parser = PARSERS.get(suffix)
+    if parser is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file format for text extract: {suffix}",
+        )
+
+    try:
+        doc = parser.parse(file_path)
+        text = doc.content or "(No text content extracted)"
+        fmt = doc.file_type
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to parse file: {e}")
+
+    if fid and text:
+        text = _fill_empty_image_file_ids(text, fid)
+
+    try:
+        blob_cache.write_text(text, encoding="utf-8")
+    except Exception:
+        pass
+    if use_shared_parsed:
+        try:
+            (file_path.parent / "parsed.txt").write_text(text, encoding="utf-8")
+        except Exception:
+            pass
+
+    return _respond(text, fmt)
+
+
+def _fill_empty_image_file_ids(text: str, file_id: str) -> str:
+    """Rewrite ``file_id:`` (empty) inside :::image fences to the managed file id.
+
+    Parsers leave ``file_id:`` blank; ingest usually fills it. Historical re-parse
+    and older caches often still have blanks, which break Source image URLs.
+    """
+    if not text or not file_id or ":::image" not in text:
+        return text
+    import re
+
+    return re.sub(
+        r"(:::image[ \t]*\nimage_id:[ \t]*[a-f0-9]+[ \t]*\nfile_id:)[ \t]*\n",
+        rf"\1 {file_id}\n",
+        text,
+    )
+
+
+def _stitch_version_text_from_chunks(
+    collection_id: str,
+    source: str,
+    storage_file: str,
+    version_id: str | None = None,
+) -> str | None:
+    """Rebuild Source text from Qdrant chunks for a historical version blob.
+
+    Prefers explicit *version_id* (unique). Falls back to lookup via
+    ``file_versions.storage_file_id`` (ambiguous when several versions share
+    one basename after a legacy overwrite).
+    """
+    try:
+        from src.file_mgmt.store import get_db
+        from src.services import services
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+        fid = _file_id_from_source(source)
+        if not fid or services.db is None:
+            return None
+        resolved_vid = (version_id or "").strip() or None
+        if not resolved_vid:
+            safe = Path(storage_file).name
+            conn = get_db(collection_id)
+            try:
+                # Prefer non-current row when multiple share storage basename
+                row = conn.execute(
+                    """SELECT fv.version_id FROM file_versions fv
+                       JOIN files f ON f.file_id = fv.file_id
+                       WHERE fv.file_id=? AND fv.storage_file_id=?
+                       ORDER BY CASE WHEN fv.version_id = f.current_version_id
+                                     THEN 1 ELSE 0 END,
+                                fv.version_no DESC
+                       LIMIT 1""",
+                    (fid, safe),
+                ).fetchone()
+            finally:
+                conn.close()
+            if not row:
+                return None
+            resolved_vid = row["version_id"]
+        filt = Filter(
+            must=[
+                FieldCondition(key="source", match=MatchValue(value=source)),
+                FieldCondition(
+                    key="version_id", match=MatchValue(value=resolved_vid)
+                ),
+            ]
+        )
+        total = services.db.count_by_filter(collection_id, filt)
+        if total <= 0:
+            return None
+        pts, _ = services.db.scroll_points(
+            collection=collection_id,
+            limit=min(total, 10000),
+            offset=None,
+            scroll_filter=filt,
+            with_payload=True,
+            with_vectors=False,
+        )
+        items = []
+        for p in pts:
+            pl = p.get("payload") or {}
+            if pl.get("chunk_type") == "parent":
+                continue  # prefer leaf / normal text
+            text = (pl.get("text") or "").strip()
+            if not text:
+                continue
+            items.append((int(pl.get("chunk_index") or 0), text))
+        if not items:
+            return None
+        items.sort(key=lambda x: x[0])
+        return "\n\n".join(t for _, t in items)
+    except Exception:
+        logger.debug(
+            "stitch version text failed for %s %s",
+            source,
+            storage_file,
+            exc_info=True,
+        )
+        return None
+
+@router.get("/documents/{collection}")
+def list_documents(collection: str):
+    _assert_col_visible(collection)
+    if not services.db.collection_exists(collection):
+        return {"collection": collection, "total_chunks": 0, "error": "Collection does not exist"}
+    from qdrant_client.models import FieldCondition, Filter, MatchValue
+    filter_cond = Filter(must_not=[FieldCondition(key="chunk_type", match=MatchValue(value="__config__"))])
+    try:
+        count = services.db.count_by_filter(collection, filter_cond)
+    except Exception:
+        count = services.db.count_points(collection)
+    return {"collection": collection, "total_chunks": count}
+
+
+@router.get("/documents/{collection}/files")
+async def list_files(collection: str):
+    _assert_col_visible(collection)
+    if not services.db.collection_exists(collection):
+        return {"collection": collection, "files": []}
+
+    def _fetch():
+        from src.collections.file_index import (
+            load_for_read as load_file_index,
+            resolve_display_name,
+        )
+
+        idx = load_file_index(collection)
+
+        files = []
+        # New format: from files.json index — sort by ingest time descending (newest first)
+        for fid, entry in sorted(
+            idx.items(),
+            key=lambda x: x[1].get("ingested_at", 0),
+            reverse=True,
+        ):
+            src = entry.get("source", fid) or fid
+            # Prefer SQLite current storage name for __file__: (multi-version / rename)
+            raw_src = str(src)
+            resolve_src = (
+                raw_src
+                if raw_src.startswith("__")
+                else f"__file__:{fid}"
+            )
+            display = resolve_display_name(
+                collection,
+                resolve_src,
+                payload_label=entry.get("source_label"),
+                index=idx,
+            )
+            # Prefer resolved name; never fall back to raw __file__/__meeting__ keys
+            label = (entry.get("source_label") or "").strip()
+            if not display and label and not label.startswith("__"):
+                display = label
+            if display.startswith("Note: "):
+                display = display[len("Note: ") :].strip() or display
+            if display.startswith("Meeting: "):
+                display = display[len("Meeting: ") :].strip() or display
+            files.append({
+                "source": raw_src if raw_src.startswith("__") else resolve_src,
+                # Index key is the managed file_id (needed to open FileMgmt detail)
+                "file_id": fid,
+                "chunk_count": entry.get("chunks", 0),
+                "file_type": entry.get("file_type", ""),
+                "original_ext": entry.get("original_ext", ""),
+                "display_name": display or label or fid[:8],
+                "has_meeting": raw_src.startswith("__meeting__:"),
+                "note_title": label if entry.get("file_type") == "note" else "",
+            })
+
+        # Legacy: scroll Qdrant for chunks without file_id (created before file_id system).
+        # Use is_null filter so Qdrant returns ONLY legacy chunks instead of streaming
+        # the entire collection (which is O(N) in chunk count and slow for big collections,
+        # especially when the upload path is also hitting Qdrant concurrently).
+        from qdrant_client.models import (
+            FieldCondition, Filter, MatchValue, IsNullCondition, PayloadField,
+        )
+        legacy_filter = Filter(
+            must=[
+                IsNullCondition(is_null=PayloadField(key="file_id")),
+            ],
+            must_not=[
+                FieldCondition(key="chunk_type", match=MatchValue(value="__config__")),
+            ],
+        )
+        legacy_sources: dict[str, int] = {}
+        offset = None
+        while True:
+            points, offset = services.db.scroll_points(
+                collection=collection, limit=1000, offset=offset,
+                with_payload=["source"],
+                with_vectors=False, scroll_filter=legacy_filter,
+            )
+            for p in points:
+                src = p.get("payload", {}).get("source", "unknown")
+                legacy_sources[src] = legacy_sources.get(src, 0) + 1
+            if offset is None:
+                break
+
+        indexed_sources = {e.get("source") for e in idx.values()}
+        for src, count in sorted(legacy_sources.items(), key=lambda x: x[0]):
+            if src not in indexed_sources:
+                files.append({
+                    "source": src,
+                    "chunk_count": count,
+                    "file_type": "",
+                    "display_name": src,
+                })
+
+        # Attach summary status for each file (definitive toggle state)
+        try:
+            from src.rag.summary_manager import SummaryManager
+            sm = SummaryManager(db=services.db)
+            summaries = sm.get_doc_summaries(collection, included_only=False)
+            summary_map: dict[str, dict] = {s["source"]: s for s in summaries}
+            for f in files:
+                ds = summary_map.get(f["source"])
+                f["has_summary"] = ds is not None
+                f["include_in_summary"] = ds.get("include_in_summary", True) is not False if ds else None
+        except Exception:
+            for f in files:
+                f["has_summary"] = None
+                f["include_in_summary"] = None
+
+        return {"collection": collection, "files": files}
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _fetch)
+
+
+def _resolve_current_version_id(collection: str, source: str) -> str | None:
+    """Best-effort current version_id for a managed ``__file__:{id}`` source."""
+    if not source.startswith("__file__:"):
+        return None
+    fid = source[len("__file__:") :].strip()
+    if not fid:
+        return None
+    try:
+        from src.file_mgmt.store import get_db
+
+        conn = get_db(collection)
+        try:
+            row = conn.execute(
+                "SELECT current_version_id FROM files WHERE file_id=?", (fid,)
+            ).fetchone()
+            return (row["current_version_id"] if row else None) or None
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+
+def _normalize_chunk_source_key(source: str) -> str:
+    """Canonical Qdrant source key — accept ``file:{id}`` alias as ``__file__:{id}``."""
+    s = (source or "").strip()
+    if s.startswith("file:") and not s.startswith("file://"):
+        return f"__file__:{s[len('file:'):].strip()}"
+    return s
+
+
+def _jsonable_meta(value):
+    """Coerce payload values so the chunks API can return every metadata field."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_jsonable_meta(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _jsonable_meta(item) for key, item in value.items()}
+    return str(value)
+
+
+def serialize_chunk_point(point_id, payload: dict | None) -> dict:
+    """File-detail chunk row: body + every Qdrant payload field except internals."""
+    pl = payload or {}
+    out = {
+        "id": point_id,
+        "text": pl.get("text", ""),
+        "chunk_index": pl.get("chunk_index", 0),
+        "file_type": pl.get("file_type", ""),
+        "context": pl.get("context", ""),
+        "chunk_type": pl.get("chunk_type", "normal"),
+        "parent_id": pl.get("parent_id"),
+        "summary": pl.get("summary", ""),
+        "version_id": pl.get("version_id") or "",
+        "archived": bool(pl.get("archived")),
+        "char_offset": pl.get("char_offset"),
+        "page_number": pl.get("page_number"),
+        "slide_number": pl.get("slide_number"),
+        "section_label": pl.get("section_label"),
+        "heading_path": pl.get("heading_path"),
+        "note_id": pl.get("note_id", ""),
+        "meeting_id": pl.get("meeting_id", ""),
+    }
+    skip = {"text", "images"}
+    for key, value in pl.items():
+        if key in out or key in skip or str(key).startswith("_"):
+            continue
+        out[key] = _jsonable_meta(value)
+    text = out.get("text") or ""
+    stored_images = pl.get("images")
+    if (isinstance(stored_images, list) and stored_images) or ":::image" in text:
+        try:
+            from src.parsers.image_utils import refresh_chunk_image_refs
+
+            out["images"] = refresh_chunk_image_refs(
+                text,
+                existing=stored_images if isinstance(stored_images, list) else None,
+            )
+        except Exception:
+            if isinstance(stored_images, list):
+                out["images"] = stored_images
+    return out
+
+
+@router.get("/documents/{collection}/files/{source:path}/chunks")
+def get_file_chunks(
+    collection: str,
+    source: str,
+    limit: int = 100,
+    offset: int = 0,
+    include_archived: bool = False,
+    version_id: str | None = None,
+):
+    """List chunks for a document source.
+
+    By default returns the **current** version only:
+    - Prefer points with ``version_id == files.current_version_id``
+    - Else non-archived points (legacy rows without version_id)
+
+    When *version_id* is set (old version open), return only that version's
+    points and include archived ones (history rows are archived after upload).
+    """
+    _assert_col_visible(collection)
+    source = _normalize_chunk_source_key(source)
+    if not services.db.collection_exists(collection):
+        return {"collection": collection, "source": source, "chunks": [], "total": 0}
+
+    from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+    must = [FieldCondition(key="source", match=MatchValue(value=source))]
+    must_not: list = []
+    resolved_version = (version_id or "").strip() or None
+    # Current version pin (only when not asking for a specific historical version)
+    cur_vid: str | None = None
+    pinned_to_current_version = False
+
+    if resolved_version:
+        must.append(
+            FieldCondition(key="version_id", match=MatchValue(value=resolved_version))
+        )
+        # Historical versions are archived=true after a newer upload
+        include_archived = True
+    else:
+        # Current open: pin to current_version_id when known so leftover
+        # non-archived points from older uploads do not pollute Chunks.
+        cur_vid = _resolve_current_version_id(collection, source)
+        if cur_vid:
+            must.append(
+                FieldCondition(key="version_id", match=MatchValue(value=cur_vid))
+            )
+            pinned_to_current_version = True
+        if not include_archived:
+            must_not.append(
+                FieldCondition(key="archived", match=MatchValue(value=True))
+            )
+
+    filter_cond = Filter(must=must, must_not=must_not or None)
+
+    total = services.db.count_by_filter(collection, filter_cond)
+
+    # Fallback A: legacy docs with no version_id on the file row (never pinned).
+    if (
+        total == 0
+        and not resolved_version
+        and not include_archived
+        and not pinned_to_current_version
+    ):
+        fallback_must = [
+            FieldCondition(key="source", match=MatchValue(value=source))
+        ]
+        fallback_not = [
+            FieldCondition(key="archived", match=MatchValue(value=True))
+        ]
+        filter_cond = Filter(must=fallback_must, must_not=fallback_not)
+        total = services.db.count_by_filter(collection, filter_cond)
+
+    # Fallback B: pinned to current_version_id but 0 hits — common when points
+    # lack version_id (older ingest) while files.current_version_id is set.
+    # Match non-archived points for this source only (do not include archived
+    # history of other versions).
+    if total == 0 and pinned_to_current_version and not resolved_version:
+        fallback_must = [
+            FieldCondition(key="source", match=MatchValue(value=source))
+        ]
+        fallback_not = [
+            FieldCondition(key="archived", match=MatchValue(value=True))
+        ]
+        filter_cond = Filter(must=fallback_must, must_not=fallback_not)
+        total = services.db.count_by_filter(collection, filter_cond)
+
+    # Fetch ALL chunks for the file, then sort, then paginate.
+    # Qdrant returns chunks in insertion order, not sorted by chunk_index,
+    # so we must sort before applying limit/offset pagination.
+    all_points, _ = services.db.scroll_points(
+        collection=collection,
+        limit=total if total > 0 else 10000,
+        offset=None,
+        scroll_filter=filter_cond,
+        with_payload=True,
+        with_vectors=False,
+    )
+
+    def _point_to_chunk(p: dict) -> dict:
+        return serialize_chunk_point(p["id"], p.get("payload") or {})
+
+    chunks = [_point_to_chunk(p) for p in all_points]
+
+    # ── Attach child chunks missing version_id ──────────────────────────
+    # Parent-child ingest stamps version_id on parents when re-indexing a
+    # new file version, but many historical child points only have
+    # parent_id (no version_id / is_current). Pinning the scroll to
+    # current_version_id then returns parents with 0 children.
+    # Recover by loading children for this source whose parent_id is in
+    # the returned parent set.
+    parent_ids = {
+        c["id"] for c in chunks if c.get("chunk_type") == "parent"
+    }
+    have_children = any(c.get("chunk_type") == "child" for c in chunks)
+    if parent_ids and not have_children:
+        child_must = [
+            FieldCondition(key="source", match=MatchValue(value=source)),
+            FieldCondition(key="chunk_type", match=MatchValue(value="child")),
+        ]
+        child_not: list = []
+        # Historical open already sets include_archived=True; for current
+        # view still skip file-level archived children when possible.
+        if not include_archived and not resolved_version:
+            child_not.append(
+                FieldCondition(key="archived", match=MatchValue(value=True))
+            )
+        child_filter = Filter(
+            must=child_must, must_not=child_not or None
+        )
+        try:
+            child_points, _ = services.db.scroll_points(
+                collection=collection,
+                limit=10000,
+                offset=None,
+                scroll_filter=child_filter,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception:
+            logger.exception(
+                "get_file_chunks: failed to load children for %s/%s",
+                collection,
+                source,
+            )
+            child_points = []
+        seen_ids = {c["id"] for c in chunks}
+        attached = 0
+        for p in child_points:
+            pl = p.get("payload") or {}
+            pid = pl.get("parent_id")
+            if not pid or pid not in parent_ids:
+                continue
+            cid = str(p["id"])
+            if cid in seen_ids:
+                continue
+            chunks.append(_point_to_chunk(p))
+            seen_ids.add(cid)
+            attached += 1
+        if attached:
+            total = len(chunks)
+            logger.info(
+                "get_file_chunks: attached %d children missing version pin "
+                "for %s parents (source=%s)",
+                attached,
+                len(parent_ids),
+                source[:80],
+            )
+
+    # Sort: group parent with its children (parent0, child0_0, child0_1, parent1, …)
+    parent_idx_map = {
+        c["id"]: c["chunk_index"]
+        for c in chunks
+        if c.get("chunk_type") == "parent"
+    }
+
+    def _sort_key(c):
+        ct = c.get("chunk_type", "normal")
+        ci = c.get("chunk_index", 0)
+        pid = c.get("parent_id")
+        if ct == "parent":
+            return (ci, 0, 0)  # parent comes before its children
+        if ct == "child":
+            parent_ci = parent_idx_map.get(pid, 9999)
+            return (parent_ci, 1, ci)
+        return (ci, 0, 0)
+
+    chunks.sort(key=_sort_key)
+
+    # Apply pagination after sorting
+    chunks = chunks[offset : offset + limit]
+
+    return {
+        "collection": collection,
+        "source": source,
+        "chunks": chunks,
+        "total": total,
+    }

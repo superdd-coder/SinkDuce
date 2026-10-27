@@ -1,0 +1,291 @@
+"""Agentic RAG v2 node functions — pure functions for each pipeline stage.
+
+Each node mutates AgentState in-place. Retrieval/grading helpers are module-private.
+
+Grade is a single combined phase: relevance judgment + knowledge record update
+in one LLM call, using retained_info summary as context across iterations.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from collections.abc import Callable
+
+from src.providers.base import LLMProvider
+from src.rag.agent_prompts import (
+    GRADE_COMBINED_SYSTEM,
+    GRADE_COMBINED_USER,
+    SCOPED_GRADE_SYSTEM,
+    SCOPED_GRADE_USER,
+)
+from src.rag.agent_state import AgentState
+from src.rag.retriever import RetrievedChunk
+
+logger = logging.getLogger(__name__)
+from src.rag import get_log_ctx as _ctx
+
+# ══════════════════════════════════════════════════════════════════════════
+# Helpers
+# ══════════════════════════════════════════════════════════════════════════
+
+def _parse_json(text: str) -> dict | list:
+    """Parse JSON from LLM output, handling markdown fences and common repair."""
+    import re
+
+    text = text.strip()
+    # Strip markdown code fences
+    if text.startswith("```"):
+        lines = text.split("\n")
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines)
+
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Repair: try escaping bare newlines inside JSON strings
+    # A newline that appears between an opening quote and closing quote
+    # inside a JSON value is likely an unescaped newline
+    repaired = re.sub(
+        r'(?<=[^\\])\\n', r'\\\\n',
+        text,
+    )
+    # Also handle literal newlines that break JSON string values:
+    # find "key": "value\nwith\nnewlines" → escape them
+    # Simpler approach: escape ALL bare newlines that aren't structural
+    repaired = []
+    in_string = False
+    escape_next = False
+    for ch in text:
+        if escape_next:
+            repaired.append(ch)
+            escape_next = False
+            continue
+        if ch == '\\':
+            repaired.append(ch)
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            repaired.append(ch)
+            continue
+        if in_string and ch == '\n':
+            repaired.append('\\n')
+        else:
+            repaired.append(ch)
+    repaired_text = ''.join(repaired)
+
+    return json.loads(repaired_text)
+
+
+class _JSONResponseError(ValueError):
+    """A reply exhausted parsing/validation retries, separate from provider failures."""
+
+
+def _llm_generate_json(
+    llm: LLMProvider,
+    prompt: str | list,
+    system: str,
+    temperature: float | None = None,
+    max_retries: int = 2,
+    thinking: bool | None = None,
+    max_tokens: int = 1024,
+    validate: Callable[[object], None] | None = None,
+) -> dict | list:
+    """Parse and optionally validate JSON; retry either failure with the same evidence."""
+    last_error = None
+    augmented_prompt = prompt
+    for attempt in range(max_retries + 1):
+        raw = llm.generate(augmented_prompt, system=system, temperature=temperature, max_tokens=max_tokens, thinking=thinking).strip()
+        try:
+            result = _parse_json(raw)
+            if validate:
+                validate(result)
+            return result
+        except (json.JSONDecodeError, ValueError, TypeError, KeyError) as e:
+            last_error = e
+            logger.warning(
+                "[Grade] JSON parse retry %d/%d: %s",
+                attempt + 1, max_retries + 1, e,
+            )
+            if attempt < max_retries:
+                from src.rag.agent_prompts import JSON_CORRECTION_HINT
+                augmented_prompt = (list(prompt) + [{"type": "text", "text": JSON_CORRECTION_HINT}]
+                                    if isinstance(prompt, list) else prompt + JSON_CORRECTION_HINT)
+    raise _JSONResponseError(f"Invalid JSON response after {max_retries + 1} attempts: {last_error}")
+
+
+def _validate_grade_response(result: object) -> None:
+    """Validate the original Grade fields; quotations retain their compatibility path."""
+    if not isinstance(result, dict):
+        raise TypeError("Grade requires a JSON object")
+    for key, expected in (("relevant_indices", list), ("retained_info", str), ("gap_analysis", str)):
+        if not isinstance(result.get(key), expected):
+            raise TypeError(f"Grade requires {key} of type {expected.__name__}")
+
+
+# _retrieve_across_collections — REMOVED (migrated to DirectQueryModule.retrieve)
+# _merge_and_rerank — REMOVED (migrated to DirectQueryModule.retrieve)
+
+def _dedup_by_id(
+    chunks: list[RetrievedChunk],
+    seen_ids: set[str],
+) -> tuple[list[RetrievedChunk], set[str]]:
+    """Filter chunks whose Qdrant point ID is already in seen_ids.
+
+    Returns (new_chunks, updated_seen_ids). The seen_ids set is NOT mutated;
+    the caller should update the state.
+
+    Falls back to chunk_id, then a text-prefix key when point id is missing,
+    so batches without ``metadata.id`` are not silently dropped.
+    """
+    new_ids: set[str] = set()
+    new_chunks: list[RetrievedChunk] = []
+    for c in chunks:
+        meta = c.metadata if isinstance(getattr(c, "metadata", None), dict) else {}
+        cid = meta.get("id") or meta.get("chunk_id") or ""
+        if not cid:
+            cid = f"txt:{hash((getattr(c, 'text', '') or '')[:240])}"
+        if cid and cid not in seen_ids and cid not in new_ids:
+            new_ids.add(cid)
+            new_chunks.append(c)
+    return new_chunks, new_ids
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Node 1: Retrieve & Rerank
+# ══════════════════════════════════════════════════════════════════════════
+
+# node_retrieve_and_rerank — REMOVED
+# (retrieval is handled by DirectQueryModule + VariantFetcher)
+
+def _chunk_in_list(chunk: RetrievedChunk, chunks: list[RetrievedChunk]) -> bool:
+    """Check if chunk is already in list by Qdrant point ID."""
+    cid = chunk.metadata.get("id", "")
+    return any(c.metadata.get("id") == cid for c in chunks if cid)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Node 2: Combined Grade — relevance + knowledge record in one LLM call
+# ══════════════════════════════════════════════════════════════════════════
+
+def node_combined_grade(
+    state: AgentState,
+    current_batch: list[RetrievedChunk],
+    *,
+    llm: LLMProvider,
+    temperature: float | None = None,
+) -> None:
+    """Combined grade: relevance judgment + knowledge record update in one LLM call.
+
+    Uses retained_info summary (not full chunk text) for previous knowledge,
+    keeping prompt size bounded across iterations.
+
+    Side effects:
+    - Promotes relevant chunks from current_batch to state.retained_chunks
+    - Updates state.retained_info, state.current_gap_analysis
+    """
+    state.grade_error = ""
+    if not current_batch:
+        logger.info(_ctx() + "[Grade] skipped: empty batch")
+        state.current_gap_analysis = "No relevant results found for the current query."
+        return
+
+    logger.info(_ctx() + "[Grade] combined: judging %d candidates (%d retained so far)",
+                len(current_batch), len(state.retained_chunks))
+
+    from src.rag.index_text import build_evidence_text
+
+    # Build candidate chunks text (full text, same format as before)
+    chunks_text_parts = []
+    for i, c in enumerate(current_batch):
+        src = c.metadata.get("source", "unknown")
+        col = c.metadata.get("collection", "unknown")
+        chunks_text_parts.append(
+            f"[{i}] (database: {col}, source: {src}) {build_evidence_text(c)}"
+        )
+    chunks_text = "\n---\n".join(chunks_text_parts)
+
+    # Previous knowledge / gaps (retained_info summary, not full chunk text)
+    previous_knowledge = state.retained_info if state.retained_info else "(none — this is the first search round)"
+    previous_gaps = state.current_gap_analysis if state.current_gap_analysis else "(none)"
+
+    template = SCOPED_GRADE_USER if state.original_user_question else GRADE_COMBINED_USER
+    system = SCOPED_GRADE_SYSTEM if state.original_user_question else GRADE_COMBINED_SYSTEM
+    prompt = template.format(
+        original_query=state.original_query,
+        original_user_question=state.original_user_question,
+        previous_knowledge=previous_knowledge,
+        previous_gaps=previous_gaps,
+        chunks_text=chunks_text,
+    )
+
+    try:
+        from src.rag.image_evidence import evidence_for_model
+        prompt = evidence_for_model(prompt, current_batch, llm)
+        result = _llm_generate_json(
+            llm, prompt, system,
+            temperature=temperature, thinking=False, max_tokens=8192,
+            validate=_validate_grade_response,
+        )
+    except _JSONResponseError as e:
+        logger.error(_ctx() + "[Grade] combined: JSON parse failed — %s", e)
+        _combined_grade_fallback(state, current_batch)
+        return
+
+    # ── Extract relevant indices & promote chunks ───────────────────
+    relevant_indices: list[int] = []
+    raw_indices = result.get("relevant_indices", [])
+    if isinstance(raw_indices, list):
+        n = len(current_batch)
+        relevant_indices = list(dict.fromkeys(i for i in raw_indices if type(i) is int and 0 <= i < n))
+        if any(type(i) is not int or not 0 <= i < n for i in raw_indices):
+            state.grade_error = "InvalidGradeIndices"
+
+    promoted = 0
+    for idx in relevant_indices:
+        chunk = current_batch[idx]
+        if not _chunk_in_list(chunk, state.retained_chunks):
+            state.retained_chunks.append(chunk)
+            promoted += 1
+
+    logger.info(_ctx() + "[Grade] combined: %d/%d relevant → %d promoted",
+                len(relevant_indices), len(current_batch), promoted)
+
+    # ── Update knowledge record fields ──────────────────────────────
+    from src.rag.evidence_integrity import grounded_findings
+
+    state.retained_info = grounded_findings(result, current_batch, relevant_indices)
+    state.current_gap_analysis = result["gap_analysis"].strip()
+    if state.grade_error:
+        state.current_gap_analysis = (state.current_gap_analysis + "\n" if state.current_gap_analysis else "") + (
+            "Some evidence references were invalid; support for the current query remains unverified."
+        )
+    elif not state.retained_chunks and not state.current_gap_analysis:
+        state.current_gap_analysis = "No supporting evidence retained for the current query."
+
+    logger.info(_ctx() + "[Grade] combined: info=%d chars gap=%r",
+                len(state.retained_info),
+                state.current_gap_analysis[:80] if state.current_gap_analysis else "")
+
+
+def _combined_grade_fallback(state: AgentState, current_batch: list[RetrievedChunk]) -> None:
+    """Fallback: promote first 3 chunks, mark insufficient."""
+    logger.warning(_ctx() + "[Grade] combined: FALLBACK — keeping first %d chunks", min(3, len(current_batch)))
+    for c in current_batch[:3]:
+        if not _chunk_in_list(c, state.retained_chunks):
+            state.retained_chunks.append(c)
+    if not state.retained_info:
+        state.retained_info = "Unable to evaluate relevance — fallback mode."
+    state.current_gap_analysis = "Unable to evaluate — the grader did not produce valid output."
+    state.grade_error = "InvalidGradeResponse"
+
+
+# node_check_and_rewrite — REMOVED (replaced by VariantFetcher variant generation)
+# node_decompose_query — REMOVED (moved to decomposer.py)
+# node_parallel_sub_queries — REMOVED (replaced by AgenticQueryService fan-out)

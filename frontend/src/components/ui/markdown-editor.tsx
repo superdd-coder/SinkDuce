@@ -1,0 +1,136 @@
+import { useState, useRef, type ReactNode } from "react"
+import { cn } from "@/lib/utils"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
+import { TiptapEditor } from "./tiptap-editor"
+import { tr } from "@/i18n/tr"
+import { preprocessDistillBlocks, postprocessDistillBlocks } from "./tiptap-editor"
+
+interface MarkdownEditorProps {
+  value: string
+  onChange?: (value: string) => void
+  className?: string
+  minHeight?: string
+  placeholder?: string
+  children?: ReactNode
+  readonly?: boolean
+  /** "block" = Tiptap WYSIWYG (default). "plain" = simple textarea + preview overlay. */
+  variant?: "block" | "plain"
+  /** Custom image upload handler. Receives a File, returns the URL to insert. */
+  onImageUpload?: (file: File) => Promise<string>
+  /** Called when a user clicks a note-id:// link inside the editor. */
+  onNoteLinkClick?: (noteId: string) => void
+  /** Called when user triggers distill action from slash command. */
+  onDistill?: () => void
+  /** Called when user clicks a distilled block to navigate to source note. */
+  onDistillNavigate?: (noteId: string) => void
+  /** Called when the Tiptap editor instance is ready. */
+  onEditorReady?: (editor: any) => void
+  /** Called when the editor gains focus (after click selection is applied). */
+  onEditorFocus?: () => void
+  /** Whether to show the built-in formatting toolbar. Default true. */
+  showToolbar?: boolean
+  /** Top offset for sticky toolbar (px). Default 0. */
+  stickyToolbarOffset?: number
+  /** Extra toolbar actions rendered at the right side. */
+  toolbarActions?: ReactNode
+  /**
+   * Remove default EditorContent padding (p-4).
+   * Note pane uses outer px/py so toolbar can sit tight above prose.
+   */
+  flush?: boolean
+  /** Enable `/` slash menu. Default true. Todo description etc. pass false. */
+  enableSlash?: boolean
+}
+
+// ─── Tiptap WYSIWYG editor ────────────────────────────────────────────────
+// Supports both edit mode and read-only mode via `readonly` prop.
+
+function TyporaEditor({
+  value,
+  onChange,
+  className,
+  placeholder,
+  children,
+  readonly = false,
+  onImageUpload,
+  onNoteLinkClick,
+  onDistill,
+  onDistillNavigate,
+  onEditorReady,
+  onEditorFocus,
+  showToolbar,
+  stickyToolbarOffset,
+  toolbarActions,
+  flush,
+  enableSlash,
+}: Omit<MarkdownEditorProps, "variant">) {
+  return (
+    <TiptapEditor
+      value={value}
+      onChange={onChange}
+      className={className}
+      placeholder={placeholder}
+      children={children}
+      readonly={readonly}
+      onImageUpload={onImageUpload}
+      onNoteLinkClick={onNoteLinkClick}
+      onDistill={onDistill}
+      onDistillNavigate={onDistillNavigate}
+      onEditorReady={onEditorReady}
+      onEditorFocus={onEditorFocus}
+      showToolbar={showToolbar}
+      stickyToolbarOffset={stickyToolbarOffset}
+      toolbarActions={toolbarActions}
+      flush={flush}
+      enableSlash={enableSlash}
+    />
+  )
+}
+
+// ─── Plain variant (simple textarea + preview overlay) ──────────────────────
+
+function PlainEditor({ value, onChange, className, minHeight, placeholder }: MarkdownEditorProps) {
+  const [focused, setFocused] = useState(false)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const isEmpty = !value.trim()
+
+  return (
+    <div className={cn("md-editor", className)} style={{ minHeight }}>
+      <textarea
+        ref={textareaRef}
+        value={value}
+        onChange={(e) => onChange?.(e.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        className={cn("md-editor-textarea", focused && "md-editor-textarea-focused")}
+        placeholder={placeholder}
+      />
+      {!focused && !isEmpty && (
+        <div className="md-editor-overlay" onClick={() => textareaRef.current?.focus()}>
+          <div className="prose prose-sm dark:prose-invert max-w-none">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{value}</ReactMarkdown>
+          </div>
+        </div>
+      )}
+      {!focused && isEmpty && (
+        <div className="md-editor-overlay" onClick={() => textareaRef.current?.focus()}>
+          <span className="text-muted-foreground italic text-sm">
+            {placeholder || tr("fileMgmt.writeMessagePh")}
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Public component ───────────────────────────────────────────────────────
+
+export function MarkdownEditor(props: MarkdownEditorProps) {
+  const { variant = "block" } = props
+  if (variant === "plain") return <PlainEditor {...props} />
+  return <TyporaEditor {...props} />
+}
+
+// Re-export utilities for backward compatibility
+export { preprocessDistillBlocks, postprocessDistillBlocks }

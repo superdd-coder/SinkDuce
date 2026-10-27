@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>SinkDuce</string>
+  <key>CFBundleDisplayName</key>
+  <string>SinkDuce</string>
+  <key>CFBundleIdentifier</key>
+  <string>app.sinkduce.desktop</string>
+  <key>CFBundleVersion</key>
+  <string>1.1.1</string>
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>SinkDuce captures system audio so meeting recordings include both sides of the conversation.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>SinkDuce uses the microphone for live meeting transcription.</string>
+</dict>
+</plist>

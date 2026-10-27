@@ -1,0 +1,6 @@
+.pm-document-mark { display: grid; place-items: center; flex: 0 0 30px; width: 30px; height: 32px; color: var(--pm-muted); }
+.pm-document-mark-symbol { width: 18px; height: 18px; }
+.pm-document-mark[data-kind=report] { color: var(--pm-green); }
+.pm-document-mark.is-large { flex-basis: 40px; width: 40px; height: 44px; border-radius: 12px; background: color-mix(in srgb, var(--pm-green) 4%, transparent); }
+.pm-document-mark.is-large .pm-document-mark-symbol { width: 21px; height: 21px; }
+.pm-artifact-meta-dot { width: 2px; height: 2px; flex: 0 0 2px; border-radius: 50%; background: currentColor; opacity: .45; }

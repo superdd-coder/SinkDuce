@@ -1,0 +1,351 @@
+"""Meeting QuickChat transcript helpers (ephemeral context).
+
+Transcript text is loaded from the meeting store on every LLM context
+build and injected after the fixed system prompt. It is never written
+to the session message table.
+
+Source priority matches GET /meetings/{id}/transcript (UI):
+  1. sentences.json (post-normalize; what the user sees in sections)
+  2. transcript.json via meeting.transcript_path
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from src.meeting.store import get_sentences, get_transcript
+
+logger = logging.getLogger(__name__)
+
+MEETING_SESSION_PREFIX = "meeting_"
+
+# Injected as the transcript slot when no sentences/transcript body exists.
+# Keeps layout stable (fixed system → transcript-or-notice → dialogue) and
+# tells the model not to invent a meeting summary.
+MEETING_TRANSCRIPT_UNAVAILABLE = (
+    "MEETING TRANSCRIPT STATUS: unavailable.\n"
+    "No transcript or sentence content is available for this meeting yet "
+    "(transcription may still be in progress, or this meeting has no audio "
+    "transcript).\n"
+    "Tell the user clearly that you do not have the meeting record yet. "
+    "Do not invent topics, decisions, action items, speaker quotes, "
+    "placeholder names like [project], or citation markers like [ref:N]."
+)
+
+
+def format_segments_for_chat(segments: list[dict[str, Any]]) -> str:
+    """Format segment dicts as numbered lines for the LLM system message.
+
+    Each segment may use keys: text / original_text, speaker_id / speaker.
+    """
+    lines: list[str] = []
+    auto_n = 0
+    for seg in segments:
+        text = (seg.get("text") or seg.get("original_text") or "").strip()
+        if not text:
+            continue
+        spk = seg.get("speaker_id") or seg.get("speaker") or "unknown"
+        raw_n = seg.get("ref_n")
+        if raw_n is None:
+            auto_n += 1
+            n = auto_n
+        else:
+            n = int(raw_n)
+        # [ref:N] matches MEETING_CHAT_SYSTEM_PROMPT so the model copies
+        # that form instead of bare [N] from a "[1] speaker:" header.
+        lines.append(f"[ref:{n}] {spk}: {text}")
+    return "\n".join(lines)
+
+
+def format_transcript_for_chat(transcript: Any) -> str:
+    """Format a TranscriptionResult (or similar) for the LLM system message."""
+    segments = getattr(transcript, "segments", None) or []
+    as_dicts: list[dict[str, Any]] = []
+    for seg in segments:
+        if isinstance(seg, dict):
+            as_dicts.append(seg)
+        else:
+            as_dicts.append({
+                "text": getattr(seg, "text", "") or "",
+                "speaker_id": getattr(seg, "speaker_id", None),
+            })
+    return format_segments_for_chat(as_dicts)
+
+
+def load_meeting_transcript_text(meeting_id: str) -> str | None:
+    """Load meeting body text for chat — same sources as the Meeting UI.
+
+    Prefers sentences.json (section pipeline) so chat matches what the user
+    sees even if transcript_path is missing. Falls back to transcript.json.
+    """
+    try:
+        sentences = get_sentences(meeting_id)
+        if sentences:
+            text = format_segments_for_chat([
+                {
+                    "text": s.get("original_text") or s.get("text") or "",
+                    "speaker_id": s.get("speaker") or s.get("speaker_id"),
+                }
+                for s in sentences
+            ])
+            if text.strip():
+                return text
+
+        transcript = get_transcript(meeting_id)
+        if transcript and transcript.segments:
+            text = format_transcript_for_chat(transcript)
+            if text.strip():
+                return text
+    except Exception:
+        logger.exception("Failed to load transcript for meeting %s", meeting_id)
+        return None
+    return None
+
+
+def load_general_summary_text(meeting_id: str) -> str:
+    """General tab markdown for meeting chat, or empty if missing."""
+    try:
+        from src.meeting.store import get_section_md
+
+        text = get_section_md(meeting_id, "tab_general")
+    except Exception:
+        logger.exception("Failed to load General summary for meeting %s", meeting_id)
+        return ""
+    return (text or "").strip()
+
+
+def speaker_display_map(meeting_id: str) -> dict[str, str]:
+    """Same name map the Meeting UI uses (people bindings + stored labels)."""
+    try:
+        from src.meeting.store import get_meeting
+
+        meeting = get_meeting(meeting_id)
+    except Exception:
+        return {}
+    if meeting is None:
+        return {}
+    keep = meeting.speaker_names if isinstance(meeting.speaker_names, dict) else None
+    people = meeting.speaker_people if isinstance(meeting.speaker_people, dict) else None
+    try:
+        from src.speakers.service import rebuild_speaker_names
+
+        names = rebuild_speaker_names(people, keep=keep)
+    except Exception:
+        names = dict(keep or {})
+    return {str(k): str(v).strip() for k, v in (names or {}).items() if str(v).strip()}
+
+
+def apply_speaker_display_names(text: str, names: dict[str, str]) -> str:
+    """Replace [spk:ID] with mapped display names (chat display only)."""
+    out = text or ""
+    for spk_id, name in sorted(names.items(), key=lambda kv: len(kv[0]), reverse=True):
+        out = out.replace(f"[spk:{spk_id}]", name)
+    return out
+
+
+def me_speaker_ids(meeting_id: str) -> set[str]:
+    """Speaker ids of this meeting bound to the People 'Me' person."""
+    try:
+        from src.meeting.store import get_meeting
+        from src.speakers.store import get_me_person_id
+
+        me_pid = get_me_person_id()
+        if not me_pid:
+            return set()
+        meeting = get_meeting(meeting_id)
+        people = getattr(meeting, "speaker_people", None) if meeting else None
+        if not isinstance(people, dict):
+            return set()
+        return {
+            str(sid)
+            for sid, pid in people.items()
+            if str(pid or "") == me_pid
+        }
+    except Exception:
+        logger.exception("Failed to resolve Me speaker ids for %s", meeting_id)
+        return set()
+
+
+def _annotate_me(names: dict[str, str], me_ids: set[str]) -> dict[str, str]:
+    """Mark the Me-bound speakers with '(you)' in a display-name map."""
+    if not me_ids:
+        return names
+    return {
+        sid: f"{name} (you)" if sid in me_ids else name
+        for sid, name in names.items()
+    }
+
+
+def format_speaker_mapping(meeting_id: str) -> str:
+    """Speaker id → display name lines for ephemeral meeting chat context."""
+    names = speaker_display_map(meeting_id)
+    if not names:
+        return "No speaker names configured for this meeting."
+    lines = ["Current speaker mapping:"]
+    for spk_id, name in _annotate_me(names, me_speaker_ids(meeting_id)).items():
+        lines.append(f"- {spk_id}: {name}")
+    return "\n".join(lines)
+
+
+def build_meeting_ephemeral_context(meeting_id: str) -> str:
+    """Speakers + General summary + allocated collections. Not persisted; rebuilt every turn."""
+    names = speaker_display_map(meeting_id)
+    me_ids = me_speaker_ids(meeting_id)
+    if names:
+        parts = [
+            "Current speaker mapping:\n"
+            + "\n".join(
+                f"- {spk_id}: {name}"
+                for spk_id, name in _annotate_me(names, me_ids).items()
+            )
+        ]
+    else:
+        parts = ["No speaker names configured for this meeting."]
+    summary = load_general_summary_text(meeting_id)
+    if summary:
+        parts.append(
+            "Meeting outline (General summary):\n\n"
+            + apply_speaker_display_names(summary, names)
+        )
+    allocated = _allocated_collection_line(meeting_id)
+    if allocated:
+        parts.append(allocated)
+    return "\n\n".join(parts)
+
+
+def _allocated_collection_line(meeting_id: str) -> str:
+    """Display names of the collections this meeting is allocated to.
+
+    Gives Meeting Chat a natural default to offer when the user wants to
+    create a Note but has not named a target collection.
+    """
+    from src.meeting.store import get_meeting
+
+    meeting = get_meeting(meeting_id)
+    if meeting is None:
+        return ""
+    from src.collections.store import collection_display_name
+
+    seen: list[str] = []
+    for cid in meeting.allocated_collections or []:
+        name = collection_display_name(cid)
+        if name and name not in seen:
+            seen.append(name)
+    if not seen:
+        return ""
+    return (
+        "Collections this meeting has been ingested into (allocated): "
+        + ", ".join(seen)
+        + "."
+    )
+
+
+def build_group_ephemeral_context(group_id: str) -> str:
+    """Roster for Group Chat: n, id, date, speakers, index status. Not persisted."""
+    from src.meeting.group_store import get_group
+    from src.meeting.store import get_meeting
+
+    group = get_group(group_id)
+    if group is None:
+        return "GROUP STATUS: not found."
+    lines = [f"Group: {group.title or group_id}", ""]
+    unindexed: list[str] = []
+    for mem in sorted(group.members, key=lambda m: m.n):
+        meeting = get_meeting(mem.meeting_id)
+        title = (meeting.title if meeting else None) or mem.meeting_id
+        date = ""
+        if meeting and meeting.created_at:
+            date = meeting.created_at.date().isoformat()
+        status = (meeting.transcript_index_status if meeting else "") or ""
+        idx = status if status else "missing"
+        archived = bool(
+            meeting is not None
+            and getattr(meeting, "archived", False) is True
+        )
+        marker = "  [archived; do not search]" if archived else ""
+        lines.append(
+            f"{mem.n}  {title}     id: {mem.meeting_id}  {date}  index:{idx}{marker}"
+        )
+        names = speaker_display_map(mem.meeting_id) if meeting else {}
+        if names:
+            annotated = _annotate_me(names, me_speaker_ids(mem.meeting_id))
+            mapped = " · ".join(f"{sid} {name}" for sid, name in annotated.items())
+            lines.append(f"   speakers: {mapped}")
+        if status != "ready" and not archived:
+            unindexed.append(f"{mem.n} {title}")
+    if unindexed:
+        lines.append("")
+        lines.append(
+            "Unindexed (do not search transcripts; tell the user): "
+            + "; ".join(unindexed)
+        )
+    return "\n".join(lines)
+
+
+def build_meeting_catalog_digest(
+    collections: list[str] | None = None,
+    *,
+    max_rows: int = 30,
+) -> str:
+    """Minimal meeting directory for Chat / Collection Quick Chat context.
+
+    Titles + dates only (no summaries): just enough for the model to judge
+    whether a question could concern meetings. Empty string → do not inject.
+    """
+    from src.meeting.catalog import catalog_rows, visible_meeting_ids
+
+    try:
+        ids = visible_meeting_ids(collections=[str(c) for c in (collections or []) if str(c).strip()])
+        if not ids:
+            return ""
+        rows = catalog_rows(ids)
+    except Exception:
+        logger.exception("Failed to build meeting catalog digest")
+        return ""
+    if not rows:
+        return ""
+    lines = [
+        "Meetings visible to this chat (title · date · transcript index):"
+    ]
+    for row in rows[:max_rows]:
+        status = "indexed" if row.get("index_ready") else "not indexed yet"
+        date = str(row.get("date") or "")
+        lines.append(f"- {row.get('title')} · {date} · {status}".rstrip(" ·"))
+    if len(rows) > max_rows:
+        lines.append(
+            f"(+{len(rows) - max_rows} more — call list_meeting_catalog for the full list)"
+        )
+    return "\n".join(lines)
+
+
+def read_group_meeting_summary(group_id: str, meeting_id: str) -> str:
+    """General summary for a group member, display names applied."""
+    import json
+
+    from src.meeting.group_store import get_group
+
+    group = get_group(group_id)
+    if group is None:
+        return json.dumps({"error": "Group not found"})
+    if not any(m.meeting_id == meeting_id for m in group.members):
+        return json.dumps({"error": "meeting_id not in this group"})
+    names = speaker_display_map(meeting_id)
+    text = apply_speaker_display_names(load_general_summary_text(meeting_id), names)
+    n = next((m.n for m in group.members if m.meeting_id == meeting_id), 0)
+    return json.dumps(
+        {"meeting_id": meeting_id, "n": n, "summary": text or ""},
+        ensure_ascii=False,
+    )
+
+
+def meeting_transcript_context_message(meeting_id: str) -> str:
+    """Ephemeral system content for the transcript slot (always non-empty).
+
+    Returns the formatted live transcript when available; otherwise the
+    explicit unavailable notice so the model does not hallucinate a summary.
+    """
+    text = load_meeting_transcript_text(meeting_id)
+    if text and text.strip():
+        return text
+    return MEETING_TRANSCRIPT_UNAVAILABLE

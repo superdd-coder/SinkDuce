@@ -1,0 +1,138 @@
+import { useEffect, useState, useCallback } from "react"
+import { getLocalHealth, getVersion, checkLatestRelease, type GitHubRelease } from "@/api/client"
+import { EDITION_LABEL } from "#edition/edition-label"
+import {
+  detectDesktopClient,
+  editionAllowsUpdate,
+  pickDesktopDownloadUrl,
+  shouldOfferUpdate,
+} from "@/lib/update-release"
+
+const IGNORED_KEY = "sinkduce-ignored-versions"
+const MOCK_KEY = "sinkduce-mock-update"
+
+function getIgnoredVersions(): Set<string> {
+  try {
+    const raw = localStorage.getItem(IGNORED_KEY)
+    if (raw) return new Set(JSON.parse(raw))
+  } catch {}
+  return new Set()
+}
+
+function compareVersions(a: string, b: string): number {
+  const na = a.replace(/^v/, "").split(".").map(Number)
+  const nb = b.replace(/^v/, "").split(".").map(Number)
+  for (let i = 0; i < Math.max(na.length, nb.length); i++) {
+    const da = na[i] || 0
+    const db = nb[i] || 0
+    if (da !== db) return da - db
+  }
+  return 0
+}
+
+export interface UpdateInfo {
+  currentVersion: string
+  latestVersion: string
+  releaseUrl: string
+  releaseBody: string
+  downloadUrl: string | null
+  desktop: boolean
+}
+
+export function useUpdateCheck() {
+  const [update, setUpdate] = useState<UpdateInfo | null>(null)
+  const [ignored, setIgnored] = useState(false)
+  const [currentVersion, setCurrentVersion] = useState<string>("—")
+
+  useEffect(() => {
+    let cancelled = false
+
+    const check = async () => {
+      let desktop = detectDesktopClient()
+      let mockUpdate = false
+      try {
+        const health = await getLocalHealth()
+        desktop = detectDesktopClient(health.desktop === true)
+        mockUpdate = health.mock_update === true
+      } catch {
+        /* health unavailable — keep Tauri/shell detection */
+      }
+
+      let storageMock = false
+      try {
+        storageMock =
+          typeof window !== "undefined" &&
+          window.localStorage?.getItem(MOCK_KEY) === "1"
+      } catch {
+        storageMock = false
+      }
+      if (!editionAllowsUpdate(EDITION_LABEL)) {
+        try {
+          const info = await getVersion()
+          if (!cancelled) setCurrentVersion(info.version)
+        } catch {
+          /* version unavailable */
+        }
+        return
+      }
+      if (mockUpdate || storageMock) {
+        if (!cancelled) {
+          setCurrentVersion("0.1.0")
+          setUpdate({
+            currentVersion: "0.1.0",
+            latestVersion: "v0.2.0",
+            releaseUrl: "https://github.com/superdd-coder/sinkduce/releases",
+            releaseBody: "### Features\n- Added visual model support for Dashscope one-shot setup\n- Improved local model load/download separation\n\n### Fixes\n- Fixed transcription model auto-download on load click",
+            downloadUrl:
+              "https://github.com/superdd-coder/sinkduce/releases/download/v0.2.0/SinkDuce-macos-arm64-v0.2.0.dmg",
+            desktop,
+          })
+          setIgnored(getIgnoredVersions().has("v0.2.0"))
+        }
+        return
+      }
+
+      // Real check — R2 latest.json only (repo is private, GitHub API 404s
+      // for outside users; see client.ts checkLatestRelease)
+      try {
+        const info = await getVersion()
+        if (cancelled) return
+        setCurrentVersion(info.version)
+        const release: GitHubRelease | null = await checkLatestRelease()
+        if (!release || cancelled) return
+        const latest = release.tag_name
+        const versionNewer = compareVersions(latest, info.version) > 0
+        const downloadUrl = pickDesktopDownloadUrl(release.assets, latest)
+        if (!shouldOfferUpdate({ desktop, versionNewer, downloadUrl })) return
+        const ignoredVersions = getIgnoredVersions()
+        setUpdate({
+          currentVersion: info.version,
+          latestVersion: latest,
+          releaseUrl: release.html_url,
+          releaseBody: release.body || "",
+          downloadUrl,
+          desktop,
+        })
+        setIgnored(ignoredVersions.has(latest))
+      } catch {
+        // Silently ignore
+      }
+    }
+    check()
+    const interval = setInterval(check, 6 * 60 * 60 * 1000)
+
+    return () => { cancelled = true; clearInterval(interval) }
+  }, [])
+
+  const ignoreVersion = useCallback(() => {
+    if (!update) return
+    try {
+      const ignoredVersions = getIgnoredVersions()
+      ignoredVersions.add(update.latestVersion)
+      localStorage.setItem(IGNORED_KEY, JSON.stringify([...ignoredVersions]))
+    } catch {}
+    setIgnored(true)
+  }, [update])
+
+  return { update, ignored, ignoreVersion, currentVersion }
+}

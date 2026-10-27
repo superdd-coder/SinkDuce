@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>SinkDuce</title>
+    <style>
+      html, body {
+        height: 100%;
+        margin: 0;
+        background: #f6f5f1;
+        color: #6a706a;
+        font: 14px/1.4 "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+        letter-spacing: 0.04em;
+      }
+      main {
+        min-height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 22px;
+        text-transform: uppercase;
+      }
+      .logo {
+        width: 120px;
+        height: auto;
+        animation: logo-in 0.9s ease-out both;
+      }
+      @keyframes logo-in {
+        from { opacity: 0; transform: scale(0.92); }
+        to   { opacity: 1; transform: scale(1); }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img class="logo" src="logo-flow.svg" alt="" />
+      Starting SinkDuce…
+    </main>
+    <script>
+      // Splash is replaced by the API origin once /health returns desktop:true.
+    </script>
+  </body>
+</html>

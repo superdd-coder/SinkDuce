@@ -1,0 +1,59 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SinkDuce",
+  "version": "1.6.1",
+  "identifier": "app.sinkduce.desktop",
+  "build": {
+    "frontendDist": "../../splash"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "SinkDuce",
+        "width": 1440,
+        "height": 900,
+        "resizable": true,
+        "fullscreen": false,
+        "maximized": false,
+        "dragDropEnabled": false,
+        "hiddenTitle": true,
+        "titleBarStyle": "Transparent",
+        "backgroundColor": "#f6f5f1",
+        "theme": "Light",
+        "minWidth": 1120,
+        "minHeight": 640
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERFRUFDMTBFRTIyNThFMDQKUldRRWppWGlEc0hxM3VnT0tGa3p3SXBWc2owOVlZMlFMQjAxQVJCNUI3R3NaWWFhSEIwZHhZamsK"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "resources": [],
+    "macOS": {
+      "entitlements": "Entitlements.plist",
+      "minimumSystemVersion": "13.0"
+    }
+  }
+}

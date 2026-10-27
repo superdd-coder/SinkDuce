@@ -1,0 +1,277 @@
+import { useState, useEffect } from "react"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { CardContent } from "@/components/ui/card"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Button } from "@/components/ui/button"
+import { Loader2, Upload } from "lucide-react"
+import {
+  getDocSummary,
+  getFilePreviewUrl,
+  type ConflictItem,
+  type DocSummary,
+} from "@/api/client"
+import {
+  isRawViewerSupported,
+  RawFileViewer,
+  resolveRawFilename,
+} from "@/components/file-mgmt/raw-file-viewer"
+import { UpdateFileDialog } from "@/components/file-mgmt/file-detail/update-file-dialog"
+import { useT } from "@/i18n/use-t"
+
+interface ConflictViewerDialogProps {
+  conflict: ConflictItem | null
+  collection: string
+  onOpenChange: (open: boolean) => void
+}
+
+function ConflictQuote({ content }: { content: string }) {
+  return (
+    <div className="px-4 pt-3 pb-2 shrink-0">
+      <p className="pm-dialog-callout">
+        &ldquo;{content}&rdquo;
+      </p>
+    </div>
+  )
+}
+
+function SourcePanel({
+  collection,
+  source,
+  label,
+  content,
+  fileId,
+  onUpdate,
+}: {
+  collection: string
+  source: string
+  label: string
+  content: string
+  fileId?: string
+  onUpdate?: () => void
+}) {
+  const t = useT()
+  const [summary, setSummary] = useState<DocSummary | null>(null)
+  const [summaryLoading, setSummaryLoading] = useState(false)
+
+  const filename = resolveRawFilename(label, source)
+  const showRaw = isRawViewerSupported(filename)
+  const previewUrl = getFilePreviewUrl(source, { collection })
+  const defaultTab = showRaw ? "raw" : "summary"
+
+  useEffect(() => {
+    if (!collection || !source) return
+    let cancelled = false
+    setSummaryLoading(true)
+    getDocSummary(collection, source)
+      .then((res) => {
+        if (!cancelled) setSummary(res)
+      })
+      .catch(() => {
+        if (!cancelled) setSummary(null)
+      })
+      .finally(() => {
+        if (!cancelled) setSummaryLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [collection, source])
+
+  return (
+    <div className="w-1/2 flex flex-col min-h-0">
+      <div className="flex items-center gap-2 mb-2">
+        <h4 className="pm-title truncate text-[var(--pm-muted)] flex-1 min-w-0">
+          {label}
+        </h4>
+        {fileId && onUpdate && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="shrink-0"
+            onClick={onUpdate}
+          >
+            <Upload className="h-3.5 w-3.5" strokeWidth={1.75} />
+            {t("fileMgmt.updateFile")}
+          </Button>
+        )}
+      </div>
+      <div className="flex-1 overflow-hidden pm-nested-pane min-h-0">
+        <Tabs defaultValue={defaultTab} className="flex flex-col h-full">
+          <TabsList variant="line" className="mx-2 mt-2">
+            {showRaw && <TabsTrigger value="raw">{t("library.raw")}</TabsTrigger>}
+            <TabsTrigger value="summary">{t("common.summary")}</TabsTrigger>
+          </TabsList>
+
+          {showRaw && (
+            <TabsContent
+              value="raw"
+              className="flex-1 overflow-hidden min-h-0 flex flex-col mt-0"
+            >
+              <ConflictQuote content={content} />
+              <div className="flex-1 min-h-0 px-2 pb-2">
+                <RawFileViewer
+                  url={previewUrl}
+                  filename={filename}
+                  downloadUrl={previewUrl}
+                  className="h-full"
+                />
+              </div>
+            </TabsContent>
+          )}
+
+          <TabsContent
+            value="summary"
+            className="flex-1 overflow-hidden min-h-0 mt-0"
+          >
+            <ScrollArea className="h-full">
+              <CardContent className="p-4">
+                {!showRaw && <ConflictQuote content={content} />}
+                {summaryLoading ? (
+                  <div className="flex items-center justify-center py-8 pm-meta">
+                    <Loader2 className="h-5 w-5 animate-spin mr-2 text-[var(--pm-faint)]" />
+                    {t("chat.loadingSummary")}
+                  </div>
+                ) : summary ? (
+                  <div className="space-y-4">
+                    {summary.data.length > 0 && (
+                      <div>
+                        <h5 className="pm-field-label mb-2">
+                          {t("chat.dataPoints")}
+                        </h5>
+                        <ul className="space-y-1">
+                          {summary.data.map((item, i) => (
+                            <li key={i} className="pm-dialog-body text-[var(--pm-text)]">
+                              {item}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {summary.facts.length > 0 && (
+                      <div>
+                        <h5 className="pm-field-label mb-2">
+                          {t("chat.facts")}
+                        </h5>
+                        <ul className="space-y-1">
+                          {summary.facts.map((item, i) => (
+                            <li key={i} className="pm-dialog-body text-[var(--pm-text)]">
+                              {item}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {summary.insights.length > 0 && (
+                      <div>
+                        <h5 className="pm-field-label mb-2">
+                          {t("chat.insights")}
+                        </h5>
+                        <ul className="space-y-1">
+                          {summary.insights.map((item, i) => (
+                            <li key={i} className="pm-dialog-body text-[var(--pm-text)]">
+                              {item}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {summary.data.length === 0 &&
+                      summary.facts.length === 0 &&
+                      summary.insights.length === 0 && (
+                        <p className="pm-meta">
+                          {t("chat.noSummary")}
+                        </p>
+                      )}
+                  </div>
+                ) : (
+                  <p className="pm-meta">
+                    {t("chat.noSummary")}
+                  </p>
+                )}
+              </CardContent>
+            </ScrollArea>
+          </TabsContent>
+        </Tabs>
+      </div>
+    </div>
+  )
+}
+
+export function ConflictViewerDialog({
+  conflict,
+  collection,
+  onOpenChange,
+}: ConflictViewerDialogProps) {
+  const t = useT()
+  /** Which side's UpdateFileDialog is open — "1" | "2" | null. */
+  const [updateSide, setUpdateSide] = useState<"1" | "2" | null>(null)
+
+  const updateFileId =
+    conflict && updateSide
+      ? updateSide === "1"
+        ? conflict.file_id1
+        : conflict.file_id2
+      : undefined
+  const updateFilename =
+    conflict && updateSide
+      ? updateSide === "1"
+        ? conflict.source1_label ?? conflict.source1
+        : conflict.source2_label ?? conflict.source2
+      : undefined
+
+  return (
+    <>
+      <Dialog open={!!conflict} onOpenChange={(v) => onOpenChange(v)}>
+        <DialogContent className="pm-dialog !max-w-[90vw] !w-[90vw] h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>{t("library.conflict")}</DialogTitle>
+          </DialogHeader>
+
+          <div className="flex-1 flex gap-4 overflow-hidden min-h-0">
+            {conflict && (
+              <>
+                <SourcePanel
+                  collection={collection}
+                  source={conflict.source1}
+                  label={conflict.source1_label ?? conflict.source1}
+                  content={conflict.content1}
+                  fileId={conflict.file_id1}
+                  onUpdate={conflict.file_id1 ? () => setUpdateSide("1") : undefined}
+                />
+                <SourcePanel
+                  collection={collection}
+                  source={conflict.source2}
+                  label={conflict.source2_label ?? conflict.source2}
+                  content={conflict.content2}
+                  fileId={conflict.file_id2}
+                  onUpdate={conflict.file_id2 ? () => setUpdateSide("2") : undefined}
+                />
+              </>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {conflict && updateFileId && (
+        <UpdateFileDialog
+          open={updateSide !== null}
+          onOpenChange={(v) => {
+            if (!v) setUpdateSide(null)
+          }}
+          collectionId={collection}
+          fileId={updateFileId}
+          currentFilename={updateFilename ?? null}
+          onSuccess={() => {
+            // New version queued (dialog toasts); this conflict's panels show
+            // stale content — close both. Consolidate re-runs debounced in the
+            // pipeline; the info panel silently refreshes the conflicts list.
+            setUpdateSide(null)
+            onOpenChange(false)
+          }}
+        />
+      )}
+    </>
+  )
+}

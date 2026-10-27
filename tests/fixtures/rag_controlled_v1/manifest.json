@@ -1,0 +1,16 @@
+{
+  "name": "rag-controlled",
+  "version": "1",
+  "kind": "controlled",
+  "granularity": "document",
+  "language": "zh",
+  "gold_origin": "fixed_controlled_facts",
+  "purpose": "Validate ingest/retrieval/context wiring; not a business-accuracy or public leaderboard benchmark.",
+  "query_distribution": {
+    "single_fact": 10,
+    "multi_document": 5,
+    "comparison": 5,
+    "exact_identifier": 5,
+    "unanswerable": 5
+  }
+}

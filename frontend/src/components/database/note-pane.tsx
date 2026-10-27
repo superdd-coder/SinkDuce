@@ -1,0 +1,1387 @@
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
+import {
+  Loader2, ArrowDownToLine, Pencil, X, Trash2, Download,
+  PanelRight, Database, RefreshCw, Share2, Columns2, ChevronDown,
+  MoreVertical,
+} from "lucide-react"
+import { toast } from "sonner"
+import {
+  getNote,
+  updateNote,
+  deleteNote,
+  distillNote,
+  distillMeetingIntoNote,
+  uploadNoteImage,
+  ingestNote,
+  reingestNote,
+  getTask,
+  triggerPropagation,
+  type NoteDetail,
+} from "@/api/client"
+import { deleteFile } from "@/api/file-mgmt"
+import { sha256Hex as jsSha256Hex } from "@/lib/sha256"
+import { MarkdownEditor } from "@/components/ui/markdown-editor"
+import {
+  preprocessDistillBlocks,
+  postprocessDistillBlocks,
+  EditorToolbar,
+} from "@/components/ui/tiptap-editor"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogKicker,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { SoftMenu, MenuItem } from "@/components/ui/menu"
+import { _triggerFilesRefresh } from "@/components/database/database-view"
+import { triggerInfoRefresh } from "@/lib/info-refresh"
+import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
+
+const _ingestingIds = new Set<string>()
+
+// ── Distill jobs survive dialog unmount (close mid-distill must still land) ──
+
+/** Replace loading fence in markdown by temp block id. */
+function replaceLoadingFence(md: string, tempId: string, replacement: string): string {
+  const re = new RegExp(
+    String.raw`:::distill-block\{[^\n}]*"id"\s*:\s*"${tempId}"[^\n}]*\}\n[\s\S]*?\n:::`,
+  )
+  if (re.test(md)) return md.replace(re, replacement)
+  const re2 = new RegExp(
+    String.raw`:::distill-block\{[^\n]*"id"\s*:\s*"${tempId}"[^\n]*\}\n[\s\S]*?\n:::`,
+  )
+  return md.replace(re2, replacement)
+}
+
+type DistillApiResult = {
+  block_id: string
+  source_note_id: string
+  source_title: string
+  distilled_content: string
+}
+
+/**
+ * Run distill API and always persist the result to the note on the server.
+ * Independent of React mount lifecycle — safe after dialog close.
+ */
+async function persistDistillResult(opts: {
+  collection: string
+  noteId: string
+  tempBlockId: string
+  distillFn: () => Promise<DistillApiResult>
+  fallbackError: string
+}): Promise<
+  | { ok: true; finalContent: string; result: DistillApiResult }
+  | { ok: false; error: string; cleanedContent?: string }
+> {
+  const { collection, noteId, tempBlockId, distillFn, fallbackError } = opts
+  try {
+    const res = await distillFn()
+    const blockMd = `:::distill-block${JSON.stringify({
+      id: res.block_id,
+      source: res.source_note_id,
+      "source-title": res.source_title,
+    })}\n${res.distilled_content}\n:::`
+
+    // Always re-read server content (UI may be gone / stale)
+    const remote = await getNote(collection, noteId)
+    let patched = replaceLoadingFence(remote.content || "", tempBlockId, blockMd)
+    if (patched === (remote.content || "")) {
+      // Loading fence missing (race/close before save) — append result
+      patched = `${remote.content || ""}\n\n${blockMd}\n`.replace(/\n{3,}/g, "\n\n")
+    }
+    await updateNote(collection, noteId, { content: patched })
+    return { ok: true, finalContent: patched, result: res }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : fallbackError
+    // Best-effort: strip loading fence from server
+    try {
+      const remote = await getNote(collection, noteId)
+      const cleaned = replaceLoadingFence(remote.content || "", tempBlockId, "")
+        .replace(/\n{3,}/g, "\n\n")
+      if (cleaned !== (remote.content || "")) {
+        await updateNote(collection, noteId, { content: cleaned })
+      }
+      return { ok: false, error: message, cleanedContent: cleaned }
+    } catch {
+      return { ok: false, error: message }
+    }
+  }
+}
+
+interface NotePaneProps {
+  collection: string
+  noteId: string
+  focused: boolean
+  onFocus: () => void
+  /**
+   * Visual focus chrome (header tint / hairline). Off for single-pane —
+   * selection emphasis only matters in dual-pane.
+   */
+  showFocusChrome?: boolean
+  onNoteMeta?: (note: NoteDetail) => void
+  onNavigateSource: (sourceId: string) => void
+  /** Title changed — parent updates notes list */
+  onTitleChange?: (noteId: string, title: string) => void
+  /** Note deleted — parent updates panes / list */
+  onDeleted?: (noteId: string) => void
+  /** Close this pane (dual-page X) */
+  onClosePane?: () => void
+  showClose?: boolean
+  /** Split into second page — only when not already split */
+  onSplit?: () => void
+  showSplit?: boolean
+  /** Close whole dialog (e.g. go to folder) */
+  onCloseDialog?: () => void
+  className?: string
+  /** Changes when document identity switches — drives soft content enter */
+  docSwapKey?: string
+}
+
+/**
+ * Self-contained note editor pane for dual-page layout.
+ * Each pane owns Title / Delete / Export / Go to folder / Ingest chrome.
+ */
+export function NotePane({
+  collection,
+  noteId,
+  focused,
+  onFocus,
+  showFocusChrome = true,
+  onNoteMeta,
+  onNavigateSource,
+  onTitleChange,
+  onDeleted,
+  onClosePane,
+  showClose,
+  onSplit,
+  showSplit,
+  onCloseDialog,
+  className,
+}: NotePaneProps) {
+  const t = useT()
+  const [loading, setLoading] = useState(true)
+  /** After first note loads, further switches keep chrome and soft-fade body */
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false)
+  const [content, setContent] = useState("")
+  const [dropOver, setDropOver] = useState(false)
+  const [distilling, setDistilling] = useState(false)
+  const [editorInstance, setEditorInstance] = useState<any>(null)
+
+  const [note, setNote] = useState<NoteDetail | null>(null)
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [titleDraft, setTitleDraft] = useState("")
+  const [deleteOpen, setDeleteOpen] = useState(false)
+
+  const [ingesting, setIngesting] = useState(false)
+  const [ingested, setIngested] = useState(false)
+  const [ingestedHash, setIngestedHash] = useState<string | null>(null)
+  const [liveHash, setLiveHash] = useState<string | null>(null)
+  const [managedFileId, setManagedFileId] = useState<string | null>(null)
+  const [propagating, setPropagating] = useState(false)
+  const [propagateDismissed, setPropagateDismissed] = useState(false)
+  const [updateMenuOpen, setUpdateMenuOpen] = useState(false)
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false)
+
+  const contentRef = useRef("")
+  const baselineRef = useRef("")
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const editorRef = useRef<any>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const updateMenuRef = useRef<HTMLDivElement>(null)
+  const moreMenuRef = useRef<HTMLDivElement>(null)
+  const noteIdRef = useRef(noteId)
+  noteIdRef.current = noteId
+  const distillCountRef = useRef(0)
+
+  const sha256Hex = useCallback(async (text: string) => {
+    // crypto.subtle 是 secure-context-only：远端普通 HTTP 源上不存在，必须走纯 JS 兜底
+    // （与后端 hashlib.sha256 逐字节一致，两种路径输出无差）。
+    const c = globalThis.crypto
+    if (c?.subtle) {
+      const buf = await c.subtle.digest("SHA-256", new TextEncoder().encode(text || ""))
+      return Array.from(new Uint8Array(buf))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("")
+    }
+    return jsSha256Hex(text || "")
+  }, [])
+
+  const applyMeta = useCallback(
+    async (n: NoteDetail) => {
+      setNote(n)
+      setIngested(!!n.is_ingested)
+      setManagedFileId(n.file_id ?? null)
+      setIngestedHash(n.is_ingested ? (n.ingested_content_hash ?? null) : null)
+      setIngesting(_ingestingIds.has(n.id))
+      onNoteMeta?.(n)
+      const h = await sha256Hex(n.content || "")
+      setLiveHash(h)
+    },
+    [onNoteMeta, sha256Hex]
+  )
+
+  // Re-emit meta when this pane gains focus so distill rail matches focused note.
+  // Depend only on focused + note.id — not full note identity — to avoid parent
+  // re-renders thrashing the editor mid-interaction.
+  useEffect(() => {
+    if (focused && note) onNoteMeta?.(note)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: only on focus / note switch
+  }, [focused, note?.id])
+
+  /**
+   * Soft doc swap (no remount):
+   * idle → out (fade old) → in (swap content at opacity 0, fade up) → idle
+   */
+  type DocSwapPhase = "idle" | "out" | "in"
+  const [docSwapPhase, setDocSwapPhase] = useState<DocSwapPhase>("idle")
+  const prevNoteIdRef = useRef<string | null>(null)
+  const swapGenRef = useRef(0)
+  /** Fade timings — keep in sync with CSS --pm-ws-doc-swap-* */
+  const SWAP_OUT_MS = 280
+  const SWAP_IN_MS = 420
+
+  // Load note — chrome stays; soft crossfade between docs
+  useEffect(() => {
+    let cancelled = false
+    const gen = ++swapGenRef.current
+    const timers: ReturnType<typeof setTimeout>[] = []
+    const wait = (ms: number) =>
+      new Promise<void>((resolve) => {
+        timers.push(setTimeout(resolve, ms))
+      })
+
+    setEditingTitle(false)
+    setPropagateDismissed(false)
+    if (!noteId || !collection) {
+      setLoading(false)
+      setContent("")
+      contentRef.current = ""
+      setNote(null)
+      setDocSwapPhase("idle")
+      return
+    }
+
+    const prevId = prevNoteIdRef.current
+    prevNoteIdRef.current = noteId
+    const isSoftSwitch = hasLoadedOnce && !!prevId && prevId !== noteId
+
+    // Flush pending save for the note we're leaving
+    if (prevId && prevId !== noteId && saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+      const leavingMd = contentRef.current
+      if (leavingMd && baselineRef.current) {
+        void updateNote(collection, prevId, { content: leavingMd }).catch(
+          () => {}
+        )
+      }
+    }
+
+    setLoading(true)
+    const outStartedAt = performance.now()
+    // First paint only: blank. Soft switches keep body mounted for crossfade.
+    if (!hasLoadedOnce) {
+      baselineRef.current = ""
+      setContent("")
+      contentRef.current = ""
+      setEditorInstance(null)
+      editorRef.current = null
+      setDocSwapPhase("idle")
+    } else if (isSoftSwitch) {
+      // Start fade-out immediately (old body still showing)
+      setDocSwapPhase("out")
+    }
+
+    ;(async () => {
+      try {
+        const n = await getNote(collection, noteId)
+        if (cancelled || swapGenRef.current !== gen) return
+
+        const c = n.content || ""
+
+        if (isSoftSwitch) {
+          // Let fade-out finish (don't cut mid-fade if network was fast)
+          const elapsed = performance.now() - outStartedAt
+          if (elapsed < SWAP_OUT_MS) {
+            await wait(SWAP_OUT_MS - elapsed)
+          }
+          // Brief hold at fully transparent so setContent isn't visible
+          await wait(40)
+          if (cancelled || swapGenRef.current !== gen) return
+
+          setContent(c)
+          contentRef.current = c
+          baselineRef.current = c
+          await applyMeta(n)
+          if (cancelled || swapGenRef.current !== gen) return
+          setLoading(false)
+          setHasLoadedOnce(true)
+          // Scroll to top while still transparent — avoid inheriting previous note scroll
+          const scroller = containerRef.current?.querySelector(
+            ".pm-ws-editor"
+          ) as HTMLElement | null
+          if (scroller) scroller.scrollTop = 0
+          // Double rAF so browser paints opacity:0 with new doc before fade-in
+          await new Promise<void>((r) => {
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => r())
+            })
+          })
+          if (cancelled || swapGenRef.current !== gen) return
+          setDocSwapPhase("in")
+          await wait(SWAP_IN_MS)
+          if (cancelled || swapGenRef.current !== gen) return
+          setDocSwapPhase("idle")
+        } else {
+          setContent(c)
+          contentRef.current = c
+          baselineRef.current = c
+          await applyMeta(n)
+          if (cancelled || swapGenRef.current !== gen) return
+          setLoading(false)
+          setHasLoadedOnce(true)
+          const scroller = containerRef.current?.querySelector(
+            ".pm-ws-editor"
+          ) as HTMLElement | null
+          if (scroller) scroller.scrollTop = 0
+          setDocSwapPhase("in")
+          await wait(SWAP_IN_MS)
+          if (cancelled || swapGenRef.current !== gen) return
+          setDocSwapPhase("idle")
+        }
+      } catch {
+        if (!cancelled && swapGenRef.current === gen) {
+          toast.error(t("library.failedLoadNote"))
+          setLoading(false)
+          setDocSwapPhase("idle")
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+      for (const t of timers) clearTimeout(t)
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collection, noteId])
+
+  // Live content hash for reingest dirty detection
+  useEffect(() => {
+    let cancelled = false
+    void sha256Hex(content).then((h) => {
+      if (!cancelled) setLiveHash(h)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [content, sha256Hex])
+
+  const needsReingest =
+    ingested && !!ingestedHash && !!liveHash && liveHash !== ingestedHash
+
+  const scheduleSave = useCallback(
+    (value: string) => {
+      if (!baselineRef.current) return
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+      const id = noteIdRef.current
+      saveTimerRef.current = setTimeout(async () => {
+        try {
+          await updateNote(collection, id, { content: value })
+        } catch {
+          toast.error(t("library.autoSaveFailed"))
+        }
+      }, 800)
+    },
+    [collection]
+  )
+
+  const handleChange = useCallback(
+    (value: string) => {
+      // Block edits while soft-loading another note (old body still on screen)
+      if (loading) return
+      setContent(value)
+      contentRef.current = value
+      if (!baselineRef.current) {
+        baselineRef.current = value
+        return
+      }
+      if (value !== baselineRef.current) {
+        setPropagateDismissed(false)
+      }
+      scheduleSave(value)
+    },
+    [scheduleSave, loading]
+  )
+
+  const handleImageUpload = useCallback(
+    async (file: File) => {
+      const result = await uploadNoteImage(collection, noteIdRef.current, file)
+      return result.url
+    },
+    [collection]
+  )
+
+  // ── Title ─────────────────────────────────────────────
+
+  /** Commit title on blur / Enter; empty draft restores previous title. */
+  const handleTitleSave = async () => {
+    if (!note) {
+      setEditingTitle(false)
+      return
+    }
+    const nextTitle = titleDraft.trim()
+    if (!nextTitle || nextTitle === note.title) {
+      setEditingTitle(false)
+      setTitleDraft(note.title || "")
+      return
+    }
+    try {
+      await updateNote(collection, note.id, { title: nextTitle })
+      const next = { ...note, title: nextTitle }
+      setNote(next)
+      onTitleChange?.(note.id, nextTitle)
+      onNoteMeta?.(next)
+    } catch {
+      toast.error(t("library.failedUpdateTitle"))
+      setTitleDraft(note.title || "")
+    }
+    setEditingTitle(false)
+  }
+
+  /** Skip blur-save when Escape cancels (blur still fires on unmount). */
+  const titleCancelRef = useRef(false)
+
+  const handleTitleCancel = () => {
+    titleCancelRef.current = true
+    setTitleDraft(note?.title || "")
+    setEditingTitle(false)
+  }
+
+  // ── Delete ────────────────────────────────────────────
+
+  const handleDeleteConfirm = async () => {
+    if (!note) return
+    const nid = note.id
+    const title = note.title
+    const fid = managedFileId
+    try {
+      if (fid) {
+        try {
+          await deleteFile(collection, fid)
+        } catch { /* continue */ }
+      }
+      await deleteNote(collection, nid)
+      toast.success(
+        fid
+          ? t("library.deletedTitleVersions", { title })
+          : t("library.deletedTitle", { title })
+      )
+      try {
+        const { useFileMgmtStore } = await import("@/stores/file-mgmt-store")
+        await useFileMgmtStore.getState().refreshFiles(collection, { silent: true })
+      } catch { /* ignore */ }
+      triggerInfoRefresh({ collectionId: collection, reason: "note-uningest" })
+      _triggerFilesRefresh()
+      setDeleteOpen(false)
+      onDeleted?.(nid)
+    } catch (err) {
+      toast.error(formatApiError(err, t))
+    }
+  }
+
+  // ── Export ────────────────────────────────────────────
+
+  const handleDownload = () => {
+    if (!note) return
+    const blob = new Blob([contentRef.current || ""], {
+      type: "text/markdown;charset=utf-8",
+    })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `${note.title || "note"}.md`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success(t("library.exported"))
+  }
+
+  // ── Go to folder ──────────────────────────────────────
+
+  const handleGoToFolder = () => {
+    if (!managedFileId || !note) {
+      toast.error(t("library.noteNotLinked"))
+      return
+    }
+    onCloseDialog?.()
+    window.dispatchEvent(
+      new CustomEvent("open-note-file-in-folder", {
+        detail: {
+          collectionId: collection,
+          fileId: managedFileId,
+          noteId: note.id,
+        },
+      })
+    )
+  }
+
+  // ── Ingest ────────────────────────────────────────────
+
+  const afterIngestRefresh = async (nid: string, title: string) => {
+    _triggerFilesRefresh()
+    try {
+      const { useFileMgmtStore } = await import("@/stores/file-mgmt-store")
+      await useFileMgmtStore.getState().refreshFiles(collection, { silent: true })
+    } catch { /* ignore */ }
+    triggerInfoRefresh({ collectionId: collection, reason: "note-ingest" })
+    try {
+      const n = await getNote(collection, nid)
+      if (noteIdRef.current === nid) await applyMeta(n)
+    } catch { /* ignore */ }
+    toast.success(t("library.ingestionComplete", { title }))
+  }
+
+  const handleIngestClick = async () => {
+    if (!note) return
+    const nid = note.id
+    const title = note.title
+    // Spinner immediately — the autosave flush below is a network round-trip
+    // and the trigger must never look dead while it runs.
+    _ingestingIds.add(nid)
+    setIngesting(true)
+    // Flush autosave
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+    }
+    try {
+      await updateNote(collection, nid, { content: contentRef.current })
+    } catch { /* best-effort */ }
+    try {
+      if (needsReingest || (ingested && managedFileId)) {
+        const res = await reingestNote(collection, nid)
+        toast.success(t("library.reingestStarted"))
+        const taskId = res.task_id
+        const fileId = res.file_id || managedFileId
+        if (taskId && fileId) {
+          try {
+            const { useFileMgmtStore } = await import("@/stores/file-mgmt-store")
+            useFileMgmtStore.getState()._startTaskPolling(collection, taskId, fileId, {
+              silentToast: true,
+            })
+          } catch { /* ignore */ }
+        }
+        if (taskId) {
+          for (let i = 0; i < 90; i++) {
+            await new Promise((r) => setTimeout(r, 2000))
+            try {
+              const task = await getTask(taskId)
+              if (task.status === "completed") {
+                _ingestingIds.delete(nid)
+                if (noteIdRef.current === nid) setIngesting(false)
+                await afterIngestRefresh(nid, title)
+                return
+              }
+              if (task.status === "failed") {
+                throw new Error(task.error || t("library.reingestFailed"))
+              }
+            } catch (e) {
+              if (e instanceof Error && e.message !== t("library.reingestFailed") && i < 89) continue
+              throw e
+            }
+          }
+        } else {
+          // No task returned — the backend's no-managed-file fallback ingests
+          // on an untracked daemon thread. Poll note meta until the ingested
+          // hash moves off the pre-click value so the spinner reflects reality
+          // (uncapped tracking is impossible without a task; cap at 30s).
+          for (let i = 0; i < 15; i++) {
+            await new Promise((r) => setTimeout(r, 2000))
+            try {
+              const n = await getNote(collection, nid)
+              if (n.ingested_content_hash && n.ingested_content_hash !== ingestedHash) break
+            } catch {
+              /* retry */
+            }
+          }
+          if (noteIdRef.current === nid) await afterIngestRefresh(nid, title)
+        }
+        _ingestingIds.delete(nid)
+        if (noteIdRef.current === nid) setIngesting(false)
+      } else {
+        await ingestNote(collection, nid)
+        toast.success(t("library.ingestionStarted"))
+        for (let i = 0; i < 45; i++) {
+          await new Promise((r) => setTimeout(r, 2000))
+          try {
+            const n = await getNote(collection, nid)
+            if (n.is_ingested) {
+              _ingestingIds.delete(nid)
+              if (noteIdRef.current === nid) {
+                setIngesting(false)
+                await applyMeta(n)
+              }
+              await afterIngestRefresh(nid, title)
+              return
+            }
+          } catch { /* retry */ }
+        }
+        _ingestingIds.delete(nid)
+        if (noteIdRef.current === nid) setIngesting(false)
+        toast.error(t("library.ingestionSlow"))
+      }
+    } catch (err) {
+      _ingestingIds.delete(nid)
+      if (noteIdRef.current === nid) setIngesting(false)
+      toast.error(formatApiError(err, t))
+    }
+  }
+
+  // ── Propagate ─────────────────────────────────────────
+
+  const canSyncChanges = !!note?.is_extracted && !propagateDismissed
+
+  // Close action menus on outside click / Escape
+  useEffect(() => {
+    if (!updateMenuOpen && !moreMenuOpen) return
+    const onPointer = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (updateMenuRef.current?.contains(t)) return
+      if (moreMenuRef.current?.contains(t)) return
+      setUpdateMenuOpen(false)
+      setMoreMenuOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setUpdateMenuOpen(false)
+        setMoreMenuOpen(false)
+      }
+    }
+    document.addEventListener("mousedown", onPointer)
+    document.addEventListener("keydown", onKey)
+    return () => {
+      document.removeEventListener("mousedown", onPointer)
+      document.removeEventListener("keydown", onKey)
+    }
+  }, [updateMenuOpen, moreMenuOpen])
+
+  // Close menus when switching notes
+  useEffect(() => {
+    setUpdateMenuOpen(false)
+    setMoreMenuOpen(false)
+  }, [noteId])
+
+  const handlePropagate = async () => {
+    if (!note) return
+    setPropagating(true)
+    setUpdateMenuOpen(false)
+    try {
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+      }
+      await updateNote(collection, note.id, { content: contentRef.current })
+      await triggerPropagation(collection, note.id)
+      toast.success(t("library.syncStarted"))
+      setPropagateDismissed(true)
+    } catch (err) {
+      toast.error(formatApiError(err, t))
+    } finally {
+      setPropagating(false)
+    }
+  }
+
+  // ── Distill drop ──────────────────────────────────────
+
+  /** Read live markdown from Tiptap (keeps loading flags via postprocess). */
+  const readEditorMarkdown = useCallback((): string => {
+    const editor = editorRef.current
+    if (!editor) return contentRef.current
+    try {
+      const storage = editor.storage as any
+      const raw = storage?.markdown?.getMarkdown?.() ?? ""
+      return postprocessDistillBlocks(raw) || contentRef.current
+    } catch {
+      return contentRef.current
+    }
+  }, [])
+
+  const syncContent = useCallback((md: string) => {
+    contentRef.current = md
+    setContent(md)
+  }, [])
+
+  /** Hot-update a distill NodeView by blockId (loading → result) without full remount. */
+  const patchDistillNode = useCallback(
+    (
+      blockId: string,
+      next: {
+        blockId?: string
+        sourceNoteId?: string
+        sourceTitle?: string
+        text?: string
+        loading?: boolean
+      } | null, // null = delete node
+    ): boolean => {
+      const editor = editorRef.current
+      if (!editor?.state) return false
+      let foundPos: number | null = null
+      let foundNode: any = null
+      editor.state.doc.descendants((node: any, pos: number) => {
+        if (node.type?.name === "distillBlock" && node.attrs?.blockId === blockId) {
+          foundPos = pos
+          foundNode = node
+          return false
+        }
+      })
+      if (foundPos == null || !foundNode) return false
+      if (next === null) {
+        editor
+          .chain()
+          .focus()
+          .deleteRange({ from: foundPos, to: foundPos + foundNode.nodeSize })
+          .run()
+        return true
+      }
+      const tr = editor.state.tr.setNodeMarkup(foundPos, undefined, {
+        ...foundNode.attrs,
+        ...next,
+      })
+      editor.view.dispatch(tr)
+      return true
+    },
+    []
+  )
+
+  const insertDistillBlock = useCallback(
+    async (
+      sourceId: string,
+      sourceTitle: string,
+      distillFn: () => Promise<DistillApiResult>,
+      dropCoords?: { x: number; y: number },
+    ) => {
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+      }
+      const targetId = noteIdRef.current
+      const tempBlockId = `distill-loading-${Date.now()}`
+      const loadingBody = `⏳ Distilling "${sourceTitle}"...`
+      const loadingMd = `\n\n:::distill-block{"id":"${tempBlockId}","source":"${sourceId}","source-title":${JSON.stringify(sourceTitle)},"loading":true}\n${loadingBody}\n:::\n\n`
+
+      // ── 1) Insert loading placeholder (UI) ──
+      let insertedViaPm = false
+      if (dropCoords && editorRef.current?.view) {
+        const pos = editorRef.current.view.posAtCoords({
+          left: dropCoords.x,
+          top: dropCoords.y,
+        })
+        if (pos) {
+          const { processed } = preprocessDistillBlocks(loadingMd.trim() + "\n\n")
+          editorRef.current.commands.insertContentAt(pos.pos, processed)
+          insertedViaPm = true
+        }
+      }
+
+      let loadingContent: string
+      if (insertedViaPm) {
+        loadingContent = readEditorMarkdown()
+        if (!loadingContent.includes(tempBlockId)) {
+          loadingContent = `${contentRef.current}${loadingMd}`
+        }
+      } else {
+        loadingContent = `${contentRef.current}${loadingMd}`
+      }
+      // Only touch React state if still on this note
+      if (noteIdRef.current === targetId) {
+        syncContent(loadingContent)
+        baselineRef.current = loadingContent
+      }
+
+      // Persist loading fence BEFORE distill — must land even if dialog closes next
+      try {
+        await updateNote(collection, targetId, { content: loadingContent })
+      } catch {
+        toast.error(t("library.failedSaveDistill"))
+        return
+      }
+
+      distillCountRef.current++
+      if (noteIdRef.current === targetId) setDistilling(true)
+
+      // ── 2) Distill + always write result to server (survives unmount) ──
+      const outcome = await persistDistillResult({
+        collection,
+        noteId: targetId,
+        tempBlockId,
+        distillFn,
+        fallbackError: t("library.distillationFailed"),
+      })
+
+      // ── 3) Optional UI sync if this pane is still open on the same note ──
+      const stillHere = noteIdRef.current === targetId
+      if (outcome.ok) {
+        toast.success(t("library.distilledTitle", { title: outcome.result.source_title }))
+        if (stillHere) {
+          const res = outcome.result
+          const patchedPm = patchDistillNode(tempBlockId, {
+            blockId: res.block_id,
+            sourceNoteId: res.source_note_id,
+            sourceTitle: res.source_title,
+            text: res.distilled_content,
+            loading: false,
+          })
+          let finalMd = outcome.finalContent
+          if (patchedPm) {
+            const live = readEditorMarkdown()
+            if (!live.includes(tempBlockId)) finalMd = live
+          }
+          syncContent(finalMd)
+          baselineRef.current = finalMd
+          try {
+            const n = await getNote(collection, targetId)
+            await applyMeta(n)
+          } catch { /* ignore */ }
+        }
+      } else {
+        toast.error(outcome.error)
+        if (stillHere) {
+          const removed = patchDistillNode(tempBlockId, null)
+          let next = removed
+            ? readEditorMarkdown()
+            : (outcome.cleanedContent ??
+              replaceLoadingFence(contentRef.current, tempBlockId, ""))
+          next = next.replace(/\n{3,}/g, "\n\n")
+          syncContent(next)
+          baselineRef.current = next
+        }
+      }
+
+      distillCountRef.current--
+      if (noteIdRef.current === targetId) {
+        setDistilling(distillCountRef.current > 0)
+      }
+    },
+    [collection, applyMeta, readEditorMarkdown, syncContent, patchDistillNode]
+  )
+
+  const handleDrop = useCallback(
+    async (e: React.DragEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      setDropOver(false)
+      onFocus()
+
+      const meetingId = e.dataTransfer.getData("application/meeting-id")
+      if (meetingId) {
+        const tabId =
+          e.dataTransfer.getData("application/meeting-tab-id") || "tab_general"
+        const title =
+          e.dataTransfer.getData("application/meeting-title") || meetingId
+        await insertDistillBlock(
+          `meeting:${meetingId}:${tabId}`,
+          title,
+          () =>
+            distillMeetingIntoNote(
+              collection,
+              noteIdRef.current,
+              meetingId,
+              tabId
+            ),
+          { x: e.clientX, y: e.clientY }
+        )
+        return
+      }
+
+      const sourceNoteId = e.dataTransfer.getData("application/note-id")
+      if (sourceNoteId && sourceNoteId !== noteIdRef.current) {
+        const title =
+          e.dataTransfer.getData("application/note-title") || sourceNoteId
+        await insertDistillBlock(
+          sourceNoteId,
+          title,
+          () => distillNote(collection, noteIdRef.current, sourceNoteId),
+          { x: e.clientX, y: e.clientY }
+        )
+      }
+    },
+    [collection, insertDistillBlock, onFocus]
+  )
+
+  // ── Render ────────────────────────────────────────────
+
+  const softLoading = loading && hasLoadedOnce
+  const hardLoading = loading && !hasLoadedOnce
+  const swapBusy = docSwapPhase === "out" || docSwapPhase === "in" || softLoading
+
+  /**
+   * Mark this pane as focused (for distill rail / chrome highlight).
+   * Actions always run against this pane's own noteId/state — never the
+   * sibling pane — even if we were not focused when the user clicked.
+   */
+  const claimFocus = useCallback(() => {
+    if (!focused) onFocus()
+  }, [focused, onFocus])
+
+  /**
+   * After pane focus / distill rail layout thrash, PM sometimes leaves a
+   * full-document selection. Collapse it to a caret so "click to focus"
+   * never looks like select-all.
+   */
+  useLayoutEffect(() => {
+    if (!focused) return
+    const collapseAccidentalAll = () => {
+      const editor = editorRef.current
+      if (!editor || editor.isDestroyed) return
+      try {
+        const { from, to, empty } = editor.state.selection
+        if (empty) return
+        const size = editor.state.doc.content.size
+        // Entire (or near-entire) doc selected → treat as bug, keep caret
+        if (size > 4 && to - from >= size - 2) {
+          const pos = Math.min(Math.max(from, 1), size)
+          editor.commands.setTextSelection(pos)
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    collapseAccidentalAll()
+    const t0 = window.setTimeout(collapseAccidentalAll, 0)
+    // Rail open eases ~360ms; catch selection reset mid-layout
+    const t1 = window.setTimeout(collapseAccidentalAll, 40)
+    const t2 = window.setTimeout(collapseAccidentalAll, 120)
+    return () => {
+      window.clearTimeout(t0)
+      window.clearTimeout(t1)
+      window.clearTimeout(t2)
+    }
+  }, [focused])
+
+  /**
+   * Non-editor chrome padding only — ProseMirror uses onEditorFocus instead
+   * so we never intercept mousedown/mouseup of a text click.
+   */
+  const handleShellMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (focused) return
+      if (e.button !== 0) return
+      const t = e.target as HTMLElement | null
+      if (t?.closest?.(".pm-ws-pane-h, [data-slot='menu'], .ProseMirror, .tiptap-editor")) {
+        return
+      }
+      // Clicked empty shell around editor
+      claimFocus()
+    },
+    [focused, claimFocus]
+  )
+
+  return (
+    <div
+      ref={containerRef}
+      className={cn(
+        "flex-1 flex flex-col min-w-0 min-h-0 relative",
+        className,
+        softLoading && "is-doc-loading"
+      )}
+      onMouseDown={handleShellMouseDown}
+      onDragOver={(e) => {
+        e.preventDefault()
+        e.dataTransfer.dropEffect = "copy"
+        setDropOver(true)
+      }}
+      onDragLeave={(e) => {
+        const rect = e.currentTarget.getBoundingClientRect()
+        const { clientX: x, clientY: y } = e
+        if (x <= rect.left || x >= rect.right || y <= rect.top || y >= rect.bottom) {
+          setDropOver(false)
+        }
+      }}
+      onDrop={handleDrop}
+    >
+      {/*
+        Chrome is always interactive — even when this pane is not focused.
+        stopPropagation so editor-area focus deferral never races tool clicks.
+        claimFocus() runs in the same click handler as the action (React batches),
+        so the action still binds to THIS pane's noteId.
+      */}
+      <div
+        className={cn("pm-ws-pane-h", showFocusChrome && "is-focus")}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        {/* Row 1: title + close — fixed height (see .pm-ws-pane-h > div:first-child) */}
+        <div className="flex items-center gap-1.5 px-4 pt-3 pb-1 min-h-9 h-9 shrink-0 overflow-hidden">
+          {editingTitle ? (
+            <Input
+              value={titleDraft}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onBlur={() => {
+                if (titleCancelRef.current) {
+                  titleCancelRef.current = false
+                  return
+                }
+                void handleTitleSave()
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  ;(e.target as HTMLInputElement).blur()
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault()
+                  handleTitleCancel()
+                }
+              }}
+              className="h-7 pm-ws-pane-title flex-1 min-w-0"
+              autoFocus
+            />
+          ) : (
+            <div className="pm-ws-title-cluster flex-1 min-w-0">
+              <span
+                className={cn(
+                  "pm-ws-pane-title",
+                  docSwapPhase === "out" && "is-title-out",
+                  docSwapPhase === "in" && "is-title-in"
+                )}
+                onClick={claimFocus}
+              >
+                {note?.title || t("common.note")}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="pm-ws-icon-btn pm-ws-title-edit !h-6 !w-6"
+                onClick={() => {
+                  claimFocus()
+                  setTitleDraft(note?.title || "")
+                  setEditingTitle(true)
+                }}
+                title={t("common.rename")}
+              >
+                <Pencil className="h-3 w-3" />
+              </Button>
+            </div>
+          )}
+          {showSplit && onSplit && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="pm-ws-icon-btn !h-6 !w-6"
+              onClick={() => {
+                claimFocus()
+                onSplit()
+              }}
+              title={t("library.splitPage")}
+            >
+              <Columns2 className="h-3.5 w-3.5" />
+            </Button>
+          )}
+          {showClose && onClosePane && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="pm-ws-icon-btn !h-6 !w-6"
+              onClick={() => {
+                // Close this pane only — do not claim focus first (would steal from sibling)
+                onClosePane()
+              }}
+              title={t("library.closePage")}
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          )}
+        </div>
+
+        {/*
+          Row 2 toolbar:
+          left  — Ingested status tag
+          right — Detail · Ingest | Update▾ · ⋮ (Download / Delete)
+          overflow must stay visible — SoftMenus are absolute under the triggers.
+        */}
+        <div className="flex flex-nowrap items-center gap-1 px-4 pb-2.5 min-h-8 shrink-0 overflow-visible min-w-0">
+          <div className="flex items-center min-w-0 flex-1 overflow-hidden">
+            {ingested && (
+              <span className="pm-ws-status truncate max-w-full">
+                {needsReingest ? t("library.ingestedEdited") : t("common.ingested")}
+              </span>
+            )}
+          </div>
+
+          <div className="relative z-30 flex items-center gap-0.5 shrink-0">
+            {managedFileId && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="pm-ws-action"
+                onClick={() => {
+                  claimFocus()
+                  handleGoToFolder()
+                }}
+                title={t("library.openFileDetail")}
+              >
+                <PanelRight className="h-3.5 w-3.5" />
+                {t("common.details")}
+              </Button>
+            )}
+
+            {/* Not ingested → Ingest; ingested → Update menu */}
+            {!ingested ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="pm-ws-action"
+                onClick={() => {
+                  claimFocus()
+                  void handleIngestClick()
+                }}
+                disabled={ingesting || loading}
+                title={t("library.ingestNote")}
+              >
+                {ingesting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Database className="h-3.5 w-3.5" />
+                )}
+                {ingesting ? t("library.ingesting") : t("library.ingest")}
+              </Button>
+            ) : (
+              <div ref={updateMenuRef} className="relative">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={cn(
+                    "pm-ws-action",
+                    updateMenuOpen && "is-on"
+                  )}
+                  onClick={() => {
+                    claimFocus()
+                    setMoreMenuOpen(false)
+                    setUpdateMenuOpen((v) => !v)
+                  }}
+                  disabled={ingesting || propagating || loading}
+                  title={t("library.updateIngested")}
+                  aria-haspopup="menu"
+                  aria-expanded={updateMenuOpen}
+                >
+                  {ingesting || propagating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                  {ingesting ? t("library.updatingEllipsis") : t("library.update")}
+                  <ChevronDown
+                    className={cn(
+                      "h-3 w-3 opacity-70 transition-transform duration-[180ms] ease-[cubic-bezier(0.32,0.72,0,1)]",
+                      updateMenuOpen && "rotate-180"
+                    )}
+                  />
+                </Button>
+                <SoftMenu
+                  open={updateMenuOpen}
+                  className="absolute right-0 top-full mt-1 z-50 min-w-[11.5rem]"
+                >
+                  {canSyncChanges && (
+                    <MenuItem
+                      onClick={() => {
+                        claimFocus()
+                        void handlePropagate()
+                      }}
+                      disabled={propagating}
+                    >
+                      <Share2 className="h-3.5 w-3.5 shrink-0" />
+                      {t("library.syncChanges")}
+                    </MenuItem>
+                  )}
+                  <MenuItem
+                    onClick={() => {
+                      claimFocus()
+                      setUpdateMenuOpen(false)
+                      void handleIngestClick()
+                    }}
+                    disabled={ingesting}
+                  >
+                    <RefreshCw className="h-3.5 w-3.5 shrink-0" />
+                    {t("library.reingest")}
+                  </MenuItem>
+                </SoftMenu>
+              </div>
+            )}
+
+            {/* ⋮ more: Download + Delete */}
+            <div ref={moreMenuRef} className="relative">
+              <Button
+                variant="ghost"
+                size="sm"
+                className={cn(
+                  "pm-ws-icon-btn",
+                  moreMenuOpen && "is-on"
+                )}
+                onClick={() => {
+                  claimFocus()
+                  setUpdateMenuOpen(false)
+                  setMoreMenuOpen((v) => !v)
+                }}
+                title={t("library.moreActions")}
+                aria-label={t("library.moreActions")}
+                aria-haspopup="menu"
+                aria-expanded={moreMenuOpen}
+              >
+                <MoreVertical className="h-3.5 w-3.5" />
+              </Button>
+              <SoftMenu
+                open={moreMenuOpen}
+                className="absolute right-0 top-full mt-1 z-50 min-w-[10rem]"
+              >
+                <MenuItem
+                  onClick={() => {
+                    claimFocus()
+                    setMoreMenuOpen(false)
+                    handleDownload()
+                  }}
+                >
+                  <Download className="h-3.5 w-3.5 shrink-0" />
+                  {t("common.download")}
+                </MenuItem>
+                <MenuItem
+                  destructive
+                  onClick={() => {
+                    claimFocus()
+                    setMoreMenuOpen(false)
+                    setDeleteOpen(true)
+                  }}
+                >
+                  <Trash2 className="h-3.5 w-3.5 shrink-0" />
+                  {t("common.delete")}
+                </MenuItem>
+              </SoftMenu>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {hardLoading ? (
+        <div className="pm-ws-loading flex-1 is-doc-in">
+          <Loader2 className="h-5 w-5 animate-spin" />
+          {t("common.loading")}
+        </div>
+      ) : (
+        <div
+          className={cn(
+            "pm-ws-doc-body relative flex-1 flex flex-col min-h-0 min-w-0",
+            docSwapPhase === "out" && "is-doc-out",
+            docSwapPhase === "in" && "is-doc-in",
+            docSwapPhase === "idle" && "is-doc-idle"
+          )}
+        >
+          {/*
+            Keep toolbar mounted during soft swap. Unmounting on swapBusy
+            collapsed the strip (~28px) and made prose jump down when it returned.
+            Opacity-only hide while busy is fine — parent is already fading.
+          */}
+          {editorInstance ? (
+            <div
+              className={cn(
+                "pm-ws-fmt-slot shrink-0",
+                swapBusy && "pointer-events-none"
+              )}
+              aria-hidden={swapBusy}
+            >
+              <EditorToolbar editor={editorInstance} />
+            </div>
+          ) : (
+            /* Reserve same chrome height before editor ready (first load) */
+            <div className="pm-ws-fmt-slot pm-ws-fmt-slot--placeholder shrink-0" aria-hidden />
+          )}
+          {distilling && (
+            <div className="pm-ws-status-bar">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              {t("library.distilling")}
+            </div>
+          )}
+          {/* Stable editor shell — content swaps only while opacity is 0 */}
+          <div
+            className={cn(
+              "pm-ws-editor",
+              swapBusy && "pointer-events-none select-none"
+            )}
+          >
+            <MarkdownEditor
+              value={content}
+              showToolbar={false}
+              onEditorReady={(editor) => {
+                editorRef.current = editor
+                setEditorInstance(editor)
+              }}
+              onEditorFocus={claimFocus}
+              onChange={handleChange}
+              onImageUpload={handleImageUpload}
+              onNoteLinkClick={(id) => onNavigateSource(id)}
+              className="px-6 pt-1 pb-5"
+              flush
+              placeholder={t("library.startWriting")}
+            />
+          </div>
+        </div>
+      )}
+
+      {dropOver && (
+        <div className="pm-ws-drop">
+          <ArrowDownToLine className="h-8 w-8" />
+          <span>{t("library.dropToDistill")}</span>
+        </div>
+      )}
+
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent
+          className="pm-dialog pm-dialog-confirm sm:max-w-[320px]"
+          showCloseButton={false}
+        >
+          <DialogHeader>
+            <DialogKicker>{managedFileId ? t("common.file") : t("common.note")}</DialogKicker>
+            <DialogTitle>
+              {managedFileId ? t("library.deleteFileGloballyQ") : t("library.deleteNoteQ")}
+            </DialogTitle>
+            {note?.title ? (
+              <p className="pm-dialog-confirm-target" title={note.title}>
+                {note.title}
+              </p>
+            ) : null}
+            <DialogDescription>
+              {managedFileId
+                ? t("library.deleteNoteFileBody")
+                : t("library.noteDeleteBody")}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setDeleteOpen(false)}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              type="button"
+              variant="destructive-solid"
+              size="sm"
+              onClick={() => void handleDeleteConfirm()}
+            >
+              {managedFileId ? t("library.deleteAllVersions") : t("common.delete")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}

@@ -1,0 +1,6 @@
+# Force LF line endings for files that break with CRLF on Linux
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+.env        text eol=lf
+*.conf      text eol=lf
+*.sql       text eol=lf

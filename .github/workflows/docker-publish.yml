@@ -1,0 +1,345 @@
+# Build and push app image to Docker Hub on application version tags (v1.2.3),
+# then publish: compose + DMG + latest.json → Cloudflare R2, and the GitHub
+# Release. The app's update checker reads R2 latest.json (repo is private).
+#
+# Order: docker job pushes Hub (+ compose → R2); dmg job builds the macOS DMG
+# on a hosted Apple Silicon runner and pushes it (+ latest.json → R2); the
+# release job opens the GitHub Release once the image exists. Desktop update
+# prompts wait for latest.json, so a DMG failure can't show a dead download.
+#
+# Does NOT run for model-only tags (onnx-models-v*).
+#
+# Secrets (repo Settings → Secrets → Actions):
+#   DOCKERHUB_USERNAME  e.g. jethrohou
+#   DOCKERHUB_TOKEN     Docker Hub access token (read/write)
+#   R2_ACCESS_KEY_ID    Cloudflare R2 API token (Object Read&Write on sinkduce-releases)
+#   R2_SECRET_ACCESS_KEY
+#
+# Image: jethrohou/sinkduce
+#   :v1.2.3  :1.2.3  :latest
+
+name: Docker Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing application tag to publish (for example v1.2.3)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+
+jobs:
+  docker:
+    name: Build & push Docker Hub
+    runs-on: ubuntu-latest
+    # Skip model-package tags; only pure application tags vX.Y.Z
+    if: ${{ startsWith(inputs.release_tag || github.ref_name, 'v') && !contains(inputs.release_tag || github.ref_name, 'onnx') }}
+    env:
+      IMAGE: jethrohou/sinkduce
+      NODE_IMAGE: node:20-slim
+      PYTHON_IMAGE: python:3.11-slim
+      UV_IMAGE: ghcr.io/astral-sh/uv:0.6.14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+
+      - name: Verify tag matches pyproject.toml
+        run: |
+          TAG="$RELEASE_TAG"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Expected an application tag in vX.Y.Z format"
+            exit 1
+          fi
+          TAG_VER="${TAG#v}"
+          TOML_VER=$(grep -E '^version\s*=' pyproject.toml | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
+          if [ "$TAG_VER" != "$TOML_VER" ]; then
+            echo "❌ Tag version '$TAG' does not match pyproject.toml version '$TOML_VER'"
+            exit 1
+          fi
+          echo "✅ Tag $TAG matches pyproject.toml $TOML_VER"
+          PKG_VER=$(python3 -c "import json; print(json.load(open('frontend/package.json'))['version'])")
+          if [ "$TAG_VER" != "$PKG_VER" ]; then
+            echo "❌ Tag version '$TAG' does not match frontend/package.json version '$PKG_VER'"
+            exit 1
+          fi
+          echo "✅ Tag $TAG matches frontend/package.json $PKG_VER"
+          echo "TAG_VER=$TAG_VER" >> "$GITHUB_ENV"
+
+      - name: Verify full community assembly
+        run: |
+          python3 - <<'PY'
+          from src import edition
+          if not getattr(edition, "has_permission_management", lambda: False)():
+              raise SystemExit("Full community management implementation is required")
+          if edition.is_enterprise():
+              raise SystemExit("Public releases require the community identity")
+          PY
+
+      - name: Free disk for multi-architecture images
+        run: |
+          df -h /
+          # This job uses containerized runtimes, not the runner's preinstalled SDKs.
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/*
+          docker image prune --all --force
+          df -h /
+
+      # Multi-arch: amd64 (servers) + arm64 (Apple Silicon). Without this,
+      # Hub only has linux/amd64 and Mac M-series pull fails.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker tags
+        id: tags
+        run: |
+          # v1.2.3 → jethrohou/sinkduce:v1.2.3 , :1.2.3 , :latest
+          VER="${{ env.TAG_VER }}"
+          {
+            echo "list<<EOF"
+            echo "${IMAGE}:v${VER}"
+            echo "${IMAGE}:${VER}"
+            echo "${IMAGE}:latest"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "Will push:"
+          echo "${IMAGE}:v${VER}"
+          echo "${IMAGE}:${VER}"
+          echo "${IMAGE}:latest"
+
+      - name: Inspect community image before publishing
+        run: |
+          docker buildx build --target community --load -t sinkduce-release-check .
+          docker save sinkduce-release-check | python3 scripts/check_community_artifact.py image-stream
+          docker image rm sinkduce-release-check
+          df -h /
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.tags.outputs.list }}
+          build-args: |
+            NODE_IMAGE=${{ env.NODE_IMAGE }}
+            PYTHON_IMAGE=${{ env.PYTHON_IMAGE }}
+            UV_IMAGE=${{ env.UV_IMAGE }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          target: community
+
+      # Public Docker entrypoint for private-repo users: they download the
+      # compose file from R2 and `docker compose up -d` pulls from Hub.
+      # R2_ACCOUNT_ID is not a secret (it forms the public r2.dev URL too).
+      # continue-on-error: the image is already on Hub — an R2 hiccup must
+      # not block the Release job.
+      - name: Upload docker-compose.yml + Windows installer to R2
+        continue-on-error: true
+        env:
+          R2_ACCOUNT_ID: ce00656e7922871f1518b79ec760ef19
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          aws s3 cp docker-compose.yml \
+            "s3://sinkduce-releases/docker-compose.yml" \
+            --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --content-type "text/yaml" \
+            --cache-control "public, max-age=300"
+          # Windows one-line bootstrap (WSL2 + Docker Desktop + compose deploy)
+          aws s3 cp docker/install.ps1 \
+            "s3://sinkduce-releases/install.ps1" \
+            --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --content-type "text/plain; charset=utf-8" \
+            --cache-control "public, max-age=300"
+          echo "Public: https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/docker-compose.yml"
+          echo "Public: https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/install.ps1"
+
+  # Build the macOS DMG on a hosted Apple Silicon runner right after the
+  # image is on Hub, then push it (+ .sha256 + latest.json) to R2.
+  # latest.json is what the app's update checker reads — desktop users are
+  # only prompted once this lands, so a DMG failure never shows a dead
+  # download button (Docker users are unaffected; release opens regardless).
+  dmg:
+    name: Build macOS DMG → R2
+    needs: docker
+    runs-on: macos-15
+    timeout-minutes: 90
+    if: ${{ success() && startsWith(inputs.release_tag || github.ref_name, 'v') && !contains(inputs.release_tag || github.ref_name, 'onnx') }}
+    env:
+      R2_ACCOUNT_ID: ce00656e7922871f1518b79ec760ef19
+      R2_PUBLIC_BASE: https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Enable pnpm (packageManager pins the version)
+        run: corepack enable pnpm
+
+      - name: Prepare build tools (uv, Pillow venv as python3.12)
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          python3 -m venv "$RUNNER_TEMP/iconenv"
+          ln -s python3 "$RUNNER_TEMP/iconenv/bin/python3.12"
+          "$RUNNER_TEMP/iconenv/bin/pip" install --quiet pillow
+          echo "$RUNNER_TEMP/iconenv/bin" >> "$GITHUB_PATH"
+
+      - name: Install ffmpeg (embedded sidecar)
+        run: brew install ffmpeg
+
+      - name: Cache Tauri Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/tauri/src-tauri
+
+      - name: Build DMG (desktop/package_macos.sh)
+        env:
+          SINKDUCE_EDITION: community
+          # minisign key for the in-app updater payload (.app.tar.gz.sig);
+          # package_macos.sh hard-fails without it on a release tag.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: ./desktop/package_macos.sh
+
+      - name: Upload DMG + updater payload + latest.json to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          VER="${RELEASE_TAG#v}"
+          DMG="SinkDuce-macos-arm64-v${VER}.dmg"
+          TARGZ="SinkDuce-macos-arm64-v${VER}.app.tar.gz"
+          cd desktop/dist
+          # Release notes: the `## vX.Y.Z` section of CHANGELOG.md → latest.json
+          # notes (rendered by the desktop update dialog).
+          NOTES=$(awk -v pat="^## v${VER}\$" '$0 ~ pat {f=1; next} /^## /{f=0} f' ../../CHANGELOG.md)
+          cp SinkDuce.dmg "$DMG"
+          SHA=$(shasum -a 256 "$DMG" | cut -d' ' -f1)
+          SIZE=$(stat -f%z "$DMG")
+          printf '%s  %s\n' "$SHA" "$DMG" > "$DMG.sha256"
+          UPDATER=0
+          if [[ -f "$TARGZ" && -f "$TARGZ.sig" ]]; then
+            UPDATER=1
+          else
+            echo "WARN updater payload missing — latest.json will offer DMG only"
+          fi
+          VERSION="$VER" DMG="$DMG" SHA="$SHA" SIZE="$SIZE" TARGZ="$TARGZ" \
+            UPDATER="$UPDATER" PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            NOTES="$NOTES" \
+            R2_PUBLIC_BASE="${{ env.R2_PUBLIC_BASE }}" \
+          python3 - <<'PY'
+          import json, os
+          now = os.environ["PUB_DATE"]
+          latest = {
+              "version": os.environ["VERSION"],
+              "tag": "v" + os.environ["VERSION"],
+              "asset": os.environ["DMG"],
+              "sha256": os.environ["SHA"],
+              "size": int(os.environ["SIZE"]),
+              "updated_at": now,
+              "pub_date": now,
+          }
+          notes = os.environ.get("NOTES", "").strip()
+          if notes:
+              latest["notes"] = notes
+          if os.environ["UPDATER"] == "1":
+              targz = os.environ["TARGZ"]
+              sig = open(targz + ".sig").read().strip()
+              latest["platforms"] = {
+                  "darwin-aarch64": {
+                      "signature": sig,
+                      "url": os.environ["R2_PUBLIC_BASE"] + "/" + targz,
+                  }
+              }
+          with open("latest.json", "w") as fh:
+              fh.write(json.dumps(latest, indent=2) + "\n")
+          PY
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          aws s3 cp "$DMG" "s3://sinkduce-releases/$DMG" \
+            --endpoint-url "$ENDPOINT" --content-type "application/x-apple-diskimage" \
+            --content-disposition "attachment; filename=\"$DMG\"" --cache-control "public, max-age=86400"
+          aws s3 cp "$DMG.sha256" "s3://sinkduce-releases/$DMG.sha256" \
+            --endpoint-url "$ENDPOINT" --content-type "text/plain" --cache-control "public, max-age=86400"
+          if [[ "$UPDATER" == "1" ]]; then
+            aws s3 cp "$TARGZ" "s3://sinkduce-releases/$TARGZ" \
+              --endpoint-url "$ENDPOINT" --content-type "application/gzip" --cache-control "public, max-age=86400"
+            aws s3 cp "$TARGZ.sig" "s3://sinkduce-releases/$TARGZ.sig" \
+              --endpoint-url "$ENDPOINT" --content-type "text/plain" --cache-control "public, max-age=86400"
+          fi
+          # One-line installer: version-independent (resolves latest.json itself),
+          # so it only changes when the script changes. curl never sets the
+          # quarantine xattr, so this install path never meets Gatekeeper.
+          aws s3 cp ../../desktop/install.sh "s3://sinkduce-releases/install.sh" \
+            --endpoint-url "$ENDPOINT" --content-type "text/plain; charset=utf-8" --cache-control "public, max-age=300"
+          # latest.json lands last: everything it points at is already public.
+          aws s3 cp latest.json "s3://sinkduce-releases/latest.json" \
+            --endpoint-url "$ENDPOINT" --content-type "application/json" --cache-control "public, max-age=300"
+          echo "Public: ${{ env.R2_PUBLIC_BASE }}/$DMG"
+          echo "Public: ${{ env.R2_PUBLIC_BASE }}/latest.json"
+          echo "Public: ${{ env.R2_PUBLIC_BASE }}/install.sh"
+
+  # After Hub image is available — then open GitHub Release (update popup).
+  # Desktop installer is uploaded later as SinkDuce-macos-arm64-vX.Y.Z.dmg only.
+  release:
+    name: GitHub Release
+    needs: docker
+    runs-on: ubuntu-latest
+    if: ${{ success() && startsWith(inputs.release_tag || github.ref_name, 'v') && !contains(inputs.release_tag || github.ref_name, 'onnx') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+
+      - name: Verify tag matches pyproject.toml
+        run: |
+          TAG="$RELEASE_TAG"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Expected an application tag in vX.Y.Z format"
+            exit 1
+          fi
+          TAG_VER="${TAG#v}"
+          TOML_VER=$(grep -E '^version\s*=' pyproject.toml | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
+          if [ "$TAG_VER" != "$TOML_VER" ]; then
+            echo "❌ Tag version '$TAG' does not match pyproject.toml version '$TOML_VER'"
+            exit 1
+          fi
+          echo "✅ Tag $TAG matches pyproject.toml $TOML_VER"
+          PKG_VER=$(python3 -c "import json; print(json.load(open('frontend/package.json'))['version'])")
+          if [ "$TAG_VER" != "$PKG_VER" ]; then
+            echo "❌ Tag version '$TAG' does not match frontend/package.json version '$PKG_VER'"
+            exit 1
+          fi
+          echo "✅ Tag $TAG matches frontend/package.json $PKG_VER"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
+          generate_release_notes: true
+          make_latest: true

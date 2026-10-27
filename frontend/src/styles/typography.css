@@ -1,0 +1,46 @@
+/* Balanced typography. Keep the browser's root size so rem values respect
+ * user preferences. Use each platform's native UI and CJK fonts. */
+:root {
+  --type-font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei",
+    "Noto Sans CJK SC", sans-serif;
+  /* Keep legacy display roles on the same family as the rest of the UI. */
+  --type-font-brand: var(--type-font-ui);
+  --type-font-code: ui-monospace, "SF Mono", Menlo, Monaco, Consolas,
+    "Liberation Mono", monospace;
+
+  --type-weight-normal: 400;
+  --type-weight-medium: 500;
+  --type-weight-emphasis: 450;
+  --type-weight-heading: 500;
+
+  --type-size-page: 1.5rem;
+  --type-size-title: 1.25rem;
+  --type-size-section: 1rem;
+  --type-size-reading: 0.875rem;
+  --type-size-ui: 0.875rem;
+  --type-size-label: 0.8125rem;
+  --type-size-meta: 0.75rem;
+  --type-size-code: 0.8125rem;
+  --type-size-table: 0.8125rem;
+
+  --type-leading-page: 1.25;
+  --type-leading-title: 1.3;
+  --type-leading-section: 1.4;
+  --type-leading-reading: 1.75;
+  --type-leading-ui: 1.5;
+  --type-leading-label: 1.4;
+  --type-leading-meta: 1.45;
+  --type-leading-code: 1.6;
+
+  --type-page: var(--type-weight-normal) var(--type-size-page)/var(--type-leading-page) var(--type-font-brand);
+  --type-title: var(--type-weight-normal) var(--type-size-title)/var(--type-leading-title) var(--type-font-brand);
+  --type-section: var(--type-weight-heading) var(--type-size-section)/var(--type-leading-section) var(--type-font-ui);
+  --type-reading: var(--type-weight-normal) var(--type-size-reading)/var(--type-leading-reading) var(--type-font-ui);
+  --type-reading-compact: var(--type-weight-normal) var(--type-size-ui)/1.65 var(--type-font-ui);
+  --type-ui: var(--type-weight-normal) var(--type-size-ui)/var(--type-leading-ui) var(--type-font-ui);
+  --type-label: var(--type-weight-medium) var(--type-size-label)/var(--type-leading-label) var(--type-font-ui);
+  --type-meta: var(--type-weight-normal) var(--type-size-meta)/var(--type-leading-meta) var(--type-font-ui);
+  --type-code: var(--type-weight-normal) var(--type-size-code)/var(--type-leading-code) var(--type-font-code);
+  --type-table: var(--type-weight-normal) var(--type-size-table)/1.6 var(--type-font-ui);
+}

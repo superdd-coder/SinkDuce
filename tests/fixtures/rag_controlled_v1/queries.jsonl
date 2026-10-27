@@ -1,0 +1,30 @@
+{"_id":"fact_0","text":"项目 P0 的批准预算是多少万元？","category":"single_fact","answerable":true,"evidence_groups":[["project_0.txt"]],"reference_answer":"120 万元"}
+{"_id":"fact_1","text":"项目 P1 的批准预算是多少万元？","category":"single_fact","answerable":true,"evidence_groups":[["project_1.txt"]],"reference_answer":"157 万元"}
+{"_id":"fact_2","text":"项目 P2 的批准预算是多少万元？","category":"single_fact","answerable":true,"evidence_groups":[["project_2.txt"]],"reference_answer":"194 万元"}
+{"_id":"fact_3","text":"项目 P3 的批准预算是多少万元？","category":"single_fact","answerable":true,"evidence_groups":[["project_3.txt"]],"reference_answer":"231 万元"}
+{"_id":"fact_4","text":"项目 P4 的批准预算是多少万元？","category":"single_fact","answerable":true,"evidence_groups":[["project_4.txt"]],"reference_answer":"268 万元"}
+{"_id":"fact_5","text":"项目 P5 的批准预算是多少万元？","category":"single_fact","answerable":true,"evidence_groups":[["project_5.txt"]],"reference_answer":"305 万元"}
+{"_id":"fact_6","text":"项目 P6 的批准预算是多少万元？","category":"single_fact","answerable":true,"evidence_groups":[["project_6.txt"]],"reference_answer":"342 万元"}
+{"_id":"fact_7","text":"项目 P7 的批准预算是多少万元？","category":"single_fact","answerable":true,"evidence_groups":[["project_7.txt"]],"reference_answer":"379 万元"}
+{"_id":"fact_8","text":"项目 P8 的批准预算是多少万元？","category":"single_fact","answerable":true,"evidence_groups":[["project_8.txt"]],"reference_answer":"416 万元"}
+{"_id":"fact_9","text":"项目 P9 的批准预算是多少万元？","category":"single_fact","answerable":true,"evidence_groups":[["project_9.txt"]],"reference_answer":"453 万元"}
+{"_id":"multi_0","text":"项目 P0 的批准预算和负责人分别是什么？","category":"multi_document","answerable":true,"evidence_groups":[["project_0.txt"],["owner_0.txt"]],"reference_answer":"120 万元；负责人 R0"}
+{"_id":"compare_0","text":"比较项目 P0 和项目 P5 的批准预算。","category":"comparison","answerable":true,"evidence_groups":[["project_0.txt"],["project_5.txt"]],"reference_answer":"P0：120 万元；P5：305 万元"}
+{"_id":"multi_1","text":"项目 P1 的批准预算和负责人分别是什么？","category":"multi_document","answerable":true,"evidence_groups":[["project_1.txt"],["owner_1.txt"]],"reference_answer":"157 万元；负责人 R1"}
+{"_id":"compare_1","text":"比较项目 P1 和项目 P6 的批准预算。","category":"comparison","answerable":true,"evidence_groups":[["project_1.txt"],["project_6.txt"]],"reference_answer":"P1：157 万元；P6：342 万元"}
+{"_id":"multi_2","text":"项目 P2 的批准预算和负责人分别是什么？","category":"multi_document","answerable":true,"evidence_groups":[["project_2.txt"],["owner_2.txt"]],"reference_answer":"194 万元；负责人 R2"}
+{"_id":"compare_2","text":"比较项目 P2 和项目 P7 的批准预算。","category":"comparison","answerable":true,"evidence_groups":[["project_2.txt"],["project_7.txt"]],"reference_answer":"P2：194 万元；P7：379 万元"}
+{"_id":"multi_3","text":"项目 P3 的批准预算和负责人分别是什么？","category":"multi_document","answerable":true,"evidence_groups":[["project_3.txt"],["owner_3.txt"]],"reference_answer":"231 万元；负责人 R3"}
+{"_id":"compare_3","text":"比较项目 P3 和项目 P8 的批准预算。","category":"comparison","answerable":true,"evidence_groups":[["project_3.txt"],["project_8.txt"]],"reference_answer":"P3：231 万元；P8：416 万元"}
+{"_id":"multi_4","text":"项目 P4 的批准预算和负责人分别是什么？","category":"multi_document","answerable":true,"evidence_groups":[["project_4.txt"],["owner_4.txt"]],"reference_answer":"268 万元；负责人 R4"}
+{"_id":"compare_4","text":"比较项目 P4 和项目 P9 的批准预算。","category":"comparison","answerable":true,"evidence_groups":[["project_4.txt"],["project_9.txt"]],"reference_answer":"P4：268 万元；P9：453 万元"}
+{"_id":"exact_0","text":"付款单 ZX-71001 的支付金额是多少元？","category":"exact_identifier","answerable":true,"evidence_groups":[["ticket_0.txt"]],"reference_answer":"45000 元"}
+{"_id":"exact_1","text":"付款单 ZX-71002 的支付金额是多少元？","category":"exact_identifier","answerable":true,"evidence_groups":[["ticket_1.txt"]],"reference_answer":"52000 元"}
+{"_id":"exact_2","text":"付款单 ZX-71003 的支付金额是多少元？","category":"exact_identifier","answerable":true,"evidence_groups":[["ticket_2.txt"]],"reference_answer":"59000 元"}
+{"_id":"exact_3","text":"付款单 ZX-71004 的支付金额是多少元？","category":"exact_identifier","answerable":true,"evidence_groups":[["ticket_3.txt"]],"reference_answer":"66000 元"}
+{"_id":"exact_4","text":"付款单 ZX-71005 的支付金额是多少元？","category":"exact_identifier","answerable":true,"evidence_groups":[["ticket_4.txt"]],"reference_answer":"73000 元"}
+{"_id":"negative_0","text":"项目 P99 的批准预算是多少？","category":"unanswerable","answerable":false,"evidence_groups":[],"reference_answer":"现有资料不足以回答"}
+{"_id":"negative_1","text":"项目 P0 的实际最终结算金额是多少？","category":"unanswerable","answerable":false,"evidence_groups":[],"reference_answer":"现有资料不足以回答"}
+{"_id":"negative_2","text":"负责人 R0 的联系电话是什么？","category":"unanswerable","answerable":false,"evidence_groups":[],"reference_answer":"现有资料不足以回答"}
+{"_id":"negative_3","text":"付款单 ZX-99999 的付款状态是什么？","category":"unanswerable","answerable":false,"evidence_groups":[],"reference_answer":"现有资料不足以回答"}
+{"_id":"negative_4","text":"所有项目在 2027 年的预算是多少？","category":"unanswerable","answerable":false,"evidence_groups":[],"reference_answer":"现有资料不足以回答"}

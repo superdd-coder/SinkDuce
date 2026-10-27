@@ -1,0 +1,4020 @@
+"""ChatboxAgent — conversational agent with knowledge-base + structure tools.
+
+Uses function calling to decide whether to search, browse the library tree,
+or (rarely) read full document text. Search internals stay hidden from the user.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import queue as sync_queue
+import threading
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import AsyncGenerator
+
+from src.chatbox.note_changes import (
+    merge_note_changes, note_changes_from_result, note_references_from_history,
+)
+from src.chatbox.query_tools import (
+    STRUCTURE_TOOL_NAMES,
+    TOOLS,
+    WEB_SEARCH_TOOL_NAME,
+    allowed_tool_names,
+    collect_todo_create_items,
+    collect_todo_delete_ids,
+    collect_todo_update_items,
+    collection_scope_error,
+    dispatch_structure_tool_async,
+    execute_structure_tool,
+    execute_structure_tool_async,
+    force_collection_args,
+    merge_search_tool_calls,
+    tools_for_mode,
+)
+from src.prompts import (
+    CHAT_FORCE_ANSWER_SYSTEM,
+    CHAT_FORCE_ANSWER_USER,
+    CHAT_FORCE_ANSWER_WITH_TOOLS_USER,
+    CHAT_NOTE_REFERENCES_CONTEXT,
+    DEFAULT_SYSTEM_PROMPT,
+    KNOWLEDGE_ANSWER_EVIDENCE_RULES,
+    MAIN_CHAT_FORCE_ANSWER_USER,
+    MAIN_CHAT_FORMATTING_RULES,
+    QUICK_CHAT_SYSTEM_PROMPT,
+)
+from src.rag.search_settings import search_settings
+
+logger = logging.getLogger(__name__)
+
+# ═══════════════════════════════════════════════════════════════════
+# Response types
+# ═══════════════════════════════════════════════════════════════════
+
+@dataclass
+class ChatResponse:
+    answer: str
+    sources: list[dict] = field(default_factory=list)
+    tool_calls: int = 0
+    note_changes: list[dict] = field(default_factory=list)
+    citations: list[dict] = field(default_factory=list)
+    report_changes: list[dict] = field(default_factory=list)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Helpers
+# ═══════════════════════════════════════════════════════════════════
+
+def _build_speaker_mapping(meeting_id: str) -> str:
+    """Speaker mapping for meeting chat (tests / callers)."""
+    from src.chatbox.meeting_context import format_speaker_mapping
+
+    return format_speaker_mapping(meeting_id)
+
+
+def _ui_turn_count(store, session_id: str, fallback: int | None = None) -> int:
+    """Q&A rounds for the QC counter: 1 user message = 1 turn.
+
+    Group sessions persist tool rows, so raw ``count_messages`` inflates the
+    badge (2 questions looked like 24). Use dialogue turns for quick / meeting /
+    group; keep raw rows for main Chat.
+    """
+    if (
+        session_id.startswith("quick_")
+        or session_id.startswith("meeting_")
+        or session_id.startswith("group_")
+    ):
+        count_fn = getattr(store, "count_dialogue_turns", None)
+        if callable(count_fn):
+            try:
+                return int(count_fn(session_id))
+            except Exception:
+                pass
+        if fallback is not None:
+            return int(fallback)
+    try:
+        return int(store.count_messages(session_id, exclude_system=True))
+    except Exception:
+        return int(fallback or 0)
+
+
+async def _run_blocking(fn, /, *args, **kwargs):
+    """Run sync retrieval/LLM-adjacent work off the asyncio event loop."""
+    return await asyncio.to_thread(fn, *args, **kwargs)
+
+
+def _new_stream_tool_names(
+    acc: dict, seen: set, known: set[str],
+) -> list[tuple[int, str]]:
+    """Tool names that just became complete (full schema name, not a prefix)."""
+    out: list[tuple[int, str]] = []
+    for idx in sorted(acc):
+        if idx in seen:
+            continue
+        fn = (acc[idx].get("function") or {}) if isinstance(acc[idx], dict) else {}
+        name = str(fn.get("name") or "")
+        if name in known:
+            out.append((idx, name))
+    return out
+
+
+def _preview_stream_tool_name(
+    acc: dict, seen: set, known: set[str],
+) -> str | None:
+    """Only the first tool in a batch — later tools start when they actually run."""
+    for idx, name in _new_stream_tool_names(acc, seen, known):
+        if idx == 0:
+            return name
+    return None
+
+
+def _thinking_on_for_tool_round(
+    thinking: bool, tool_choice, extra_messages: list | None = None,
+) -> bool:
+    """Thinking only on the first planning round this turn.
+
+    After lookup/search returns, thinking makes Chat and Group sit silently
+    on a large tool body before the next tool or answer. Forced function
+    tool_choice also cannot use thinking on Qwen.
+    """
+    if not thinking:
+        return False
+    if extra_messages:
+        return False
+    if isinstance(tool_choice, dict):
+        return False
+    return True
+
+
+def _retry_llm_kwargs_after_error(kwargs: dict, error: BaseException, llm=None) -> dict | None:
+    """One compatible retry. Thinking + forced tool_choice is a 400 on Qwen;
+    always-thinking models reject thinking-off entirely (百炼第三方智谱 etc.).
+    """
+    from src.providers.llm.thinking import is_always_think_error
+
+    msg = str(error).lower()
+    out = dict(kwargs)
+    extra = dict(out.get("extra_body") or {})
+    if is_always_think_error(error):
+        # The model cannot turn thinking off: switch to reasoning_effort and
+        # remember the posture so subsequent calls skip the rejected param.
+        if llm is not None and getattr(llm, "_thinking_mode", None) is not None:
+            try:
+                llm._thinking_mode = "always"
+                from src.providers.llm.thinking import remember_thinking_mode
+
+                remember_thinking_mode(
+                    str(getattr(llm, "_base_url", "") or ""),
+                    str(getattr(llm, "_model", "") or ""),
+                    "always",
+                )
+            except Exception:
+                pass
+        out.pop("extra_body", None)
+        if not out.get("reasoning_effort"):
+            out["reasoning_effort"] = "low"
+        if isinstance(out.get("tool_choice"), dict):
+            out["tool_choice"] = "auto"
+        return out
+    thinking_rejects_choice = "thinking" in msg and "tool_choice" in msg
+    if thinking_rejects_choice:
+        already_off = extra.get("enable_thinking") is False or (
+            isinstance(extra.get("thinking"), dict)
+            and extra["thinking"].get("type") == "disabled"
+        )
+        forced = isinstance(out.get("tool_choice"), dict)
+        if forced and not already_off:
+            extra["enable_thinking"] = False
+            if "thinking" in extra:
+                extra["thinking"] = {"type": "disabled"}
+            out["extra_body"] = extra
+            return out
+        out["tool_choice"] = "auto"
+        extra["enable_thinking"] = False
+        if extra.get("thinking"):
+            extra["thinking"] = {"type": "disabled"}
+        out["extra_body"] = extra
+        return out
+    if out.get("extra_body") is not None:
+        out.pop("extra_body", None)
+        return out
+    return None
+
+
+def _touch_group_session(session_id: str) -> None:
+    """Bump Group last_chat_at when a Group Chat turn starts."""
+    if not session_id.startswith("group_"):
+        return
+    try:
+        from src.meeting.group_store import touch_chat
+
+        touch_chat(session_id[len("group_"):])
+    except Exception:
+        logger.debug("touch group chat skipped %s", session_id, exc_info=True)
+
+
+def _build_meeting_ephemeral_context(meeting_id: str) -> str:
+    from src.chatbox.meeting_context import build_meeting_ephemeral_context
+
+    return build_meeting_ephemeral_context(meeting_id)
+
+
+def _build_user_identity_line() -> str:
+    """'Current user: <name>' for the person marked as Me; empty when unset.
+
+    Me is the People entry (voice enrollment) flagged via speakers settings —
+    the same identity `list_todos mine=true` filters by.
+    """
+    try:
+        from src.speakers.store import get_me_person_id, get_person
+
+        pid = get_me_person_id()
+        if not pid:
+            return ""
+        person = get_person(pid)
+        name = (person.display_name if person else "").strip()
+        if not name:
+            return ""
+        return f"Current user: {name} (the person you are assisting)."
+    except Exception:
+        return ""
+
+
+def _build_surface_context(
+    session_id: str, collections: list[str] | None
+) -> str | None:
+    """Ephemeral per-turn context by surface, or None when nothing applies.
+
+    meeting_: speakers + General summary (as before).
+    group_:   member roster (ids, n, dates, index status).
+    quick_/agentic Chat: minimal meeting catalog digest — titles + dates only,
+    so the model can judge meeting relevance without a catalog tool round.
+    Every surface is prefixed with the user identity line when Me is set.
+    """
+    if session_id.startswith("meeting_"):
+        surface = _build_meeting_ephemeral_context(session_id[len("meeting_"):])
+    elif session_id.startswith("group_"):
+        from src.chatbox.meeting_context import build_group_ephemeral_context
+
+        surface = build_group_ephemeral_context(session_id[len("group_"):])
+    else:
+        from src.chatbox.meeting_context import build_meeting_catalog_digest
+
+        surface = build_meeting_catalog_digest(collections) or None
+    identity = _build_user_identity_line()
+    if identity:
+        surface = f"{identity}\n\n{surface}" if surface else identity
+    return surface
+
+
+def _meeting_scope_kwargs(
+    session_id: str,
+    args: dict,
+    forced_col: str | None,
+    collections: list[str] | None = None,
+) -> dict:
+    if session_id.startswith("meeting_"):
+        return {"meeting_id": session_id[len("meeting_"):]}
+    if session_id.startswith("group_"):
+        return {"group_id": session_id[len("group_"):]}
+    col = (forced_col or str((args or {}).get("collection") or "")).strip()
+    selected = [str(c).strip() for c in (collections or []) if str(c).strip()]
+    if forced_col:
+        return {"collection": forced_col}
+    return {
+        "collection": col or None,
+        "collections": selected or None,
+    }
+
+
+def _run_list_meeting_catalog(
+    session_id: str,
+    args: dict,
+    forced_col: str | None,
+    collections: list[str] | None = None,
+) -> str:
+    from src.meeting.catalog import catalog_tool_json
+
+    kw = _meeting_scope_kwargs(session_id, args, forced_col, collections)
+    return catalog_tool_json(
+        collection=kw.get("collection"),
+        collections=kw.get("collections"),
+        group_id=kw.get("group_id"),
+    )
+
+
+def _run_read_meeting_summary(
+    session_id: str,
+    args: dict,
+    forced_col: str | None,
+    collections: list[str] | None = None,
+) -> str:
+    from src.meeting.catalog import read_meeting_summary_json
+
+    args = dict(args or {})
+    # Single-meeting QC: default to THIS meeting when the model omits the id.
+    if not str(args.get("meeting_id") or "").strip() and session_id.startswith(
+        "meeting_"
+    ):
+        args["meeting_id"] = session_id[len("meeting_"):]
+    kw = _meeting_scope_kwargs(session_id, args, forced_col, collections)
+    return read_meeting_summary_json(
+        str(args.get("meeting_id") or ""),
+        collection=kw.get("collection"),
+        collections=kw.get("collections"),
+        group_id=kw.get("group_id"),
+    )
+
+
+def _run_lookup_meeting_transcript(
+    session_id: str,
+    args: dict,
+    user_message: str,
+    forced_col: str | None,
+    seen_tx_packs: set[str],
+    collections: list[str] | None = None,
+    seen_tx_hits: list[dict] | None = None,
+) -> tuple[str, set[str], list[dict] | None, list[dict]]:
+    """Return (tool_json, pack_keys, chat_sources_or_none, kept_hit_packs).
+
+    ``kept_hit_packs`` is the merged prior+new pack list (also mirrored into
+    ``seen_tx_hits`` in place when provided) — parallel callers pass their own
+    snapshot copies and merge the kept lists afterwards.
+    """
+    query = str((args or {}).get("query") or user_message)
+    scope = str((args or {}).get("speaker_scope") or "auto")
+    if session_id.startswith("meeting_"):
+        from src.meeting.transcript_index import lookup_json_and_keys
+
+        mid = session_id[len("meeting_"):]
+        result = lookup_json_and_keys(
+            mid,
+            query,
+            speaker_scope=scope,
+            user_question=user_message,
+            seen_pack_keys=seen_tx_packs,
+            prior_hits=list(seen_tx_hits or []),
+        )
+        raw, found = result[0], result[1]
+        kept = result[2] if len(result) > 2 else list(seen_tx_hits or [])
+        if seen_tx_hits is not None:
+            seen_tx_hits[:] = kept
+        return raw, found, None, kept
+
+    from src.meeting.catalog import lookup_hits_to_chat_sources, lookup_tool_json_and_keys
+
+    raw_ids = (args or {}).get("meeting_ids")
+    mids = raw_ids if isinstance(raw_ids, list) else None
+    kw = _meeting_scope_kwargs(session_id, args, forced_col, collections)
+    prior = list(seen_tx_hits or [])
+    raw, found, kept = lookup_tool_json_and_keys(
+        query,
+        meeting_ids=mids,
+        speaker_scope=scope,
+        user_question=user_message,
+        collection=kw.get("collection"),
+        collections=kw.get("collections"),
+        group_id=kw.get("group_id"),
+        seen_pack_keys=seen_tx_packs,
+        prior_hits=prior,
+    )
+    if seen_tx_hits is not None:
+        seen_tx_hits[:] = kept
+    chat_sources = None
+    if not session_id.startswith("group_"):
+        try:
+            payload = json.loads(raw) if isinstance(raw, str) else {}
+        except json.JSONDecodeError:
+            payload = {}
+        if isinstance(payload, dict) and not payload.get("error"):
+            chat_sources = lookup_hits_to_chat_sources(payload)
+    return raw, found, chat_sources, kept
+
+
+def _format_current_time() -> str:
+    """Return current local time with timezone, e.g. '2026-07-03 14:30 CST (UTC+08:00)'."""
+    now = datetime.now().astimezone()
+    offset = now.utcoffset()
+    if offset is not None:
+        total_seconds = int(offset.total_seconds())
+        sign = "+" if total_seconds >= 0 else "-"
+        hours, minutes = divmod(abs(total_seconds), 3600)
+        minutes //= 60
+        tz_str = f"UTC{sign}{hours:02d}:{minutes:02d}"
+    else:
+        tz_str = "UTC"
+    tz_name = now.strftime("%Z") or tz_str
+    return f"{now.strftime('%Y-%m-%d %H:%M')} {tz_name} ({tz_str})"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ChatboxAgent
+# ═══════════════════════════════════════════════════════════════════
+
+# Outer LLM↔tool loop (web + structure + KB + synthesis). Higher than the
+# agentic-search-only cap so HITL web / multi-tool turns still fit.
+_MAX_TOOL_ROUNDS = 15
+# Cap *search_knowledge_base* (Agentic 查库) per user message — separate from
+# outer rounds so web/structure tools do not burn the KB budget, and so the
+# model is pushed to answer after enough evidence instead of endless search.
+_MAX_AGENTIC_SEARCH_CALLS = 5
+# Same hard cap for *lookup_meeting_transcript*. The no-new-packs dry flag
+# only ends the loop when a query returns nothing new; a model that keeps
+# rephrasing (each variant surfacing one more weak pack) would otherwise
+# burn every outer round re-searching meetings.
+_MAX_MEETING_LOOKUP_CALLS = 5
+# After the lookup budget is spent, a model that STILL re-emits the call
+# burns one LLM round per attempt. Two wasted serves → force the answer.
+_MAX_WASTED_DRY_LOOKUPS = 2
+# Hard cap for *create_note* per user message. Observed failure mode: the
+# model writes a note, then re-searches and writes the same note again —
+# duplicates pile up until the round budget is exhausted.
+_MAX_NOTE_CREATE_CALLS = 3
+
+
+def _lookup_limit_json(limit: int) -> str:
+    """Tool payload telling the model the transcript-search budget is spent."""
+    import json as _json
+
+    return _json.dumps(
+        {
+            "hit_count": 0,
+            "context": "",
+            "message": (
+                f"Transcript lookup limit reached ({limit} calls this turn). "
+                "Do NOT call lookup_meeting_transcript again. Synthesize the "
+                "final answer now from the excerpts already returned in this "
+                "conversation."
+            ),
+        },
+        ensure_ascii=False,
+    )
+# Legacy row cap (tests / callers may still reference). Context window uses dialogue turns.
+_MAX_HISTORY_MESSAGES = 50
+# LLM history: count user + final-assistant answers (tool rows ride with the turn).
+_MAX_HISTORY_DIALOGUE_MAIN = 32   # ~16 Q&A rounds for agentic Chat
+_MAX_HISTORY_DIALOGUE_QUICK = 20  # aligns with quick warn/trim scale
+_MAX_HISTORY_DIALOGUE_MEETING = 40  # no tools; more room for pure dialogue
+_QUICK_MAX_MESSAGES = 30
+_QUICK_WARN_THRESHOLD = 20
+_QUICK_TRIM_KEEP = 5
+_MEETING_MAX_MESSAGES = 50
+_MEETING_TRIM_KEEP = 10
+_TOTAL_MAX_TOKENS = 128000  # generous ceiling
+# Cap historical tool payloads so old web dumps do not drown newer user intent
+_MAX_HISTORY_TOOL_CHARS = 6000
+
+
+class ChatboxAgent:
+    """Chat agent with conversation memory and RAG tool access.
+
+    Uses function calling to decide when to search the knowledge base.
+    Supports two modes:
+      - "agentic" (default): search_knowledge_base tool → AgenticQueryService
+      - "direct": lookup_collection tool → DirectQueryModule (lightweight,
+        collection-scoped Q&A; no decompose/fan-out/synthesize)
+    """
+
+    def __init__(
+        self,
+        session_store,
+        chat_llm,
+        agentic_service,
+        direct_module=None,
+        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+    ):
+        self._store = session_store
+        from src.chat_attachments.store import for_sessions
+        self._attachments = for_sessions(session_store)
+        self._llm = chat_llm
+        self._agentic = agentic_service
+        self._direct = direct_module
+        self._system_prompt = system_prompt
+        # Session image snapshot dir override (tests); None → config default
+        self._image_store_dir = None
+
+    # ── helpers ──────────────────────────────────────────────────────
+
+    def _remember_search_evidence(self, session_id: str, context: str, images: dict) -> str:
+        """Store canonical evidence and image bytes for either retrieval mode."""
+        from src.chatbox.image_memory import snapshot_session_images
+
+        snapshots = {
+            image_id: f"data:{info.get('mime', 'image/png')};base64,{info['base64']}"
+            for image_id, info in (images or {}).items()
+            if isinstance(info, dict) and info.get("base64")
+        }
+        if snapshots:
+            snapshot_session_images(session_id, snapshots, base_dir=self._image_store_dir)
+        return context if isinstance(context, str) else ""
+
+    def _has_meetings(self, session_id: str, collections: list[str] | None) -> bool:
+        """Whether the current scope has any ingested meetings."""
+        if session_id.startswith(("meeting_", "group_")):
+            return True
+        try:
+            from src.meeting.catalog import visible_meeting_ids
+
+            return bool(visible_meeting_ids(collections=collections or []))
+        except Exception:
+            return True
+
+    def _resolve_tools_and_prompt(
+        self,
+        mode: str,
+        session_id: str,
+        collections: list[str] | None = None,
+        *,
+        web_search_enabled: bool = False,
+        has_meetings: bool = True,
+    ):
+        """Return (tools, system_prompt, catalog_text) for the given mode."""
+        is_meeting = session_id.startswith("meeting_")
+        is_group = session_id.startswith("group_")
+        if is_group:
+            from src.prompts import MEETING_GROUP_CHAT_SYSTEM_PROMPT
+            tools = tools_for_mode(
+                "direct", is_group=True, web_search_enabled=web_search_enabled,
+            )
+            return self._with_attachment_tools(session_id, tools, MEETING_GROUP_CHAT_SYSTEM_PROMPT, "")
+        if mode == "direct":
+            if is_meeting:
+                from src.prompts import MEETING_CHAT_SYSTEM_PROMPT
+                tools = tools_for_mode(
+                    "direct", is_meeting=True, web_search_enabled=web_search_enabled,
+                )
+                return self._with_attachment_tools(session_id, tools, MEETING_CHAT_SYSTEM_PROMPT, "")
+            tools = tools_for_mode(
+                "direct", is_meeting=False, web_search_enabled=web_search_enabled,
+                has_meetings=has_meetings,
+            )
+            cols = collections or self._get_collections(session_id)
+            col_name = cols[0] if cols else "this collection"
+            system_prompt = QUICK_CHAT_SYSTEM_PROMPT % {"collection_name": col_name}
+            return self._with_attachment_tools(session_id, tools, system_prompt, "")
+        catalog_text = self._build_catalog_text(session_id, collections=collections)
+        tools = tools_for_mode(
+            "agentic", is_meeting=False, web_search_enabled=web_search_enabled,
+            has_meetings=has_meetings,
+        )
+        return self._with_attachment_tools(session_id, tools, self._system_prompt, catalog_text)
+
+    def _prepare_chat_attachments(self, sid, ids):
+        from src.chat_attachments.service import prepare_for_model
+        from src.chat_attachments.vision import ensure_chat_vision
+
+        rows = self._attachments.list(sid, bound_only=True)
+        rows.extend(a for aid in ids if (a := self._attachments.get(sid, aid)))
+        if not rows:
+            return
+        if any(not ref.get("text_only") for a in rows if a.image_count
+               for ref in self._attachments.parsed(sid, a.id)["images"]):
+            ensure_chat_vision(self._llm)
+        prepare_for_model(self._attachments, sid, ids, is_visual=_chat_model_is_visual(self._llm))
+
+    def _with_attachment_tools(self, sid, tools, prompt, catalog):
+        from src.prompts import CHAT_ATTACHMENT_TOOLS, CHAT_REPORT_TOOLS, CHAT_CITATION_RULES, CHAT_REPORT_RULES
+        tools = [*tools, *(t for t in CHAT_REPORT_TOOLS if t['function']['name'] not in {x['function']['name'] for x in tools})]
+        if CHAT_CITATION_RULES not in prompt:
+            prompt += '\n\n' + CHAT_CITATION_RULES + '\n\n' + CHAT_REPORT_RULES
+        if self._attachments.list(sid, bound_only=True):
+            names = {t["function"]["name"] for t in tools}
+            tools = [*tools, *(t for t in CHAT_ATTACHMENT_TOOLS if t["function"]["name"] not in names)]
+        return tools, prompt, catalog
+
+    def _forced_collection(self, mode: str, collections: list[str] | None) -> str | None:
+        if mode != "direct":
+            return None
+        if collections:
+            return collections[0]
+        return None
+
+    def _is_allowed_tool(
+        self,
+        tool_name: str,
+        mode: str,
+        session_id: str,
+        *,
+        web_search_enabled: bool = False,
+        has_meetings: bool = True,
+    ) -> bool:
+        from src.chat_attachments.service import TOOL_NAMES
+        from src.reports.tools import TOOL_NAMES as REPORT_TOOLS
+        if tool_name in REPORT_TOOLS:
+            return True
+        if tool_name in TOOL_NAMES:
+            return bool(self._attachments.list(session_id, bound_only=True))
+        is_meeting = session_id.startswith("meeting_")
+        is_group = session_id.startswith("group_")
+        return tool_name in allowed_tool_names(
+            mode,
+            is_meeting=is_meeting,
+            is_group=is_group,
+            web_search_enabled=web_search_enabled,
+            has_meetings=has_meetings,
+        )
+
+    def _check_session_truncation(self, session_id: str) -> int | None:
+        """Check and enforce session **turn** limits (1 user + 1 reply = 1 turn).
+
+        Counts **user messages only**. Tool rows and assistant replies do not
+        increase the turn counter.
+
+        For quick_ sessions: trim at _QUICK_MAX_MESSAGES turns, keep _QUICK_TRIM_KEEP.
+        For meeting_ / group_ sessions: trim at _MEETING_MAX_MESSAGES turns, keep _MEETING_TRIM_KEEP.
+
+        Returns the current turn count BEFORE any truncation, or None if not a
+        quick/meeting/group session.
+        """
+        if session_id.startswith("quick_"):
+            max_turns, trim_keep = _QUICK_MAX_MESSAGES, _QUICK_TRIM_KEEP
+        elif session_id.startswith("meeting_") or session_id.startswith("group_"):
+            max_turns, trim_keep = _MEETING_MAX_MESSAGES, _MEETING_TRIM_KEEP
+        else:
+            return None
+        count_fn = getattr(self._store, "count_dialogue_turns", None)
+        if callable(count_fn):
+            count = count_fn(session_id)
+        else:
+            # Fallback: approximate turns as half of user+assistant dialogue rows
+            dlg = getattr(self._store, "count_dialogue_messages", None)
+            raw = dlg(session_id) if callable(dlg) else self._store.count_messages(
+                session_id, exclude_system=True,
+            )
+            count = (raw + 1) // 2
+        if count >= max_turns:
+            logger.info(
+                "Session %s hit %d dialogue turns, trimming to %d",
+                session_id, count, trim_keep,
+            )
+            trim_fn = getattr(self._store, "trim_to_dialogue_turns", None)
+            if callable(trim_fn):
+                trim_fn(session_id, trim_keep)
+            else:
+                trim_old = getattr(self._store, "trim_to_dialogue_messages", None)
+                if callable(trim_old):
+                    trim_old(session_id, trim_keep)
+                else:
+                    self._store.trim_messages(session_id, trim_keep)
+            return trim_keep
+        return count
+
+    def _build_catalog_text(self, session_id: str, *, collections: list[str] | None = None) -> str:
+        """Build a concise catalog summary for the system prompt."""
+        if self._agentic is None:
+            return ""
+        try:
+            catalog = self._agentic.catalog
+            if catalog is None:
+                return ""
+            cols = collections if collections is not None else self._get_collections(session_id)
+            explicit_scope = bool(cols)
+            entries = catalog.get_catalog(cols if cols else None)
+        except Exception:
+            return ""
+        if not entries:
+            return ""
+        lines = ["Knowledge base reference:"]
+        for e in entries:
+            if isinstance(e, dict):
+                name = e.get("name", "")
+                defn = e.get("definition", "")
+                tags = e.get("tags", [])
+            else:
+                name = getattr(e, "name", "")
+                defn = getattr(e, "definition", "")
+                tags = getattr(e, "tags", [])
+            parts = [f"- {name}"]
+            if tags:
+                parts.append(f" [{', '.join(tags)}]")
+            if defn:
+                parts.append(f"\n  {defn}")
+            lines.append("".join(parts))
+        # Implicit "all collections" scope: make archived ones discoverable so
+        # the LLM can honor an explicit user request via include_archived.
+        if not explicit_scope:
+            archived_names = self._archived_catalog_names(catalog)
+            if archived_names:
+                lines.append("")
+                lines.append(
+                    "Archived collections (excluded from search): "
+                    + ", ".join(archived_names)
+                )
+                lines.append(
+                    "Search one only when the user explicitly refers to its "
+                    "archived status (e.g. \"the archived X\" or \"X I "
+                    "archived\"); then pass include_archived=true. When the "
+                    "user merely names one, answer from active collections or "
+                    "say it is archived and ask whether to search it."
+                )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _archived_catalog_names(catalog) -> list[str]:
+        """Display names of archived collections for the catalog appendix."""
+        try:
+            from src.collections.store import archived_collection_ids
+
+            archived_ids = archived_collection_ids()
+            if not archived_ids:
+                return []
+            names = []
+            for e in catalog.get_catalog(None, include_archived=True):
+                eid = e.get("id") if isinstance(e, dict) else getattr(e, "id", "")
+                if eid not in archived_ids:
+                    continue
+                name = e.get("name") if isinstance(e, dict) else getattr(e, "name", "")
+                names.append(str(name or eid))
+            return names
+        except Exception:
+            return []
+
+    def _get_collections(self, session_id: str) -> list[str]:
+        session = self._store.get_session(session_id)
+        if session and session.collections:
+            return session.collections
+        return []
+
+    def _history_dialogue_budget(self, session_id: str) -> int:
+        """Max user+final-assistant dialogue units for LLM history by session type."""
+        if session_id.startswith("meeting_"):
+            return _MAX_HISTORY_DIALOGUE_MEETING
+        if session_id.startswith("group_"):
+            return _MAX_HISTORY_DIALOGUE_MAIN
+        if session_id.startswith("quick_"):
+            return _MAX_HISTORY_DIALOGUE_QUICK
+        return _MAX_HISTORY_DIALOGUE_MAIN
+
+    def _store_message_to_llm_dict(self, m) -> dict:
+        """Convert a persisted Message into an OpenAI-style dict for the LLM."""
+        meta = m.metadata or {}
+        content = m.content or ""
+        msg: dict = {"role": m.role, "content": content}
+
+        if m.role == "assistant":
+            tool_calls = meta.get("tool_calls")
+            if isinstance(tool_calls, list):
+                msg["tool_calls"] = tool_calls
+                msg["content"] = None
+            rc = meta.get("reasoning_content")
+            if rc:
+                msg["reasoning_content"] = rc
+        elif m.role == "tool":
+            msg["tool_call_id"] = meta.get("tool_call_id", "")
+            # Truncate huge historical tool bodies (e.g. prior WEB dumps).
+            if len(content) > _MAX_HISTORY_TOOL_CHARS:
+                content = (
+                    content[:_MAX_HISTORY_TOOL_CHARS]
+                    + "\n…[truncated historical tool result]"
+                )
+            msg["content"] = content
+        return msg
+
+    def _build_messages(
+        self,
+        session_id: str,
+        user_message: str,
+        *,
+        mode: str = "agentic",
+        extra_messages: list[dict] | None = None,
+        collections: list[str] | None = None,
+        system_prompt: str | None = None,
+        catalog_text: str | None = None,
+        pre_message_context: str | None = None,
+        evidence_registry=None,
+        reports=None,
+    ) -> list[dict]:
+        """Build OpenAI-compatible messages for the LLM (three layouts).
+
+        **Meeting** (``meeting_*``)::
+
+            [0] fixed system prompt
+                live transcript (ephemeral — from meeting store each turn;
+                    NOT persisted in the session)
+                recent dialogue history only (DB system rows ignored)
+                speaker mapping (ephemeral — NOT persisted / not history)
+                current user (+ time if re-appended)
+
+        **Quick** (``quick_*``)::
+
+            [0] fixed system prompt
+                recent dialogue + tool trajectory
+                extra_messages (this-turn FC)
+                current user
+
+        **Main Chat** (agentic)::
+
+            [0] fixed system prompt
+                recent dialogue + tool trajectory
+                catalog (ephemeral — NOT persisted / not history; after history)
+                extra_messages (this-turn FC)
+                current user
+
+        History is windowed by **dialogue turns** (user + final assistant) via
+        ``get_messages(limit=N)`` / ``get_context_messages``. Meeting transcript,
+        catalog, and speaker mapping are injected only here and never written
+        to the session store. (Legacy DB system rows on meeting sessions are
+        ignored so stale appends cannot pollute context.)
+        """
+        is_meeting = session_id.startswith("meeting_")
+        is_quick = session_id.startswith("quick_")
+        is_group = session_id.startswith("group_")
+
+        messages: list[dict] = []
+
+        # ── [0] Static system prompt (always first — cache prefix) ──
+        sp = system_prompt if system_prompt is not None else self._system_prompt
+        if not (is_meeting or is_group) and KNOWLEDGE_ANSWER_EVIDENCE_RULES not in sp:
+            sp = sp + "\n\n" + KNOWLEDGE_ANSWER_EVIDENCE_RULES
+        if (
+            mode == "agentic"
+            and not (is_quick or is_meeting or is_group)
+            and MAIN_CHAT_FORMATTING_RULES not in sp
+        ):
+            sp = sp + "\n\n" + MAIN_CHAT_FORMATTING_RULES
+        messages.append({"role": "system", "content": sp})
+
+        # Meeting transcript is retrieved via lookup_meeting_transcript, not dumped here.
+
+        # ── History: last N dialogue turns ──
+        # Declined web searches stay in history so the model knows what was refused.
+        # Catalog / speaker mapping / meeting transcript are NOT part of hist.
+        max_dialogue = self._history_dialogue_budget(session_id)
+        get_ctx = getattr(self._store, "get_context_messages", None)
+        if callable(get_ctx):
+            hist = get_ctx(session_id, max_dialogue=max_dialogue)
+        else:
+            hist = self._store.get_messages(session_id, limit=max_dialogue)
+
+        # Meeting: ignore any legacy system rows (old transcript appends).
+        # Group: Chat-style history (keep tool rows); no stored transcript dump.
+        # Non-meeting: keep system_hist for rare stored system context.
+        system_hist = [] if is_meeting else [m for m in hist if m.role == "system"]
+        dialogue_hist = [m for m in hist if m.role != "system"]
+        # Incremental persist writes this-turn tools to DB. extra_messages is
+        # the live copy — drop the flushed tail so the LLM does not read twice.
+        if extra_messages:
+            dialogue_hist = _dialogue_hist_without_this_turn_tools(
+                dialogue_hist, user_message,
+            )
+
+        for m in system_hist:
+            messages.append(self._store_message_to_llm_dict(m))
+
+        last_hist_i = len(dialogue_hist) - 1
+        stamp_clock = session_id.startswith("meeting_") or session_id.startswith("group_")
+        for i, m in enumerate(dialogue_hist):
+            d = self._store_message_to_llm_dict(m)
+            if (
+                stamp_clock
+                and i == last_hist_i
+                and m.role == "user"
+                and (m.content or "") == user_message
+                and user_message
+            ):
+                d["content"] = (
+                    f"[Current time: {_format_current_time()}]\n\n{user_message}"
+                )
+            messages.append(d)
+
+        # Saved Note IDs are tool context, not assistant reply examples to imitate.
+        note_references = note_references_from_history(dialogue_hist, collections)
+        if note_references:
+            messages.append({
+                "role": "system",
+                "content": CHAT_NOTE_REFERENCES_CONTEXT.format(
+                    notes=json.dumps(note_references, ensure_ascii=False),
+                ),
+            })
+
+        # ── Catalog (main Chat only; ephemeral; after history; never DB) ──
+        if not is_meeting and not is_quick:
+            ct = (
+                catalog_text
+                if catalog_text is not None
+                else self._build_catalog_text(session_id, collections=collections)
+            )
+            if ct:
+                messages.append({"role": "system", "content": ct})
+
+        # ── Speaker mapping etc. (ephemeral; never persisted as history) ──
+        if pre_message_context:
+            messages.append({"role": "system", "content": pre_message_context})
+
+        # ── Current user message ──
+        # Saved before the LLM call; usually already last in hist. Re-append with
+        # clock if missing (e.g. this turn's trajectory was stripped from hist,
+        # or hist truncated oddly). MUST come BEFORE the trajectory: appending
+        # it after re-arms the original instruction at the end of every tool
+        # round, and the model re-executes the task instead of continuing
+        # (observed as duplicate create_note writes and endless lookup loops).
+        last = dialogue_hist[-1] if dialogue_hist else None
+        if (
+            last is None
+            or last.role != "user"
+            or (last.content or "") != user_message
+        ):
+            if user_message:
+                timestamped = f"[Current time: {_format_current_time()}]\n\n{user_message}"
+                messages.append({"role": "user", "content": timestamped})
+
+        # ── This-turn tool trajectory (FC loop; persisted separately after turn) ──
+        from src.reports.completion import project_report_history
+        messages = project_report_history(messages)
+        # Extends LAST: the newest tool result ends the sequence — the standard
+        # FC ordering that tells the model "respond to this", not "read the
+        # request again".
+        if extra_messages:
+            messages.extend(extra_messages)
+
+        from src.chat_attachments.service import attachment_context, hydrate_attachment_history
+        from src.prompts import CHAT_ATTACHMENT_POLICY
+        last_user = next((m for m in reversed(dialogue_hist) if m.role == "user"), None)
+        refs = (last_user.metadata or {}).get("attachments", []) if last_user else []
+        parts = attachment_context(self._attachments, session_id,
+                                   [a["id"] for a in refs if isinstance(a, dict) and "id" in a],
+                                   is_visual=_chat_model_is_visual(self._llm))
+        if parts and evidence_registry is not None:
+            from src.chatbox.citations import annotate_attachment_parts
+            parts = annotate_attachment_parts(evidence_registry, parts, self._attachments, session_id)
+        if evidence_registry is not None:
+            from src.reports.store import for_sessions as report_store
+            try:
+                current_reports = reports if reports is not None else report_store(self._store)
+                catalog = [{k: r[k] for k in ('id', 'title', 'revision')} for r in current_reports.list(session_id)]
+            except ValueError:
+                # Legacy conversation IDs may predate report path restrictions.
+                catalog = []
+            evidence = [{**e, 'quote': e['quote'][:160]} for e in evidence_registry.records()[-32:]]
+            if catalog or evidence:
+                messages.insert(1, {'role': 'system', 'content': json.dumps({'conversation_reports': catalog, 'evidence': evidence}, ensure_ascii=False)})
+        if parts:
+            messages[0] = {**messages[0], "content": messages[0]["content"] + "\n\n" + CHAT_ATTACHMENT_POLICY}
+            for m in reversed(messages):
+                if m.get("role") == "user":
+                    m["content"] = [{"type": "text", "text": m.get("content") or ""}, *parts]
+                    break
+
+        messages = hydrate_attachment_history(self._attachments, session_id, messages,
+                                               is_visual=_chat_model_is_visual(self._llm))
+        rendered_messages = _sanitize_tool_messages(
+            _hydrate_history_images(
+                _collapse_superseded_lookup_results(messages),
+                session_id=session_id,
+                image_store_dir=self._image_store_dir,
+                is_visual=_chat_model_is_visual(self._llm),
+            )
+        )
+        tool_content = [m.get("content") for m in rendered_messages if m.get("role") == "tool"]
+        image_count = sum(sum(p.get("type") == "image_url" for p in c if isinstance(p, dict))
+                          for c in tool_content if isinstance(c, list))
+        logger.info("[ImageEvidence] model=%s visual=%s tool_messages=%d image_parts=%d",
+                    getattr(self._llm, "_model", ""), _chat_model_is_visual(self._llm),
+                    len(tool_content), image_count)
+        return rendered_messages
+
+    # ── non-streaming chat ───────────────────────────────────────────
+
+    def chat(
+        self,
+        session_id: str,
+        user_message: str,
+        *,
+        mode: str = "agentic",
+        web_search_enabled: bool = False,
+    ) -> ChatResponse:
+        """Non-streaming chat. Returns final answer with sources."""
+        if not user_message or not user_message.strip():
+            return ChatResponse(answer="")
+
+        from src.reports.store import for_sessions as report_store
+        reports = report_store(self._store).bind_session(session_id)
+        self._prepare_chat_attachments(session_id, [])
+        collections = self._get_collections(session_id)
+        has_meetings = self._has_meetings(session_id, collections)
+        _tools, _sys_prompt, _cat_text = self._resolve_tools_and_prompt(
+            mode, session_id, web_search_enabled=web_search_enabled,
+            has_meetings=has_meetings,
+        )
+        self._check_session_truncation(session_id)
+
+        meeting_ephemeral_ctx = _build_surface_context(session_id, collections)
+        seen_tx_packs: set[str] = set()
+        seen_tx_hits: list[dict] = []
+        total_tool_calls = 0
+        agentic_search_calls = 0  # search_knowledge_base only
+        preliminary_retrieval_used = False
+        meeting_lookup_calls = 0  # lookup_meeting_transcript only (hard cap)
+        dry_served = 0  # wasted lookups AFTER the budget was spent
+
+        # Save user message
+        turn_message = self._store.add_message(session_id, "user", user_message)
+        _touch_group_session(session_id)
+
+        extra_messages: list[dict] = []
+        final_answer = ""
+        all_sources: list[dict] = []
+        note_changes: list[dict] = []
+        report_changes: list[dict] = []
+        from src.chatbox.citations import registry_from_history
+        from src.reports.tools import execute_report_tool, changes_from_result, merge_report_changes
+        evidence = registry_from_history(self._store, session_id)
+        source_cursor = 0
+        tx_lookup_dry = False
+
+        for _round in range(_MAX_TOOL_ROUNDS):
+            if dry_served >= _MAX_WASTED_DRY_LOOKUPS:
+                # The model keeps re-emitting lookups after the budget was
+                # spent — stop feeding it rounds and force the answer now.
+                break
+            messages = self._build_messages(
+                session_id, user_message, extra_messages=extra_messages,
+                mode=mode,
+                collections=collections,
+                system_prompt=_sys_prompt, catalog_text=_cat_text, evidence_registry=evidence,
+                pre_message_context=meeting_ephemeral_ctx,
+                reports=reports,
+            )
+
+            # CHECKPOINT: log multimodal messages
+            for i, msg in enumerate(messages):
+                ct = msg.get("content")
+                if isinstance(ct, list):
+                    logger.info(
+                        "[Chatbox] MSG[%d] role=%s MULTIMODAL parts=%d imgs=%d",
+                        i, msg["role"], len(ct),
+                        sum(1 for p in ct if p.get("type") == "image_url"),
+                    )
+
+            # Call LLM with tools — use underlying OpenAI client directly
+            # (avoids modifying the LLMProvider ABC)
+            round_tools = _drop_lookup_tool(_tools) if tx_lookup_dry else _tools
+            response = self._call_llm_with_tools(
+                messages,
+                tools=round_tools,
+                tool_choice="auto",
+            )
+
+            if response.get("tool_calls"):
+                # ── LLM wants to use tools ──
+                tcs = response["tool_calls"]
+                if mode != "direct" and len(tcs) > 1:
+                    tcs = merge_search_tool_calls(tcs)
+                forced_col = self._forced_collection(mode, collections)
+
+                for tc in tcs:
+                    tool_name = tc["function"]["name"]
+                    if not self._is_allowed_tool(
+                        tool_name, mode, session_id, web_search_enabled=web_search_enabled,
+                        has_meetings=has_meetings,
+                    ):
+                        logger.warning("Unknown or disallowed tool: %s", tool_name)
+                        continue
+
+                    try:
+                        args = json.loads(tc["function"]["arguments"] or "{}")
+                    except json.JSONDecodeError:
+                        args = {"raw_query": user_message, "generate_answer": True} if mode != "direct" else {"query": user_message}
+
+                    is_multimodal = False
+                    tool_persist_text: str | None = None
+                    tool_content: str | list
+
+                    if tool_name in {"create_report", "get_report", "update_report", "revise_report"}:
+                        tool_content = execute_report_tool(self._store, session_id, tool_name, args, evidence,
+                            f"{turn_message.id}:{tc.get('id', '')}", report_store=reports)
+                        total_tool_calls += 1
+                    elif tool_name == WEB_SEARCH_TOOL_NAME:
+                        from src.chatbox.web_search import WEB_BANNER, has_web_search_api_key
+                        wq = str(args.get("query") or user_message).strip()
+                        if not has_web_search_api_key():
+                            tool_content = "Tavily API key is missing. Add it under Settings → Web Search (Tavily)."
+                        else:
+                            tool_content = (
+                                f"{WEB_BANNER}\n\n"
+                                "Web search requires the streaming Chat UI for user "
+                                f"confirmation (query was: {wq!r}). No internet search was run."
+                            )
+                        total_tool_calls += 1
+                    elif tool_name == "list_meeting_catalog":
+                        scoped, ferr = (args, None) if (
+                            session_id.startswith("meeting_")
+                            or session_id.startswith("group_")
+                        ) else force_collection_args(
+                            tool_name, args, mode=mode, forced_collection=forced_col,
+                        )
+                        tool_content = (
+                            json.dumps({"error": ferr})
+                            if ferr
+                            else _run_list_meeting_catalog(
+                                session_id, scoped, forced_col, collections
+                            )
+                        )
+                        total_tool_calls += 1
+                    elif tool_name == "lookup_meeting_transcript":
+                        scoped, ferr = (args, None) if (
+                            session_id.startswith("meeting_")
+                            or session_id.startswith("group_")
+                        ) else force_collection_args(
+                            tool_name, args, mode=mode, forced_collection=forced_col,
+                        )
+                        if ferr:
+                            tool_content = json.dumps({"error": ferr})
+                        elif tx_lookup_dry:
+                            from src.meeting.transcript_index import (
+                                LOOKUP_TURN_DONE_MSG,
+                            )
+
+                            # Never replay the stale last result as if the
+                            # new query had succeeded — say the turn is over.
+                            dry_served += 1
+                            tool_content = json.dumps(
+                                {
+                                    "hit_count": len(seen_tx_packs),
+                                    "context": "",
+                                    "message": LOOKUP_TURN_DONE_MSG,
+                                },
+                                ensure_ascii=False,
+                            )
+                        elif meeting_lookup_calls >= _MAX_MEETING_LOOKUP_CALLS:
+                            tool_content = _lookup_limit_json(
+                                _MAX_MEETING_LOOKUP_CALLS
+                            )
+                            # Hard stop: drop the tool for the remaining rounds.
+                            tx_lookup_dry = True
+                        else:
+                            meeting_lookup_calls += 1
+                            had = set(seen_tx_packs)
+                            tool_content, found_keys, chat_src, kept = (
+                                _run_lookup_meeting_transcript(
+                                    session_id,
+                                    scoped,
+                                    user_message,
+                                    forced_col,
+                                    seen_tx_packs,
+                                    collections,
+                                    seen_tx_hits,
+                                )
+                            )
+                            new_keys = found_keys - had
+                            seen_tx_packs |= found_keys
+                            if had and not new_keys:
+                                tx_lookup_dry = True
+                            for s in chat_src or []:
+                                if s not in all_sources:
+                                    all_sources.append(s)
+                        total_tool_calls += 1
+                    elif tool_name == "read_meeting_summary":
+                        scoped, ferr = (args, None) if (
+                            session_id.startswith("meeting_")
+                            or session_id.startswith("group_")
+                        ) else force_collection_args(
+                            tool_name, args, mode=mode, forced_collection=forced_col,
+                        )
+                        tool_content = (
+                            json.dumps({"error": ferr})
+                            if ferr
+                            else _run_read_meeting_summary(
+                                session_id, scoped, forced_col, collections
+                            )
+                        )
+                        total_tool_calls += 1
+                    elif tool_name in {"list_chat_attachments", "read_chat_attachment", "search_chat_attachment"}:
+                        from src.chat_attachments.service import execute_attachment_tool
+                        tool_content = execute_attachment_tool(self._attachments, session_id, tool_name, args,
+                                                               is_visual=_chat_model_is_visual(self._llm))
+                        if isinstance(tool_content, list):
+                            tool_persist_text = tool_content[0]["text"]
+                        total_tool_calls += 1
+                    elif tool_name in STRUCTURE_TOOL_NAMES:
+                        tool_content = execute_structure_tool(
+                            tool_name, args, mode=mode, forced_collection=forced_col,
+                            selected_collections=collections,
+                        )
+                        total_tool_calls += 1
+                    else:
+                        # Search facades
+                        if mode == "direct":
+                            raw_query = args.get("query", user_message)
+                        else:
+                            raw_query = args.get("raw_query", user_message)
+                        generate_answer = args.get("generate_answer", False) if mode != "direct" else False
+                        include_images = _chat_model_is_visual(self._llm)
+
+                        decompose = args.get("decompose", True) if mode != "direct" else False
+
+                        if mode == "direct":
+                            if self._direct is None:
+                                tool_content = "Direct retrieval is not configured."
+                            else:
+                                query = args.get("query", raw_query)
+                                direct_cols = [forced_col] if forced_col else (collections or [])
+                                direct_result = self._direct.retrieve(
+                                    query,
+                                    collections=direct_cols,
+                                    **search_settings("direct"),
+                                    generate_answer=False,
+                                )
+                                total_tool_calls += 1
+                                for chunk in direct_result.chunks:
+                                    source = {
+                                        "text": getattr(chunk, "text", "")[:4000],
+                                        "score": getattr(chunk, "score", 0.0),
+                                        "metadata": getattr(chunk, "metadata", {}),
+                                    }
+                                    if source not in all_sources:
+                                        all_sources.append(source)
+
+                                if include_images and direct_result.chunks:
+                                    from src.rag.agentic_query import (
+                                        _stitch_images_from_chunks,
+                                        _build_multimodal_context,
+                                    )
+                                    images_payload = _stitch_images_from_chunks(direct_result.chunks)
+                                    if images_payload:
+                                        is_multimodal = True
+                                        tool_content = _build_multimodal_context(
+                                            direct_result.context, images_payload,
+                                        )
+                                        tool_persist_text = self._remember_search_evidence(
+                                            session_id, direct_result.context, images_payload,
+                                        )
+                                    else:
+                                        tool_content = direct_result.context if direct_result.context else "No relevant information found."
+                                else:
+                                    tool_content = direct_result.context if direct_result.context else "No relevant information found."
+                        elif self._agentic is None:
+                            logger.warning("Tool call requested but agentic_service is None")
+                            tool_content = "Knowledge base search is not configured. Please enable Function Calling on an LLM model in Settings."
+                        elif (
+                            tool_name == "search_knowledge_base"
+                            and agentic_search_calls >= _MAX_AGENTIC_SEARCH_CALLS
+                        ):
+                            tool_content = (
+                                f"Agentic knowledge-base search limit reached "
+                                f"({_MAX_AGENTIC_SEARCH_CALLS} calls this turn). "
+                                "Do NOT call search_knowledge_base again. "
+                                "Synthesize the final answer now from tool results "
+                                "already in this conversation."
+                            )
+                            total_tool_calls += 1
+                        else:
+                            use_preliminary = decompose and not preliminary_retrieval_used
+                            preliminary_retrieval_used = preliminary_retrieval_used or decompose
+                            result = self._agentic.run(
+                                raw_query,
+                                collections=collections or None,
+                                **search_settings("agentic"),
+                                generate_answer=generate_answer,
+                                include_images=include_images,
+                                decompose=decompose,
+                                include_archived=bool(args.get("include_archived", False)),
+                                original_user_question=user_message,
+                                preliminary_retrieval=use_preliminary,
+                            )
+                            total_tool_calls += 1
+                            if tool_name == "search_knowledge_base":
+                                agentic_search_calls += 1
+                            is_multimodal = isinstance(result.answer, list) if result else False
+                            if is_multimodal:
+                                tool_content = result.answer
+                                tool_persist_text = self._remember_search_evidence(
+                                    session_id, result.context, result.images,
+                                )
+                            else:
+                                tool_content_parts = []
+                                if result.answer:
+                                    tool_content_parts.append(result.answer)
+                                elif result.context:
+                                    tool_content_parts.append(result.context)
+                                tool_content = "\n\n".join(tool_content_parts) if tool_content_parts else "No relevant information found."
+                            for chunk in result.all_chunks:
+                                source = {
+                                    "text": getattr(chunk, "text", "")[:4000],
+                                    "score": getattr(chunk, "score", 0.0),
+                                    "metadata": getattr(chunk, "metadata", {}),
+                                }
+                                if source not in all_sources:
+                                    all_sources.append(source)
+
+                    new_sources = all_sources[source_cursor:]
+                    source_cursor = len(all_sources)
+                    tool_content = evidence.capture(tool_name, tool_content, sources=new_sources, args=args)
+                    if tool_persist_text:
+                        tool_persist_text = evidence.capture(tool_name, tool_persist_text, sources=new_sources, args=args)
+                    merge_report_changes(report_changes, changes_from_result(tool_name, tool_content))
+                    merge_note_changes(note_changes, note_changes_from_result(tool_name, tool_content))
+                    # Inject assistant tool_call + tool result into extra messages
+                    tool_call_id = tc.get("id", "call_1")
+                    tool_call_data = [{
+                        "id": tool_call_id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "arguments": tc["function"]["arguments"],
+                        },
+                    }]
+                    extra_messages.append({
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": tool_call_data,
+                    })
+                    extra_messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": tool_content,
+                        **({"_persist_text": tool_persist_text} if tool_persist_text else {}),
+                    })
+            else:
+                # ── LLM returned text — final answer ──
+                final_answer = response.get("content", "") or ""
+                break
+
+        # If loop exhausted without a text response, force-generate
+        if not final_answer and total_tool_calls > 0:
+            logger.info(
+                "[Chatbox] Max rounds (%d) reached with %d tool calls — force generating answer",
+                _MAX_TOOL_ROUNDS, total_tool_calls,
+            )
+            _persist_extra_messages(self._store, session_id, extra_messages)
+            messages = self._build_messages(
+                session_id, user_message, extra_messages=extra_messages,
+                mode=mode,
+                collections=collections,
+                system_prompt=_sys_prompt, catalog_text=_cat_text, evidence_registry=evidence,
+                pre_message_context=meeting_ephemeral_ctx,
+                reports=reports,
+            )
+            final_answer = _force_generate_answer(self._llm, messages)
+
+        # Save assistant message + extra messages (tool calls/results)
+        _persist_extra_messages(self._store, session_id, extra_messages)
+        if final_answer or note_changes or report_changes:
+            self._store.add_message(
+                session_id, "assistant", final_answer,
+                sources=all_sources if all_sources else None,
+                metadata={"tool_calls": total_tool_calls, "note_changes": note_changes, "citations": evidence.used(final_answer), "report_changes": report_changes},
+            )
+
+        return ChatResponse(
+            answer=final_answer,
+            sources=all_sources,
+            tool_calls=total_tool_calls,
+            note_changes=note_changes,
+            citations=evidence.used(final_answer), report_changes=report_changes,
+        )
+
+    # ── streaming chat ───────────────────────────────────────────────
+
+    async def chat_stream(
+        self, session_id: str, user_message: str, *,
+        thinking: bool = True, collections: list[str] | None = None,
+        mode: str = "agentic",
+        provider_id: str | None = None, model: str | None = None,
+        web_search_enabled: bool = False,
+        attachment_ids: list[str] | None = None,
+        report_reviews: list[dict] | None = None,
+    ) -> AsyncGenerator[dict, None]:
+        """Streaming chat — yields SSE event dicts.
+
+        Model override is scoped to this generator so title generation and
+        later turns always see the configured default ``self._llm``.
+        """
+        saved_llm = self._llm
+        from src.reports.store import for_sessions as report_store
+        reports = report_store(self._store).bind_session(session_id)
+        batches = reports.freeze_reviews(session_id, report_reviews, user_message) if report_reviews else []
+        from src.reports.completion import review_execution, completion_text
+        try:
+            async for ev in self._chat_stream_body(
+                session_id,
+                user_message,
+                thinking=thinking,
+                collections=collections,
+                mode=mode,
+                provider_id=provider_id,
+                model=model,
+                web_search_enabled=web_search_enabled,
+                attachment_ids=attachment_ids,
+                review_batches=batches,
+                reports=reports,
+            ):
+                if batches and ev.get('type') == 'token':
+                    # Model narration is not evidence of a committed document.
+                    continue
+                if ev.get("type") == "done" and batches:
+                    execution = review_execution(reports, session_id, batches)
+                    unfinished = [b['batch_id'] for b in execution['tasks'] if b['status'] not in {'completed','unchanged'}]
+                    if unfinished:
+                        yield {"type": "report_review_incomplete", "batch_ids": unfinished, 'message_rendered':True}
+                    yield {'type':'token', 'content':completion_text(execution, batches, user_message)}
+                    ev = {**ev, 'report_review_status':execution}
+                    reports.release_reviews(session_id, batches)
+                yield ev
+        finally:
+            self._llm = saved_llm
+            if batches:
+                reports.release_reviews(session_id, batches)
+
+    async def _chat_stream_body(
+        self, session_id: str, user_message: str, *,
+        thinking: bool = True, collections: list[str] | None = None,
+        mode: str = "agentic",
+        provider_id: str | None = None, model: str | None = None,
+        web_search_enabled: bool = False,
+        attachment_ids: list[str] | None = None,
+        review_batches: list[dict] | None = None,
+        reports=None,
+    ) -> AsyncGenerator[dict, None]:
+        """Streaming chat — yields SSE event dicts."""
+        if not user_message or not user_message.strip():
+            yield {"type": "done", "sources": []}
+            return
+
+        # Temporary model override for this request (chat_stream restores).
+        if provider_id and model:
+            from src.config import get_config as _get_cfg
+            from src.providers.llm import create_llm_for_provider
+            _cfg = _get_cfg()
+            for _p in _cfg.llm.providers:
+                if _p.id == provider_id:
+                    try:
+                        self._llm = create_llm_for_provider(_p, model=model)
+                        logger.info("[Chatbox] Model override: %s/%s", _p.name, model)
+                    except Exception:
+                        pass
+                    break
+
+        await asyncio.to_thread(self._prepare_chat_attachments, session_id, attachment_ids or [])
+
+        # ── Mode-specific setup ─────────────────────────────────────
+        # Prefer request collections over session's stored collections
+        if collections is None:
+            collections = self._get_collections(session_id)
+        has_meetings = self._has_meetings(session_id, collections)
+        _tools, _sys_prompt, _cat_text = self._resolve_tools_and_prompt(
+            mode, session_id, collections, web_search_enabled=web_search_enabled,
+            has_meetings=has_meetings,
+        )
+        if review_batches:
+            from src.prompts import CHAT_REPORT_REVIEW_RULES, CHAT_REPORT_REVIEW_CONTEXT
+            _sys_prompt += "\n\n" + CHAT_REPORT_REVIEW_RULES + "\n\n" + CHAT_REPORT_REVIEW_CONTEXT.format(
+                batches=json.dumps(review_batches, ensure_ascii=False))
+        # Explicit toggle state for the model (enabled vs disabled ≠ user Decline)
+        try:
+            from src.chatbox.web_search import web_toggle_label
+
+            _wt = web_toggle_label(web_search_enabled=web_search_enabled)
+            if _wt == "enabled":
+                _sys_prompt = (
+                    f"{_sys_prompt}\n\n"
+                    "[Web search toggle: enabled. "
+                    "When you need public/internet info (or the knowledge base lacks it), "
+                    "CALL request_web_search immediately with a good query. "
+                    "Do NOT ask the user whether Web is on, and do NOT ask them to "
+                    "send another message first. The UI will handle Allow/Decline. "
+                    "Tool results: status=ok|user_declined|disabled; "
+                    "user_declined ≠ disabled.]"
+                )
+            else:
+                _sys_prompt = (
+                    f"{_sys_prompt}\n\n"
+                    "[Web search toggle: disabled. "
+                    "request_web_search will return status=disabled. "
+                    "Do not ask the user to Allow web search in chat text — "
+                    "briefly note that Web is off if internet data is required, "
+                    "and answer from the knowledge base only.]"
+                )
+        except Exception:
+            pass
+
+        # Quick-chat truncation check
+        msg_count = self._check_session_truncation(session_id)
+
+        meeting_ephemeral_ctx = _build_surface_context(session_id, collections)
+        seen_tx_packs: set[str] = set()
+        seen_tx_hits: list[dict] = []
+        _quick_warn = (
+            msg_count is not None
+            and msg_count >= _QUICK_WARN_THRESHOLD
+            and msg_count < _QUICK_MAX_MESSAGES
+        )
+
+        total_tool_calls = 0
+        agentic_search_calls = 0  # search_knowledge_base only (see _MAX_AGENTIC_SEARCH_CALLS)
+        preliminary_retrieval_used = False
+        meeting_lookup_calls = 0  # lookup_meeting_transcript only (hard cap)
+        dry_served = 0  # wasted lookups AFTER the budget was spent
+        # create_note per-turn guard: (collection_id, title) attempts and a
+        # hard cap — a weak model can otherwise loop lookup→create writing
+        # the same note over and over within one user message.
+        note_create_attempts: set[tuple[str, str]] = set()
+        note_create_count = 0
+        thinking_aq_count = 0
+        thinking_task_count = 0
+        thinking_summary: dict = {"aq_count": 0, "task_count": 0, "tasks": []}
+        # Persisted for UI reload (structure / web / search steps)
+        tool_trace: list[dict] = []
+
+        # Save user message
+        attachments = self._attachments.bind(session_id, attachment_ids or [])
+        _tools, _sys_prompt, _cat_text = self._with_attachment_tools(session_id, _tools, _sys_prompt, _cat_text)
+        if review_batches:
+            _tools = [tool for tool in _tools if tool['function']['name'] != 'update_report']
+        user_metadata = {}
+        if attachments:
+            user_metadata["attachments"] = [a.model_dump() for a in attachments]
+        if review_batches:
+            user_metadata["report_reviews"] = [{k: v for k, v in b.items() if k != "runtime_id"} for b in review_batches]
+            from src.prompts import CHAT_REPORT_REVIEW_DEFAULT_REQUEST
+            if user_message == CHAT_REPORT_REVIEW_DEFAULT_REQUEST:
+                user_metadata["display_content"] = ""
+        turn_message = self._store.add_message(session_id, "user", user_message, metadata=user_metadata or None)
+        if review_batches:
+            yield {"type": "report_review_submitted", "report_reviews": user_metadata["report_reviews"]}
+        _touch_group_session(session_id)
+
+        extra_messages: list[dict] = []
+        _extra_saved = 0
+        all_sources: list[dict] = []
+        note_changes: list[dict] = []
+        report_changes: list[dict] = []
+        from src.chatbox.citations import registry_from_history
+        from src.reports.tools import execute_report_tool, changes_from_result, merge_report_changes
+        from src.reports.completion import review_execution, completion_text
+        review_store = reports if review_batches else None
+        review_final_retries = 0
+        review_audits = {}
+        review_llm = self._llm
+        def validate_review_proposal(parent, task, proposed, results):
+            from src.reports.validation import audit_review, review_audit_key
+            key = review_audit_key(parent, task, proposed, results)
+            if key not in review_audits:
+                review_audits[key] = audit_review(review_llm, parent, task, proposed, results)
+            return review_audits[key]
+        def repair_review_proposal(parent, task, edits, results, issues):
+            from src.reports.validation import repair_review
+            return repair_review(review_llm, parent, task, edits, results, issues)
+        evidence = registry_from_history(self._store, session_id)
+        source_cursor = 0
+        tx_lookup_dry = False
+
+        def _flush_extra_messages() -> None:
+            nonlocal _extra_saved
+            pending = extra_messages[_extra_saved:]
+            if not pending:
+                return
+            _persist_extra_messages(self._store, session_id, pending)
+            _extra_saved = len(extra_messages)
+        # Engineering control (not prompt-only): web HITL once per user-message stream.
+        # approved → later request_web_search runs without dialog
+        # declined → web tool removed for rest of this stream; no more confirms
+        # next user message starts a fresh stream (Web toggle / Always-allow apply again)
+        web_hitl_decision: str | None = None  # None | "approved" | "declined"
+
+        def _tools_this_round() -> list:
+            """Drop request_web_search after decline so the model cannot re-call it."""
+            tools = list(_tools or [])
+            if web_hitl_decision == "declined":
+                kept = []
+                for t in tools:
+                    fn = (t.get("function") or {}) if isinstance(t, dict) else {}
+                    if fn.get("name") == WEB_SEARCH_TOOL_NAME:
+                        continue
+                    kept.append(t)
+                tools = kept
+            if tx_lookup_dry:
+                tools = _drop_lookup_tool(tools)
+            return tools
+
+        def _web_tool_result(
+            *,
+            status: str,
+            query: str = "",
+            message: str = "",
+        ) -> str:
+            from src.chatbox.web_search import format_web_tool_result, web_toggle_label
+
+            return format_web_tool_result(
+                status=status,
+                web_toggle=web_toggle_label(web_search_enabled=web_search_enabled),
+                query=query,
+                message=message,
+            )
+
+        for _round in range(_MAX_TOOL_ROUNDS):
+            if dry_served >= _MAX_WASTED_DRY_LOOKUPS:
+                # The model keeps re-emitting lookups after the budget was
+                # spent — stop feeding it rounds and force the answer now.
+                break
+            messages = self._build_messages(
+                session_id, user_message, extra_messages=extra_messages,
+                mode=mode,
+                collections=collections,
+                system_prompt=_sys_prompt, catalog_text=_cat_text, evidence_registry=evidence,
+                pre_message_context=meeting_ephemeral_ctx,
+                reports=reports,
+            )
+            if review_batches:
+                from src.prompts import CHAT_REPORT_REVIEW_PROGRESS_CONTEXT
+                from src.reports.completion import latest_review_failures, focus_review_retry
+                execution = review_execution(review_store, session_id, review_batches)
+                failures = latest_review_failures(extra_messages)
+                if failures:
+                    messages = focus_review_retry(messages)
+                messages.append({'role':'system', 'content':CHAT_REPORT_REVIEW_PROGRESS_CONTEXT.format(
+                    state=json.dumps({'current_report_review_state':execution,
+                        'latest_save_failures':failures}, ensure_ascii=False))})
+            if evidence.records():
+                yield {"type": "citations", "citations": evidence.live_records()}
+            tools_round = _tools_this_round()
+            known_tool_names = {
+                str(((t.get("function") or {}) if isinstance(t, dict) else {}).get("name") or "")
+                for t in (tools_round or [])
+            }
+            known_tool_names.discard("")
+            previewed_tool_starts = 0
+            if extra_messages:
+                yield {"type": "planning", "content": ""}
+
+            # ── Streaming LLM call (real token-by-token, threaded) ──
+            token_queue: sync_queue.Queue = sync_queue.Queue()
+            client = getattr(self._llm, "_client", None)
+            model = getattr(self._llm, "_model", "gpt-4")
+
+            def _stream_llm():
+                """Run streaming LLM call in thread. Puts (kind, data) tuples in queue."""
+                nonlocal client, model
+                if client is None:
+                    # Fallback: non-streaming generate()
+                    logger.warning("Chat LLM has no _client; falling back to generate()")
+                    prompt = messages[-1]["content"] if messages else ""
+                    system = ""
+                    if messages and messages[0]["role"] == "system":
+                        system = messages[0]["content"]
+                    content = self._llm.generate(prompt, system=system)
+                    token_queue.put(("token", content))
+                    token_queue.put(("done", {"content": content}))
+                    return
+
+                stream_kwargs: dict = dict(
+                    model=model, messages=messages, temperature=0.1,
+                    stream=True,
+                )
+                # Engineering: omit web tool after decline; force answer if no tools left
+                if tools_round:
+                    stream_kwargs["tools"] = tools_round
+                    stream_kwargs["tool_choice"] = "auto"
+                else:
+                    stream_kwargs["tool_choice"] = "none"
+                # Think toggle: must set enabled/disabled for DeepSeek-class models.
+                # If we omit extra_body when Think is OFF, some models still fill
+                # reasoning_content first and only emit content at the end → no
+                # token-by-token answer stream (one big dump).
+                # Forced function tool_choice cannot ride along with thinking
+                # (Qwen: "Thinking mode does not support this tool_choice").
+                think_round = _thinking_on_for_tool_round(
+                    bool(thinking),
+                    stream_kwargs.get("tool_choice"),
+                    extra_messages,
+                )
+                model_lower = (model or "").lower()
+                base_url = str(getattr(self._llm, "_base_url", "") or "").lower()
+                is_dashscope = "dashscope" in base_url or "aliyuncs" in base_url
+                is_deepseek = "deepseek" in model_lower or "deepseek" in base_url
+                # Preferred: provider-aware builder — knows the model's
+                # thinking posture (always-thinking models get reasoning_effort
+                # instead of a rejected enable_thinking=false).
+                apply_thinking = getattr(self._llm, "_apply_thinking_kwargs", None)
+                if callable(apply_thinking):
+                    apply_thinking(stream_kwargs, think_round)
+                else:
+                    build_extra = getattr(self._llm, "_build_thinking_extra", None)
+                    if callable(build_extra):
+                        stream_kwargs["extra_body"] = build_extra(think_round)
+                    elif think_round:
+                        if is_dashscope:
+                            stream_kwargs["extra_body"] = {"enable_thinking": True}
+                        elif "minimax" in model_lower:
+                            stream_kwargs["extra_body"] = {
+                                "thinking": {"type": "adaptive"}
+                            }
+                        else:
+                            stream_kwargs["extra_body"] = {
+                                "thinking": {"type": "enabled"}
+                            }
+                    elif is_dashscope:
+                        stream_kwargs["extra_body"] = {"enable_thinking": False}
+                    elif "minimax" in model_lower or is_deepseek:
+                        stream_kwargs["extra_body"] = {
+                            "thinking": {"type": "disabled"}
+                        }
+                try:
+                    mt = getattr(self._llm, "_default_max_tokens", 0)
+                    if isinstance(mt, int) and mt > 0:
+                        stream_kwargs["max_tokens"] = mt
+                except (TypeError, AttributeError):
+                    pass
+
+                try:
+                    stream = client.chat.completions.create(**stream_kwargs)
+                except Exception as e:
+                    logger.warning("LLM streaming call failed: %s", e)
+                    retry_kwargs = _retry_llm_kwargs_after_error(
+                        stream_kwargs, e, llm=getattr(self, "_llm", None),
+                    )
+                    if retry_kwargs is not None:
+                        try:
+                            stream = client.chat.completions.create(**retry_kwargs)
+                            logger.warning(
+                                "Retried stream after thinking/tool_choice error: %s", e
+                            )
+                        except Exception as e2:
+                            logger.exception("LLM streaming retry failed")
+                            token_queue.put(("error", str(e2)))
+                            return
+                    else:
+                        logger.exception("LLM streaming call failed")
+                        token_queue.put(("error", str(e)))
+                        return
+
+                content = ""
+                tool_calls_acc: dict[int, dict] = {}
+                emitted_tool_idxs: set[int] = set()
+                reasoning = None
+                finish_reason = None
+                think_parser = _ThinkTagStreamParser()
+                all_thinking = ""
+                streamed_answer_chars = 0  # content tokens already pushed to UI
+
+                def _put_token(text: str) -> None:
+                    nonlocal streamed_answer_chars
+                    if not text:
+                        return
+                    token_queue.put(("token", text))
+                    streamed_answer_chars += len(text)
+
+                def _consume_content(text: str, *, final: bool = False) -> None:
+                    nonlocal content, all_thinking
+                    for kind, segment in think_parser.feed(text, final=final):
+                        if kind == "token":
+                            content += segment
+                            _put_token(segment)
+                        else:
+                            all_thinking += segment
+                            if thinking:
+                                token_queue.put(("thinking", segment))
+
+                for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    choice = chunk.choices[0]
+                    delta = choice.delta
+                    finish_reason = choice.finish_reason
+
+                    delta_reasoning = getattr(delta, "reasoning_content", None) or None
+
+                    if delta.content:
+                        _consume_content(delta.content)
+
+                    if delta.tool_calls:
+                        for tc_delta in delta.tool_calls:
+                            idx = tc_delta.index
+                            if idx not in tool_calls_acc:
+                                tool_calls_acc[idx] = {
+                                    "id": tc_delta.id or "",
+                                    "type": "function",
+                                    "function": {"name": "", "arguments": ""},
+                                }
+                            acc = tool_calls_acc[idx]
+                            if tc_delta.id:
+                                acc["id"] = tc_delta.id
+                            if tc_delta.function:
+                                if tc_delta.function.name:
+                                    acc["function"]["name"] += tc_delta.function.name
+                                if tc_delta.function.arguments:
+                                    acc["function"]["arguments"] += tc_delta.function.arguments
+                        preview = _preview_stream_tool_name(
+                            tool_calls_acc, emitted_tool_idxs, known_tool_names,
+                        )
+                        if preview:
+                            emitted_tool_idxs.add(0)
+                            token_queue.put(("tool_name", preview))
+
+                    if delta_reasoning:
+                        if reasoning is None:
+                            reasoning = ""
+                        reasoning += delta_reasoning
+                        if thinking:
+                            # Think ON → timeline reasoning (streamed)
+                            token_queue.put(("thinking", delta_reasoning))
+                        # Think OFF: do not dump reasoning into the answer mid-stream;
+                        # rely on thinking:disabled + content tokens. Fallback below
+                        # only if content stayed empty.
+
+                # A delimiter prefix at EOF is ordinary text in its current channel.
+                _consume_content("", final=True)
+
+                # Build result
+                result: dict = {}
+                if tool_calls_acc:
+                    result["tool_calls"] = [
+                        tool_calls_acc[i] for i in sorted(tool_calls_acc)
+                    ]
+                else:
+                    from src.providers.llm.openai_compat import _strip_think
+                    # Already parsed content must match the tokens sent to the UI,
+                    # including leading/trailing whitespace and literal XML tags.
+                    final_text = content
+                    # Preserve the independent provider reasoning-channel fallback;
+                    # inline <think> blocks remain reasoning even without an answer.
+                    if not final_text and reasoning:
+                        final_text = _strip_think(reasoning) or ""
+                    # Avoid re-sending the whole answer if we already streamed it
+                    if final_text and streamed_answer_chars == 0:
+                        # Chunk large fallback so the UI still paints progressively
+                        step = 24
+                        for i in range(0, len(final_text), step):
+                            _put_token(final_text[i : i + step])
+                    result["content"] = final_text or content
+                if reasoning:
+                    result["reasoning_content"] = reasoning
+                elif all_thinking:
+                    result["reasoning_content"] = all_thinking
+                token_queue.put(("done", result))
+
+            loop_obj = asyncio.get_event_loop()
+            future = loop_obj.run_in_executor(None, _stream_llm)
+
+            # Poll for tokens while LLM is running — yield often so SSE flushes
+            response = None
+            while not future.done() or not token_queue.empty():
+                drained = False
+                while True:
+                    try:
+                        kind, data = token_queue.get_nowait()
+                        drained = True
+                        if kind == "thinking":
+                            yield {"type": "thinking", "content": data}
+                        elif kind == "token":
+                            yield {"type": "token", "content": data}
+                        elif kind == "tool_name":
+                            previewed_tool_starts += 1
+                            yield {
+                                "type": "tool_call_start",
+                                "tool": data,
+                                "raw_query": "",
+                            }
+                        elif kind == "done":
+                            response = data
+                        elif kind == "error":
+                            yield {"type": "error", "content": f"LLM call failed: {data}"}
+                            self._store.add_message(session_id, "assistant", f"Error: {data}")
+                            yield {"type": "done", "sources": []}
+                            return
+                    except sync_queue.Empty:
+                        break
+                # Let the event loop flush SSE frames to the client
+                if drained:
+                    await asyncio.sleep(0)
+                elif not future.done():
+                    await asyncio.sleep(0.01)
+
+            # Ensure future is fully consumed
+            try:
+                await future
+            except Exception as e:
+                logger.exception("LLM streaming thread raised")
+                yield {"type": "error", "content": f"LLM error: {e}"}
+                return
+
+            if response is None:
+                yield {"type": "error", "content": "No response from LLM"}
+                return
+
+            if response.get("tool_calls"):
+                # ── Tool call path ──
+                tcs = response["tool_calls"]
+                if mode != "direct" and len(tcs) > 1:
+                    tcs = merge_search_tool_calls(tcs)
+                forced_col = self._forced_collection(mode, collections)
+
+                delete_pairs: list[tuple[str, str]] = []
+                _seen_del: set[tuple[str, str]] = set()
+                create_items_by_col: dict[str, list[dict]] = {}
+                update_items_by_col: dict[str, list[dict]] = {}
+                for _tc in tcs:
+                    _tname = (_tc.get("function") or {}).get("name")
+                    if _tname not in (
+                        "delete_todo",
+                        "create_todo",
+                        "update_todo",
+                    ):
+                        continue
+                    try:
+                        _da = json.loads(_tc["function"].get("arguments") or "{}")
+                    except json.JSONDecodeError:
+                        _da = {}
+                    _da, _derr = force_collection_args(
+                        str(_tname),
+                        _da,
+                        mode=mode,
+                        forced_collection=forced_col,
+                    )
+                    if _derr or collection_scope_error(str(_tname), _da, collections):
+                        continue
+                    _dcol = str((_da or {}).get("collection") or "").strip()
+                    if _tname == "create_todo":
+                        create_items_by_col.setdefault(_dcol, []).extend(
+                            collect_todo_create_items(_da)
+                        )
+                    elif _tname == "update_todo":
+                        update_items_by_col.setdefault(_dcol, []).extend(
+                            collect_todo_update_items(_da)
+                        )
+                    elif _tname == "delete_todo":
+                        for _dtid in collect_todo_delete_ids(_da):
+                            _key = (_dcol, _dtid)
+                            if _key not in _seen_del:
+                                _seen_del.add(_key)
+                                delete_pairs.append(_key)
+                todo_delete_batch_json: str | None = None
+                todo_create_batch_json: str | None = None
+                todo_update_batch_json: str | None = None
+                todo_list_cache: dict[tuple, str] = {}
+
+                # ── Same-round transcript-lookup fan-out ────────────────
+                # ≥2 lookup calls in one round → run the searches
+                # concurrently now, merge sequentially inside the loop below.
+                # Each call gets a launch-time snapshot of seen packs/hits so
+                # dedup semantics match the serial path.
+                _parallel_lookups: dict[int, dict] = {}
+                if not tx_lookup_dry:
+                    _lookup_positions = [
+                        _i for _i, _tc in enumerate(tcs)
+                        if ((_tc.get("function") or {}).get("name"))
+                        == "lookup_meeting_transcript"
+                    ]
+                    if len(_lookup_positions) >= 2:
+                        _launch: list[tuple[int, dict, set, list]] = []
+                        for _i in _lookup_positions:
+                            if (
+                                len(_launch) + meeting_lookup_calls
+                                >= _MAX_MEETING_LOOKUP_CALLS
+                            ):
+                                break
+                            _ltc = tcs[_i]
+                            try:
+                                _largs = json.loads(
+                                    _ltc["function"].get("arguments") or "{}"
+                                )
+                            except json.JSONDecodeError:
+                                _largs = {"query": user_message}
+                            _scoped, _ferr = (_largs, None) if (
+                                session_id.startswith("meeting_")
+                                or session_id.startswith("group_")
+                            ) else force_collection_args(
+                                "lookup_meeting_transcript",
+                                _largs,
+                                mode=mode,
+                                forced_collection=forced_col,
+                            )
+                            if _ferr:
+                                continue
+                            if not self._is_allowed_tool(
+                                "lookup_meeting_transcript", mode, session_id,
+                                web_search_enabled=web_search_enabled,
+                                has_meetings=has_meetings,
+                            ):
+                                continue
+                            _launch.append(
+                                (_i, _scoped, set(seen_tx_packs), list(seen_tx_hits))
+                            )
+                        if len(_launch) >= 2:
+                            from src.meeting.transcript_index import merge_hit_packs
+
+                            logger.info(
+                                "[Chatbox] parallel lookup fan-out: %d queries",
+                                len(_launch),
+                            )
+                            _results = await asyncio.gather(*[
+                                _run_blocking(
+                                    _run_lookup_meeting_transcript,
+                                    session_id, _scoped, user_message, forced_col,
+                                    _snap_packs, collections, _snap_hits,
+                                )
+                                for _i, _scoped, _snap_packs, _snap_hits in _launch
+                            ])
+                            # Fan-out consumes the same per-turn budget as
+                            # serial lookups.
+                            meeting_lookup_calls += len(_launch)
+                            _kept_lists = []
+                            for (_i, _scoped, _snap_packs, _snap_hits), res in zip(
+                                _launch, _results
+                            ):
+                                raw, found_keys, chat_src, kept = res
+                                _parallel_lookups[_i] = {
+                                    "content": raw,
+                                    "found": found_keys,
+                                    "sources": chat_src,
+                                    "snap_packs": _snap_packs,
+                                }
+                                _kept_lists.append(kept)
+                            # Merged hit state = snapshot + union of new packs,
+                            # deduped in launch order.
+                            seen_tx_hits[:] = merge_hit_packs(*_kept_lists)
+
+                for _loop_i, tc in enumerate(tcs):
+                    tool_name = tc["function"]["name"]
+                    try:
+                        args = json.loads(tc["function"]["arguments"] or "{}")
+                    except json.JSONDecodeError:
+                        args = (
+                            {"raw_query": user_message}
+                            if mode != "direct"
+                            else {"query": user_message}
+                        )
+
+                    is_multimodal = False
+                    tool_content: str | list = ""
+                    # Canonical history form for multimodal results — the
+                    # original context string (with :::image blocks). The live
+                    # request may carry a list; the DB must get this string.
+                    tool_persist_text: str | None = None
+                    _ui_status = "done"
+                    _ui_source_type = None
+                    # Per-tool RAG/web hit count (structure tools omit this)
+                    _sources_this_call: int | None = None
+
+                    if tool_name == WEB_SEARCH_TOOL_NAME:
+                        raw_query = args.get("query", user_message)
+                    elif tool_name in STRUCTURE_TOOL_NAMES:
+                        raw_query = (
+                            args.get("file_id")
+                            or args.get("source")
+                            or args.get("collection")
+                            or tool_name
+                        )
+                    elif mode == "direct":
+                        raw_query = args.get("query", user_message)
+                    else:
+                        raw_query = args.get("raw_query", user_message)
+
+                    if previewed_tool_starts > 0:
+                        previewed_tool_starts -= 1
+                    else:
+                        yield {
+                            "type": "tool_call_start",
+                            "tool": tool_name,
+                            "raw_query": str(raw_query)[:200],
+                            "tool_call_id": tc.get("id", ""),
+                        }
+
+                    # Disallowed tools (non-web) — return a result so the loop continues
+                    if not self._is_allowed_tool(
+                        tool_name, mode, session_id, web_search_enabled=web_search_enabled,
+                        has_meetings=has_meetings,
+                    ):
+                        logger.warning(
+                            "Disallowed tool %s (mode=%s web=%s) — returning error result",
+                            tool_name, mode, web_search_enabled,
+                        )
+                        tool_content = (
+                            f"Tool '{tool_name}' is not available in this context. "
+                            "Continue without it."
+                        )
+                        _ui_status = "error"
+                        total_tool_calls += 1
+                        _skip_exec = True
+                    else:
+                        _skip_exec = False
+
+                    # Special note/todo branches can preview or mutate data
+                    # without the structure dispatcher. Gate them before any
+                    # preview, cache access or confirmation card as well.
+                    if not _skip_exec and tool_name in STRUCTURE_TOOL_NAMES and collections:
+                        scoped, ferr = (args, None) if (
+                            session_id.startswith(("meeting_", "group_"))
+                        ) else force_collection_args(
+                            tool_name, args, mode=mode, forced_collection=forced_col,
+                        )
+                        scope_error = ferr or collection_scope_error(
+                            tool_name, scoped, collections,
+                        )
+                        if scope_error:
+                            tool_content = json.dumps({"error": scope_error})
+                            _ui_status = "error"
+                            total_tool_calls += 1
+                            _skip_exec = True
+
+                    # ── Web search (toggle status + HITL) ──
+                    if not _skip_exec and tool_name == WEB_SEARCH_TOOL_NAME:
+                        from src.chatbox.web_search import (
+                            format_web_results_for_llm,
+                            get_web_search_config,
+                            has_web_search_api_key,
+                            tavily_search,
+                            web_results_to_sources,
+                            web_search_confirm_store,
+                            web_toggle_label,
+                        )
+                        wq = str(args.get("query") or user_message).strip()
+                        toggle = web_toggle_label(web_search_enabled=web_search_enabled)
+
+                        # Toggle OFF or no API key → status=disabled (not a user Decline)
+                        if not web_search_enabled or not has_web_search_api_key():
+                            if not has_web_search_api_key():
+                                msg = (
+                                    "Web search is disabled: Tavily API key is missing "
+                                    "(Settings → Web Search). Answer from knowledge base only."
+                                )
+                            else:
+                                msg = (
+                                    "status=disabled: Web toggle is OFF (not a user Decline). "
+                                    "No internet results. Answer from knowledge base only."
+                                )
+                            tool_content = _web_tool_result(
+                                status="disabled",
+                                query=wq,
+                                message=msg,
+                            )
+                            _ui_status = "declined"
+                            _ui_source_type = "web"
+                        elif web_hitl_decision == "declined":
+                            # User already declined this turn (toggle still enabled)
+                            tool_content = _web_tool_result(
+                                status="user_declined",
+                                query=wq,
+                                message=(
+                                    "User manually declined web search for this turn "
+                                    f"(query={wq[:180]!r}). web_toggle is still enabled — "
+                                    "this is not a disabled toggle. No internet results. "
+                                    "Answer from knowledge base only; do not invent web facts."
+                                ),
+                            )
+                            _ui_status = "declined"
+                            _ui_source_type = "web"
+                        else:
+                            cfg = get_web_search_config()
+                            # First call this turn → HITL; after Allow, skip dialog
+                            if web_hitl_decision != "approved":
+                                confirm_id = web_search_confirm_store.create(wq)
+                                yield {
+                                    "type": "web_search_confirm",
+                                    "confirm_id": confirm_id,
+                                    "query": wq,
+                                    "tool_call_id": tc.get("id", ""),
+                                    "message": (
+                                        "Allow searching the public internet for this "
+                                        "turn? Results are external data, not knowledge base."
+                                    ),
+                                }
+                                timeout = float(
+                                    getattr(cfg, "confirm_timeout_sec", 120) or 120
+                                )
+                                approved = await web_search_confirm_store.wait(
+                                    confirm_id, timeout=timeout
+                                )
+                                if not approved:
+                                    web_hitl_decision = "declined"
+                                    tool_content = _web_tool_result(
+                                        status="user_declined",
+                                        query=wq,
+                                        message=(
+                                            "User manually clicked Decline for this web "
+                                            f"search (query={wq[:180]!r}). "
+                                            f"web_toggle={toggle} (still enabled). "
+                                            "This is a user refusal of this turn's search, "
+                                            "not a disabled toggle. No internet results. "
+                                            "Answer from knowledge base only."
+                                        ),
+                                    )
+                                    _ui_status = "declined"
+                                    _ui_source_type = "web"
+                                    logger.info(
+                                        "[Chatbox] Web search user_declined this turn "
+                                        "(web_toggle=%s) — remove tool for remaining rounds",
+                                        toggle,
+                                    )
+                                else:
+                                    web_hitl_decision = "approved"
+                                    logger.info(
+                                        "[Chatbox] Web search approved this turn "
+                                        "(web_toggle=%s) — further calls skip confirm",
+                                        toggle,
+                                    )
+
+                            if web_hitl_decision == "approved":
+                                yield {
+                                    "type": "searching",
+                                    "query": f"[WEB] {wq[:180]}",
+                                    "tool_call_id": tc.get("id", ""),
+                                    "source_type": "web",
+                                }
+                                loop = asyncio.get_event_loop()
+                                payload = await loop.run_in_executor(
+                                    None,
+                                    lambda: tavily_search(
+                                        wq,
+                                        api_key=cfg.api_key,
+                                        max_results=cfg.max_results,
+                                        search_depth=cfg.search_depth,
+                                    ),
+                                )
+                                body = format_web_results_for_llm(payload)
+                                tool_content = (
+                                    _web_tool_result(
+                                        status="ok",
+                                        query=wq,
+                                        message="Web search completed.",
+                                    )
+                                    + "\n\n"
+                                    + body
+                                )
+                                _web_n = 0
+                                for s in web_results_to_sources(payload):
+                                    if s not in all_sources:
+                                        all_sources.append(s)
+                                    _web_n += 1
+                                _sources_this_call = _web_n
+                                _ui_source_type = "web"
+                        total_tool_calls += 1
+
+                    elif not _skip_exec and tool_name == "list_meeting_catalog":
+                        scoped, ferr = (args, None) if (
+                            session_id.startswith("meeting_")
+                            or session_id.startswith("group_")
+                        ) else force_collection_args(
+                            tool_name, args, mode=mode, forced_collection=forced_col,
+                        )
+                        tool_content = (
+                            json.dumps({"error": ferr})
+                            if ferr
+                            else await _run_blocking(
+                                _run_list_meeting_catalog,
+                                session_id, scoped, forced_col, collections,
+                            )
+                        )
+                        _sources_this_call = None
+                        total_tool_calls += 1
+
+                    elif not _skip_exec and tool_name == "lookup_meeting_transcript":
+                        from src.meeting.transcript_index import hit_count_from_lookup_json
+
+                        scoped, ferr = (args, None) if (
+                            session_id.startswith("meeting_")
+                            or session_id.startswith("group_")
+                        ) else force_collection_args(
+                            tool_name, args, mode=mode, forced_collection=forced_col,
+                        )
+                        if ferr:
+                            tool_content = json.dumps({"error": ferr})
+                            _sources_this_call = 0
+                        elif tx_lookup_dry:
+                            from src.meeting.transcript_index import (
+                                LOOKUP_TURN_DONE_MSG,
+                            )
+
+                            # Never replay the stale last result as if the
+                            # new query had succeeded — say the turn is over.
+                            # No hit count either: "0 段原话" read as a failed
+                            # search and lured the model into re-wording.
+                            dry_served += 1
+                            tool_content = json.dumps(
+                                {
+                                    "hit_count": len(seen_tx_packs),
+                                    "context": "",
+                                    "message": LOOKUP_TURN_DONE_MSG,
+                                },
+                                ensure_ascii=False,
+                            )
+                            _sources_this_call = None
+                        else:
+                            had = set(seen_tx_packs)
+                            served_from_budget = False
+                            stashed = _parallel_lookups.pop(_loop_i, None)
+                            if stashed is not None:
+                                # Search already ran concurrently; merge here.
+                                tool_content = stashed["content"]
+                                found_keys = stashed["found"]
+                                chat_src = stashed["sources"]
+                            elif (
+                                meeting_lookup_calls >= _MAX_MEETING_LOOKUP_CALLS
+                            ):
+                                # Budget spent (fan-out or earlier rounds) —
+                                # hard stop and drop the tool for this turn.
+                                tool_content = _lookup_limit_json(
+                                    _MAX_MEETING_LOOKUP_CALLS
+                                )
+                                found_keys = set()
+                                chat_src = None
+                                tx_lookup_dry = True
+                                served_from_budget = True
+                            else:
+                                meeting_lookup_calls += 1
+                                tool_content, found_keys, chat_src, kept = (
+                                    await _run_blocking(
+                                        _run_lookup_meeting_transcript,
+                                        session_id,
+                                        scoped,
+                                        user_message,
+                                        forced_col,
+                                        seen_tx_packs,
+                                        collections,
+                                        seen_tx_hits,
+                                    )
+                                )
+                            new_keys = found_keys - had
+                            seen_tx_packs |= found_keys
+                            if had and not new_keys:
+                                tx_lookup_dry = True
+                            for s in chat_src or []:
+                                if s not in all_sources:
+                                    all_sources.append(s)
+                            _sources_this_call = (
+                                len(chat_src)
+                                if chat_src is not None
+                                else hit_count_from_lookup_json(
+                                    tool_content if isinstance(tool_content, str) else ""
+                                )
+                            )
+                            if served_from_budget:
+                                # No hit count on the budget notice — a "0 段"
+                                # badge reads as a failed search and lures the
+                                # model into re-wording.
+                                _sources_this_call = None
+                        _ui_source_type = "meeting"
+                        total_tool_calls += 1
+
+                    elif not _skip_exec and tool_name == "read_meeting_summary":
+                        scoped, ferr = (args, None) if (
+                            session_id.startswith("meeting_")
+                            or session_id.startswith("group_")
+                        ) else force_collection_args(
+                            tool_name, args, mode=mode, forced_collection=forced_col,
+                        )
+                        tool_content = (
+                            json.dumps({"error": ferr})
+                            if ferr
+                            else await _run_blocking(
+                                _run_read_meeting_summary,
+                                session_id, scoped, forced_col, collections,
+                            )
+                        )
+                        _sources_this_call = None
+                        total_tool_calls += 1
+
+                    elif not _skip_exec and tool_name == "list_todos":
+                        scoped, ferr = force_collection_args(
+                            tool_name,
+                            args,
+                            mode=mode,
+                            forced_collection=forced_col,
+                        )
+                        if ferr:
+                            tool_content = json.dumps({"error": ferr})
+                            _ui_status = "error"
+                        else:
+                            done_v = scoped.get("done")
+                            if done_v is not None:
+                                done_v = bool(done_v)
+                            cache_key = (
+                                str(scoped.get("collection") or ""),
+                                bool(scoped.get("include_done") or False),
+                                done_v,
+                                bool(scoped.get("mine") or False),
+                            )
+                            cached = todo_list_cache.get(cache_key)
+                            if cached is not None:
+                                tool_content = cached
+                            else:
+                                tool_content = await execute_structure_tool_async(
+                                    tool_name,
+                                    scoped,
+                                    mode=mode,
+                                    forced_collection=forced_col,
+                                    selected_collections=collections,
+                                )
+                                todo_list_cache[cache_key] = tool_content
+                        _sources_this_call = None
+                        total_tool_calls += 1
+
+                    elif not _skip_exec and tool_name == "create_todo":
+                        scoped, ferr = force_collection_args(
+                            tool_name,
+                            args,
+                            mode=mode,
+                            forced_collection=forced_col,
+                        )
+                        if ferr:
+                            tool_content = json.dumps({"error": ferr})
+                            _ui_status = "error"
+                        elif todo_create_batch_json is not None:
+                            tool_content = todo_create_batch_json
+                        else:
+                            chunks: list[str] = []
+                            groups = create_items_by_col or {
+                                str((scoped or {}).get("collection") or ""):
+                                collect_todo_create_items(scoped)
+                            }
+                            for _ccol, _items in groups.items():
+                                if not _items:
+                                    continue
+                                chunks.append(
+                                    await execute_structure_tool_async(
+                                        "create_todo",
+                                        {"collection": _ccol, "todos": _items},
+                                        mode=mode,
+                                        forced_collection=forced_col,
+                                        selected_collections=collections,
+                                    )
+                                )
+                            todo_create_batch_json = (
+                                chunks[0]
+                                if len(chunks) == 1
+                                else json.dumps(
+                                    {"results": chunks}, ensure_ascii=False
+                                )
+                            )
+                            tool_content = todo_create_batch_json or json.dumps(
+                                {"error": "title or todos is required"}
+                            )
+                            if not chunks:
+                                _ui_status = "error"
+                        _sources_this_call = None
+                        total_tool_calls += 1
+
+                    elif not _skip_exec and tool_name == "update_todo":
+                        scoped, ferr = force_collection_args(
+                            tool_name,
+                            args,
+                            mode=mode,
+                            forced_collection=forced_col,
+                        )
+                        if ferr:
+                            tool_content = json.dumps({"error": ferr})
+                            _ui_status = "error"
+                        elif todo_update_batch_json is not None:
+                            tool_content = todo_update_batch_json
+                        else:
+                            chunks = []
+                            groups = update_items_by_col or {
+                                str((scoped or {}).get("collection") or ""):
+                                collect_todo_update_items(scoped)
+                            }
+                            for _ccol, _items in groups.items():
+                                if not _items:
+                                    continue
+                                chunks.append(
+                                    await execute_structure_tool_async(
+                                        "update_todo",
+                                        {"collection": _ccol, "updates": _items},
+                                        mode=mode,
+                                        forced_collection=forced_col,
+                                        selected_collections=collections,
+                                    )
+                                )
+                            todo_update_batch_json = (
+                                chunks[0]
+                                if len(chunks) == 1
+                                else json.dumps(
+                                    {"results": chunks}, ensure_ascii=False
+                                )
+                            )
+                            tool_content = todo_update_batch_json or json.dumps(
+                                {"error": "todo_id or updates is required"}
+                            )
+                            if not chunks:
+                                _ui_status = "error"
+                        _sources_this_call = None
+                        total_tool_calls += 1
+
+                    # ── Todo delete (HITL per id; all ids in this round, no LLM gap) ──
+                    elif not _skip_exec and tool_name == "delete_todo":
+                        from fastapi import HTTPException as _HTTP
+                        from src.chatbox.todo_delete_confirm import (
+                            TODO_DELETE_CONFIRM_TIMEOUT,
+                            declined_payload,
+                            peek_todo_for_delete,
+                            todo_delete_confirm_store,
+                        )
+                        from src.file_mgmt import service as _fm
+                        from src.mcp.common import run_sync as _run_sync
+
+                        scoped, ferr = force_collection_args(
+                            tool_name,
+                            args,
+                            mode=mode,
+                            forced_collection=forced_col,
+                        )
+                        if ferr:
+                            tool_content = json.dumps({"error": ferr})
+                            _ui_status = "error"
+                        elif todo_delete_batch_json is not None:
+                            tool_content = todo_delete_batch_json
+                        else:
+                            pairs = list(delete_pairs)
+                            if not pairs:
+                                col0 = str((scoped or {}).get("collection") or "")
+                                pairs = [
+                                    (col0, tid)
+                                    for tid in collect_todo_delete_ids(scoped)
+                                ]
+                            if not pairs:
+                                tool_content = json.dumps(
+                                    {"error": "todo_id or todo_ids is required"}
+                                )
+                                _ui_status = "error"
+                            else:
+                                outcomes: list[dict] = []
+                                any_declined = False
+                                for _col, _tid in pairs:
+                                    peek = peek_todo_for_delete(_col, _tid)
+                                    if peek.get("error"):
+                                        outcomes.append(
+                                            {"todo_id": _tid, **peek}
+                                        )
+                                        continue
+                                    confirm_id = todo_delete_confirm_store.create(
+                                        title=str(peek["title"]),
+                                        todo_id=str(peek["todo_id"]),
+                                        collection=str(peek["collection"]),
+                                        collection_name=str(
+                                            peek["collection_name"]
+                                        ),
+                                    )
+                                    yield {
+                                        "type": "todo_delete_confirm",
+                                        "confirm_id": confirm_id,
+                                        "todo_id": peek["todo_id"],
+                                        "title": peek["title"],
+                                        "collection": peek["collection"],
+                                        "collection_name": peek[
+                                            "collection_name"
+                                        ],
+                                        "tool_call_id": tc.get("id", ""),
+                                        "message": (
+                                            f'Delete to-do "{peek["title"]}"?'
+                                        ),
+                                    }
+                                    approved = await todo_delete_confirm_store.wait(
+                                        confirm_id,
+                                        timeout=TODO_DELETE_CONFIRM_TIMEOUT,
+                                    )
+                                    if not approved:
+                                        any_declined = True
+                                        outcomes.append(
+                                            declined_payload(str(peek["todo_id"]))
+                                        )
+                                        continue
+
+                                    def _del(
+                                        col=_col, tid=_tid
+                                    ) -> dict:
+                                        try:
+                                            _fm.delete_todo(col, tid)
+                                            return {
+                                                "deleted": True,
+                                                "todo_id": tid,
+                                                "collection": col,
+                                            }
+                                        except _HTTP as exc:
+                                            detail = exc.detail
+                                            if isinstance(detail, dict):
+                                                return {
+                                                    "error": str(
+                                                        detail.get("message")
+                                                        or detail
+                                                    )
+                                                }
+                                            return {"error": str(detail)}
+
+                                    outcomes.append(await _run_sync(_del))
+                                payload = {
+                                    "results": outcomes,
+                                    "total": len(outcomes),
+                                }
+                                todo_delete_batch_json = json.dumps(
+                                    payload, ensure_ascii=False
+                                )
+                                tool_content = todo_delete_batch_json
+                                if any_declined and not any(
+                                    r.get("deleted") for r in outcomes
+                                ):
+                                    _ui_status = "declined"
+                        _sources_this_call = None
+                        total_tool_calls += 1
+
+                    # ── Note create (HITL unless user named the target; Quick exempt) ──
+                    elif not _skip_exec and tool_name == "create_note":
+                        from src.chatbox.collection_resolve import (
+                            resolve_collection,
+                        )
+                        from src.chatbox.note_create_confirm import (
+                            NOTE_CREATE_CONFIRM_TIMEOUT,
+                            declined_payload,
+                            note_create_confirm_store,
+                            note_create_needs_confirm,
+                            peek_note_for_create,
+                            user_named_collection,
+                        )
+
+                        if session_id.startswith(("meeting_", "group_")):
+                            # Target comes from the user's words — never force
+                            # the meeting's default collection over it.
+                            scoped, ferr = args, None
+                        else:
+                            scoped, ferr = force_collection_args(
+                                tool_name,
+                                args,
+                                mode=mode,
+                                forced_collection=forced_col,
+                            )
+                        if ferr:
+                            tool_content = json.dumps({"error": ferr})
+                            _ui_status = "error"
+                        else:
+                            peek = peek_note_for_create(
+                                str((scoped or {}).get("collection") or ""),
+                                str((scoped or {}).get("title") or ""),
+                                str((scoped or {}).get("content") or ""),
+                            )
+                            if collections and peek.get("collection") not in collections:
+                                peek = {"error": "Target collection is unavailable in this chat's selected scope."}
+                            if peek.get("error"):
+                                # Resolution failed — run the dispatch so the
+                                # model gets the error + directory and can
+                                # self-correct next round.
+                                tool_content = await dispatch_structure_tool_async(
+                                    tool_name, scoped, selected_collections=collections,
+                                )
+                                _ui_status = "error"
+                            else:
+                                attempt_key = (
+                                    str(peek["collection"]),
+                                    str(peek.get("title") or "").strip().casefold(),
+                                )
+                                if attempt_key in note_create_attempts:
+                                    tool_content = json.dumps(
+                                        {
+                                            "status": "duplicate",
+                                            "message": (
+                                                "This exact note (same title, "
+                                                "same collection) was already "
+                                                "created or attempted this "
+                                                "turn. Do NOT call "
+                                                "create_note again — reply to "
+                                                "the user now."
+                                            ),
+                                        }
+                                    )
+                                elif note_create_count >= _MAX_NOTE_CREATE_CALLS:
+                                    tool_content = json.dumps(
+                                        {
+                                            "status": "limit_reached",
+                                            "message": (
+                                                f"Note creation limit reached "
+                                                f"({_MAX_NOTE_CREATE_CALLS} "
+                                                "this turn). Do NOT call "
+                                                "create_note again — reply to "
+                                                "the user now."
+                                            ),
+                                        }
+                                    )
+                                else:
+                                    # Registered before the confirm decision:
+                                    # a declined note must not be re-attempted
+                                    # identically within the same turn either.
+                                    note_create_attempts.add(attempt_key)
+                                    is_quick = mode == "direct" and not (
+                                        session_id.startswith(
+                                            ("meeting_", "group_")
+                                        )
+                                    )
+                                    # Host-side backstop: the model may claim
+                                    # collection_from_user=true and guess a
+                                    # target. Trust the flag only when the
+                                    # user's current message actually names
+                                    # the resolved collection.
+                                    from_user = bool(
+                                        (scoped or {}).get(
+                                            "collection_from_user"
+                                        )
+                                    ) and user_named_collection(
+                                        str(peek.get("collection_name") or ""),
+                                        user_message,
+                                    )
+                                    if not note_create_needs_confirm(
+                                        is_quick=is_quick,
+                                        match=str(peek.get("match") or ""),
+                                        collection_from_user=from_user,
+                                    ):
+                                        scoped["collection"] = str(
+                                            peek["collection"]
+                                        )
+                                        tool_content = await dispatch_structure_tool_async(
+                                            tool_name, scoped, selected_collections=collections,
+                                        )
+                                        note_create_count += 1
+                                    else:
+                                        confirm_id = note_create_confirm_store.create(
+                                            {
+                                                "title": str(peek.get("title") or ""),
+                                                "collection": str(
+                                                    peek.get("collection") or ""
+                                                ),
+                                                "collection_name": str(
+                                                    peek.get("collection_name") or ""
+                                                ),
+                                                "preview": str(
+                                                    peek.get("preview") or ""
+                                                ),
+                                            }
+                                        )
+                                        yield {
+                                            "type": "note_create_confirm",
+                                            "confirm_id": confirm_id,
+                                            "title": peek.get("title") or "",
+                                            "collection": peek.get("collection") or "",
+                                            "collection_name": peek.get(
+                                                "collection_name"
+                                            )
+                                            or "",
+                                            "preview": peek.get("preview") or "",
+                                            "tool_call_id": tc.get("id", ""),
+                                            "message": (
+                                                f'Create note "{peek.get("title")}"'
+                                                f" in {peek.get('collection_name')}?"
+                                            ),
+                                        }
+                                        approved, override = (
+                                            await note_create_confirm_store.wait_result(
+                                                confirm_id,
+                                                timeout=NOTE_CREATE_CONFIRM_TIMEOUT,
+                                            )
+                                        )
+                                        if approved:
+                                            # Card dropdown override: the user
+                                            # picked a different target. Re-
+                                            # resolve the id so a stale/deleted
+                                            # pick surfaces as an error instead
+                                            # of a silently wrong write.
+                                            override_resolved = None
+                                            if override and override != str(
+                                                peek["collection"]
+                                            ):
+                                                override_error = collection_scope_error(
+                                                    tool_name, {"collection": override}, collections,
+                                                )
+                                                override_resolved = (
+                                                    {"error": override_error}
+                                                    if override_error
+                                                    else resolve_collection(override)
+                                                )
+                                            if (
+                                                override_resolved
+                                                and "error"
+                                                in override_resolved
+                                            ):
+                                                tool_content = json.dumps(
+                                                    {"error": override_resolved["error"]}
+                                                )
+                                                _ui_status = "error"
+                                            else:
+                                                if override_resolved:
+                                                    scoped["collection"] = str(
+                                                        override_resolved[
+                                                            "collection"
+                                                        ]
+                                                    )
+                                                else:
+                                                    scoped["collection"] = str(
+                                                        peek["collection"]
+                                                    )
+                                                tool_content = (
+                                                    await dispatch_structure_tool_async(
+                                                        tool_name, scoped,
+                                                        selected_collections=collections,
+                                                    )
+                                                )
+                                                # The card approval IS the user
+                                                # confirming the target (even
+                                                # without a re-pick). Without
+                                                # this mark the meeting prompt's
+                                                # "ask when the user did not
+                                                # name a collection" rule makes
+                                                # the model re-ask after a
+                                                # successful write.
+                                                try:
+                                                    payload = json.loads(
+                                                        tool_content
+                                                    )
+                                                except (ValueError, TypeError):
+                                                    payload = None
+                                                if isinstance(payload, dict):
+                                                    # Factual, model-readable
+                                                    # result: the display name
+                                                    # of where the note landed.
+                                                    # No boolean flags and no
+                                                    # imperatives — an
+                                                    # unexplained
+                                                    # "user_changed_collection:
+                                                    # true" read like an
+                                                    # unresolved anomaly and
+                                                    # provoked a duplicate
+                                                    # re-create.
+                                                    target_name = (
+                                                        override_resolved
+                                                        or peek
+                                                    ).get("collection_name")
+                                                    if target_name:
+                                                        payload[
+                                                            "collection_name"
+                                                        ] = str(target_name)
+                                                    tool_content = json.dumps(
+                                                        payload
+                                                    )
+                                                note_create_count += 1
+                                        else:
+                                            tool_content = json.dumps(
+                                                declined_payload()
+                                            )
+                                            _ui_status = "declined"
+                        _sources_this_call = None
+                        total_tool_calls += 1
+
+                    # ── Structure / summary / full-text ──
+                    elif not _skip_exec and tool_name in {"create_report", "get_report", "update_report", "revise_report"}:
+                        tool_content = await asyncio.to_thread(execute_report_tool, self._store, session_id,
+                            tool_name, args, evidence, f"{turn_message.id}:{tc.get('id', '')}", review_batches,
+                            validate_review_proposal if review_batches else None,
+                            repair_review_proposal if review_batches else None, report_store=reports)
+                        total_tool_calls += 1
+                        _sources_this_call = None
+                    elif not _skip_exec and tool_name in {"list_chat_attachments", "read_chat_attachment", "search_chat_attachment"}:
+                        from src.chat_attachments.service import execute_attachment_tool
+                        tool_content = await asyncio.to_thread(execute_attachment_tool, self._attachments,
+                            session_id, tool_name, args, is_visual=_chat_model_is_visual(self._llm))
+                        if isinstance(tool_content, list):
+                            tool_persist_text = tool_content[0]["text"]
+                        _sources_this_call = None
+                        total_tool_calls += 1
+
+                    elif not _skip_exec and tool_name in STRUCTURE_TOOL_NAMES:
+                        if session_id.startswith(("meeting_", "group_")):
+                            # Meeting/Group carry no bound collection — skip
+                            # the Quick-Chat lock entirely AND dispatch
+                            # forcing-free (execute_structure_tool_async
+                            # would re-apply force_collection_args and
+                            # reject list_collections in direct mode).
+                            tool_content = await dispatch_structure_tool_async(
+                                tool_name, args, selected_collections=collections,
+                            )
+                        else:
+                            scoped, ferr = force_collection_args(
+                                tool_name,
+                                args,
+                                mode=mode,
+                                forced_collection=forced_col,
+                            )
+                            tool_content = (
+                                json.dumps({"error": ferr})
+                                if ferr
+                                else await execute_structure_tool_async(
+                                    tool_name,
+                                    scoped,
+                                    mode=mode,
+                                    forced_collection=forced_col,
+                                    selected_collections=collections,
+                                )
+                            )
+                        # Structure tools don't produce RAG "sources" for the Sources panel
+                        _sources_this_call = None
+                        total_tool_calls += 1
+
+                    # ── Direct search ──
+                    elif not _skip_exec and mode == "direct":
+                        if self._direct is None:
+                            tool_content = "Direct retrieval is not configured."
+                            _ui_status = "error"
+                            _sources_this_call = 0
+                        else:
+                            query = args.get("query", raw_query)
+                            yield {
+                                "type": "searching",
+                                "query": str(query)[:200],
+                                "tool_call_id": tc.get("id", ""),
+                            }
+                            include_images = _chat_model_is_visual(self._llm)
+                            direct_cols = [forced_col] if forced_col else (collections or [])
+                            _loop = asyncio.get_event_loop()
+
+                            def _run_direct_retrieval():
+                                result = self._direct.retrieve(
+                                    query,
+                                    collections=direct_cols,
+                                    **search_settings("direct"),
+                                    generate_answer=False,
+                                )
+                                _sources = []
+                                for chunk in result.chunks:
+                                    s = {
+                                        "text": getattr(chunk, "text", "")[:4000],
+                                        "score": getattr(chunk, "score", 0.0),
+                                        "metadata": getattr(chunk, "metadata", {}),
+                                    }
+                                    if s not in _sources:
+                                        _sources.append(s)
+                                _multimodal = None
+                                if include_images and result.chunks:
+                                    try:
+                                        from src.rag.agentic_query import (
+                                            _stitch_images_from_chunks,
+                                            _build_multimodal_context,
+                                        )
+                                        imgs = _stitch_images_from_chunks(result.chunks)
+                                        if imgs:
+                                            _multimodal = _build_multimodal_context(
+                                                result.context, imgs,
+                                            )
+                                    except Exception:
+                                        logger.exception("[Chatbox] Image stitching failed")
+                                if _multimodal is not None and imgs:
+                                    # Byte-stable snapshots: history hydration must
+                                    # re-attach identical bytes every later turn.
+                                    from src.chatbox.image_memory import (
+                                        snapshot_session_images,
+                                    )
+
+                                    snapshot_session_images(
+                                        session_id,
+                                        {
+                                            img_id: f"data:{info['mime']};base64,{info['base64']}"
+                                            for img_id, info in imgs.items()
+                                            if isinstance(info, dict) and info.get("base64")
+                                        },
+                                        base_dir=self._image_store_dir,
+                                    )
+                                return {
+                                    "sources": _sources,
+                                    "context": result.context or "No relevant information found.",
+                                    "multimodal": _multimodal,
+                                }
+
+                            # 保留请求上下文：_run_direct_retrieval 内部按 actor 过滤可见库
+                            from src.async_ctx import run_with_context as _rwc
+                            direct_data = await _rwc(_run_direct_retrieval)
+                            total_tool_calls += 1
+                            for s in direct_data["sources"]:
+                                if s not in all_sources:
+                                    all_sources.append(s)
+                            _sources_this_call = len(direct_data["sources"])
+                            if direct_data["multimodal"] is not None:
+                                is_multimodal = True
+                                tool_content = direct_data["multimodal"]
+                                tool_persist_text = direct_data["context"]
+                            else:
+                                tool_content = direct_data["context"]
+
+                    # ── Agentic search (search_knowledge_base / other search facades) ──
+                    elif not _skip_exec and self._agentic is None:
+                        tool_content = (
+                            "Knowledge base search is not configured. "
+                            "Please enable Function Calling on an LLM model in Settings."
+                        )
+                        _ui_status = "error"
+                    elif not _skip_exec and (
+                        tool_name == "search_knowledge_base"
+                        and agentic_search_calls >= _MAX_AGENTIC_SEARCH_CALLS
+                    ):
+                        # Separate from outer _MAX_TOOL_ROUNDS: stop KB thrash,
+                        # leave budget for web / synthesis.
+                        tool_content = (
+                            f"Agentic knowledge-base search limit reached "
+                            f"({_MAX_AGENTIC_SEARCH_CALLS} calls this turn). "
+                            "Do NOT call search_knowledge_base again. "
+                            "Synthesize the final answer now from tool results "
+                            "already in this conversation."
+                        )
+                        _ui_status = "error"
+                        total_tool_calls += 1
+                        logger.info(
+                            "[Chatbox] Blocked search_knowledge_base "
+                            "(agentic_search_calls=%d/%d)",
+                            agentic_search_calls,
+                            _MAX_AGENTIC_SEARCH_CALLS,
+                        )
+                    elif not _skip_exec:
+                        generate_answer = args.get("generate_answer", False)
+                        include_images = _chat_model_is_visual(self._llm)
+                        decompose = args.get("decompose", True)
+
+                        step_queue: sync_queue.Queue = sync_queue.Queue()
+
+                        def _on_step(event: dict):
+                            if event.get("step") in (
+                                "decompose", "task_start", "aq_start",
+                                "aq_done", "synthesize_task", "synthesize_merge",
+                                "retrieve", "retrieving", "grading",
+                                "variant_generation", "rewrite_loop_done",
+                            ):
+                                step_queue.put(event)
+
+                        loop = asyncio.get_event_loop()
+                        # 保留请求上下文：agentic 管线里 catalog / direct_query 都按
+                        # actor 过滤可见库；丢到线程池会退回 owner → 过滤失效。
+                        import contextvars as _cv
+
+                        _ctx = _cv.copy_context()
+                        use_preliminary = decompose and not preliminary_retrieval_used
+                        preliminary_retrieval_used = preliminary_retrieval_used or decompose
+                        future = loop.run_in_executor(
+                            None,
+                            lambda: _ctx.run(
+                                self._agentic.run,
+                                raw_query,
+                                collections=collections or None,
+                                **search_settings("agentic"),
+                                generate_answer=generate_answer,
+                                include_images=include_images,
+                                on_step=_on_step,
+                                decompose=decompose,
+                                include_archived=bool(args.get("include_archived", False)),
+                                original_user_question=user_message,
+                                preliminary_retrieval=use_preliminary,
+                            ),
+                        )
+                        total_tool_calls += 1
+                        if tool_name == "search_knowledge_base":
+                            agentic_search_calls += 1
+                        all_thinking_events: list[dict] = []
+                        while not future.done() or not step_queue.empty():
+                            batch_new = False
+                            while True:
+                                try:
+                                    evt = step_queue.get_nowait()
+                                    batch_new = True
+                                    if evt.get("step") == "aq_start":
+                                        thinking_aq_count += 1
+                                    elif evt.get("step") == "task_start":
+                                        thinking_task_count += 1
+                                    all_thinking_events.append(evt)
+                                    yield {
+                                        "type": "tool_step",
+                                        "step": evt.get("step", ""),
+                                        "content": evt.get("content", ""),
+                                        "task": evt.get("task", ""),
+                                        "iteration": evt.get("iteration", 0),
+                                        "chunks": evt.get("chunks", 0),
+                                        "aq_id": evt.get("aq_id", ""),
+                                        "aq_count": evt.get("aq_count", 0),
+                                        "sufficient": evt.get("sufficient", False),
+                                        "error": evt.get("error", False),
+                                    }
+                                except sync_queue.Empty:
+                                    break
+                            if batch_new:
+                                summary = _build_thinking_summary(all_thinking_events)
+                                yield {"type": "thinking_summary", **summary}
+                            if not future.done():
+                                await asyncio.sleep(0.05)
+
+                        result = await future
+                        while True:
+                            try:
+                                evt = step_queue.get_nowait()
+                                if evt.get("step") == "aq_start":
+                                    thinking_aq_count += 1
+                                elif evt.get("step") == "task_start":
+                                    thinking_task_count += 1
+                                all_thinking_events.append(evt)
+                                yield {
+                                    "type": "tool_step",
+                                    "step": evt.get("step", ""),
+                                    "content": evt.get("content", ""),
+                                    "task": evt.get("task", ""),
+                                    "iteration": evt.get("iteration", 0),
+                                    "chunks": evt.get("chunks", 0),
+                                    "aq_id": evt.get("aq_id", ""),
+                                    "aq_count": evt.get("aq_count", 0),
+                                    "sufficient": evt.get("sufficient", False),
+                                    "error": evt.get("error", False),
+                                }
+                            except sync_queue.Empty:
+                                break
+
+                        thinking_summary = _build_thinking_summary(all_thinking_events)
+                        yield {"type": "thinking_summary", **thinking_summary}
+
+                        _chunk_n = 0
+                        for chunk in result.all_chunks:
+                            source = {
+                                "text": getattr(chunk, "text", "")[:4000],
+                                "score": getattr(chunk, "score", 0.0),
+                                "metadata": getattr(chunk, "metadata", {}),
+                            }
+                            if source not in all_sources:
+                                all_sources.append(source)
+                            _chunk_n += 1
+                        _sources_this_call = _chunk_n
+
+                        is_multimodal = isinstance(result.answer, list)
+                        if is_multimodal:
+                            tool_content = result.answer
+                            tool_persist_text = self._remember_search_evidence(
+                                session_id, result.context, result.images,
+                            )
+                        else:
+                            parts = []
+                            if result.answer:
+                                parts.append(result.answer)
+                            elif result.context:
+                                parts.append(result.context)
+                            tool_content = "\n\n".join(parts) if parts else "No relevant information found."
+
+                    new_sources = all_sources[source_cursor:]
+                    source_cursor = len(all_sources)
+                    tool_content = evidence.capture(tool_name, tool_content, sources=new_sources, args=args)
+                    if tool_persist_text:
+                        tool_persist_text = evidence.capture(tool_name, tool_persist_text, sources=new_sources, args=args)
+                    written_reports = changes_from_result(tool_name, tool_content)
+                    merge_report_changes(report_changes, written_reports)
+                    if evidence.records():
+                        yield {"type": "citations", "citations": evidence.live_records()}
+
+                    # UI: tool result with preview for collapsible timeline
+                    written_notes = note_changes_from_result(tool_name, tool_content)
+                    merge_note_changes(note_changes, written_notes)
+                    if tool_name in {"create_note", "update_note", "get_note", "list_notes", "create_report", "get_report", "update_report", "revise_report"} and isinstance(tool_content, str):
+                        try:
+                            note_result = json.loads(tool_content)
+                            if isinstance(note_result, dict) and "error" in note_result:
+                                _ui_status = "error"
+                        except ValueError:
+                            pass
+                    _result_preview = _preview_tool_content(tool_content)
+                    if written_reports:
+                        _result_preview = written_reports[0]['title']
+                    _tr: dict = {
+                        "type": "tool_result",
+                        "status": _ui_status,
+                        "content": _result_preview,
+                        "tool": tool_name,
+                        "source_type": _ui_source_type,
+                        "tool_call_id": tc.get("id", ""),
+                    }
+                    if written_reports:
+                        _tr["report_changes"] = written_reports
+                    if written_notes:
+                        _tr["note_changes"] = written_notes
+                    if tool_name == "lookup_meeting_transcript" and isinstance(tool_content, str):
+                        try:
+                            _cited = json.loads(tool_content).get("cites")
+                        except (TypeError, json.JSONDecodeError):
+                            _cited = None
+                        if isinstance(_cited, list):
+                            _tr["cites"] = _cited
+                    # Only search/web tools report sources_count (avoid "0 sources" on list_library_tree)
+                    if _sources_this_call is not None:
+                        _tr["sources_count"] = _sources_this_call
+                    yield _tr
+                    # Record for session reload (frontend timeline is not stored otherwise)
+                    _trace_entry: dict = {
+                        "tool": tool_name,
+                        "toolQuery": str(raw_query)[:300] if raw_query else "",
+                        "toolResult": _result_preview,
+                        "toolStatus": _ui_status,
+                        "sourceType": _ui_source_type,
+                    }
+                    if _sources_this_call is not None:
+                        _trace_entry["sourcesCount"] = _sources_this_call
+                    if (
+                        tool_name == "search_knowledge_base"
+                        and thinking_summary.get("aq_count", 0) > 0
+                    ):
+                        # Snapshot agentic summary for classic retrieval UI
+                        _trace_entry["summary"] = {
+                            "aq_count": thinking_summary.get("aq_count", 0),
+                            "task_count": thinking_summary.get("task_count", 0),
+                            "tasks": list(thinking_summary.get("tasks") or []),
+                        }
+                    if _tr.get("cites"):
+                        _trace_entry["cites"] = _tr["cites"]
+                    tool_trace.append(_trace_entry)
+
+                    # Inject assistant tool_call + tool result for next LLM round
+                    tool_call_id = tc.get("id", "call_1")
+                    tool_call_data = [{
+                        "id": tool_call_id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "arguments": tc["function"]["arguments"],
+                        },
+                    }]
+                    assistant_extra: dict = {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": tool_call_data,
+                    }
+                    extra_messages.append(assistant_extra)
+                    tool_extra: dict = {
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": tool_content,
+                    }
+                    if tool_persist_text:
+                        tool_extra["_persist_text"] = tool_persist_text
+                    extra_messages.append(tool_extra)
+                    _flush_extra_messages()
+
+            else:
+                # ── Text response — tokens already streamed, just finalize ──
+                final_content = response.get("content", "") or ""
+                execution = review_execution(review_store, session_id, review_batches) if review_batches else None
+                if execution:
+                    if execution['unsaved'] and review_final_retries < 2 and _round < _MAX_TOOL_ROUNDS - 1:
+                        review_final_retries += 1
+                        continue
+                    final_content = completion_text(execution, review_batches, user_message)
+
+                # Save assistant message
+                meta: dict = {"tool_calls": total_tool_calls, "citations": evidence.used(final_content), "report_changes": report_changes}
+                if execution:
+                    meta['report_review_status'] = execution
+                if note_changes:
+                    meta["note_changes"] = note_changes
+                if thinking_summary.get("aq_count", 0) > 0:
+                    meta["thinking_summary"] = thinking_summary
+                if tool_trace:
+                    meta["tool_trace"] = tool_trace
+                if response.get("reasoning_content"):
+                    meta["reasoning_content"] = response["reasoning_content"]
+                _flush_extra_messages()
+                try:
+                    self._store.add_message(
+                        session_id, "assistant", final_content,
+                        sources=all_sources if all_sources else None,
+                        metadata=meta,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to persist assistant message session=%s tools=%d",
+                        session_id, total_tool_calls,
+                    )
+
+                logger.info(
+                    "[Chatbox] YIELD done: all_sources=%d total_tool_calls=%d mode=%s tool_trace=%d",
+                    len(all_sources), total_tool_calls, mode, len(tool_trace),
+                )
+                logger.info(
+                    "[Chatbox] YIELD done: sources=%d tool_calls=%d mode=%s",
+                    len(all_sources), total_tool_calls, mode,
+                )
+                if all_sources:
+                    for i, s in enumerate(all_sources[:3]):
+                        logger.info(
+                            "[Chatbox]   source[%d]: text=%s... score=%.3f meta_keys=%s",
+                            i, s.get("text", "")[:60], s.get("score", 0),
+                            list((s.get("metadata") or {}).keys())[:6],
+                        )
+                # message_count: Q&A turns for QC; raw rows for main Chat sidebar
+                _done_count = _ui_turn_count(
+                    self._store, session_id, fallback=msg_count,
+                )
+                yield {
+                    "type": "done",
+                    "sources": all_sources,
+                    "note_changes": note_changes,
+                    "citations": evidence.used(final_content), "report_changes": report_changes,
+                    "message_count": _done_count,
+                    "context_warning": _quick_warn,
+                }
+                return
+
+        # Max rounds reached — force a final answer without tools
+        logger.info(
+            "[Chatbox] Max rounds (%d) reached with %d tool calls — force generating answer",
+            _MAX_TOOL_ROUNDS, total_tool_calls,
+        )
+        _flush_extra_messages()
+        messages = self._build_messages(
+            session_id, user_message, extra_messages=extra_messages,
+            mode=mode,
+            collections=collections,
+            system_prompt=_sys_prompt, catalog_text=_cat_text, evidence_registry=evidence,
+            reports=reports,
+        )
+        execution = review_execution(review_store, session_id, review_batches) if review_batches else None
+        final_content = completion_text(execution, review_batches, user_message) if execution else _force_generate_answer(self._llm, messages)
+        if final_content or note_changes or report_changes:
+            # Yield the answer as token events so the frontend shows it,
+            # then persist and emit done.
+            for i in range(0, len(final_content), 4):
+                yield {"type": "token", "content": final_content[i:i + 4]}
+            meta_final: dict = {"tool_calls": total_tool_calls, "citations": evidence.used(final_content), "report_changes": report_changes}
+            if execution:
+                meta_final['report_review_status'] = execution
+            if note_changes:
+                meta_final["note_changes"] = note_changes
+            if thinking_summary.get("aq_count", 0) > 0:
+                meta_final["thinking_summary"] = thinking_summary
+            if tool_trace:
+                meta_final["tool_trace"] = tool_trace
+            try:
+                self._store.add_message(
+                    session_id, "assistant", final_content,
+                    sources=all_sources if all_sources else None,
+                    metadata=meta_final,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to persist forced assistant message session=%s",
+                    session_id,
+                )
+        else:
+            logger.warning(
+                "[Chatbox] Force generate returned empty — total_tool_calls=%d sources=%d",
+                total_tool_calls, len(all_sources),
+            )
+        _done_count = _ui_turn_count(self._store, session_id, fallback=msg_count)
+        yield {
+            "type": "done",
+            "sources": all_sources,
+            "note_changes": note_changes,
+            "citations": evidence.used(final_content), "report_changes": report_changes,
+            "message_count": _done_count,
+            "context_warning": _quick_warn,
+        }
+        return
+
+    # ── LLM call with tools ──────────────────────────────────────────
+
+    def _call_llm_with_tools(self, messages: list[dict], tools=None, tool_choice="auto") -> dict:
+        """Call the Chat LLM with tools enabled.
+
+        Uses the underlying OpenAI-compatible client directly for function
+        calling support (not available through the LLMProvider ABC).
+
+        Returns:
+            {"content": str} — text response
+            {"tool_calls": [...]} — function call request
+        """
+        client = getattr(self._llm, "_client", None)
+        model = getattr(self._llm, "_model", "gpt-4")
+
+        if client is None:
+            # Fallback: use generate() — no tool calling
+            logger.warning("Chat LLM has no _client; falling back to generate()")
+            prompt = messages[-1]["content"] if messages else ""
+            system = ""
+            if messages and messages[0]["role"] == "system":
+                system = messages[0]["content"]
+            content = self._llm.generate(prompt, system=system)
+            return {"content": content}
+
+        _tools = tools if tools is not None else TOOLS
+
+        kwargs = dict(
+            model=model,
+            messages=messages,
+            temperature=0.1,
+            tools=_tools,
+            tool_choice=tool_choice,
+        )
+        # Apply max_tokens if available (guard against mock objects)
+        try:
+            mt = getattr(self._llm, "_default_max_tokens", 0)
+            if isinstance(mt, int) and mt > 0:
+                kwargs["max_tokens"] = mt
+        except (TypeError, AttributeError):
+            pass
+
+        try:
+            resp = client.chat.completions.create(**kwargs)
+        except Exception as e:
+            retry_kwargs = _retry_llm_kwargs_after_error(kwargs, e)
+            if retry_kwargs is not None:
+                try:
+                    resp = client.chat.completions.create(**retry_kwargs)
+                    logger.warning("Retried tool call after thinking/tool_choice error: %s", e)
+                except Exception as e2:
+                    logger.exception("LLM tool call retry failed: %s", e2)
+                    return {"content": f"Request failed: {e2}"}
+            else:
+                logger.exception("LLM tool call failed: %s", e)
+                return {"content": f"Request failed: {e}"}
+
+        if not resp.choices:
+            return {"content": ""}
+
+        choice = resp.choices[0]
+        msg = choice.message
+
+        # Extract reasoning_content (DeepSeek thinking mode requires it
+        # to be passed back in subsequent requests)
+        reasoning = getattr(msg, "reasoning_content", None) or None
+
+        # Check for tool calls
+        if msg.tool_calls:
+            result: dict = {
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": tc.type,
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in msg.tool_calls
+                ]
+            }
+            if reasoning:
+                result["reasoning_content"] = reasoning
+            return result
+
+        result = {"content": msg.content or ""}
+        if reasoning:
+            result["reasoning_content"] = reasoning
+        return result
+
+    # ── tokenizer for streaming ─────────────────────────────────────
+
+    @staticmethod
+    def _tokenize(text: str, chunk_size: int = 4):
+        """Yield text in small chunks for SSE streaming."""
+        for i in range(0, len(text), chunk_size):
+            yield text[i:i + chunk_size]
+
+    def persist_interrupted_answer(
+        self, session_id: str, text: str, *, note_changes: list[dict] | None = None,
+        citations: list[dict] | None = None, report_changes: list[dict] | None = None,
+    ) -> None:
+        """Persist a partially generated answer after a mid-stream disconnect.
+
+        ``chat_stream`` normally persists the assistant message itself, right
+        before yielding ``done``. When the client disconnects earlier (page
+        refresh, stop, crash) that final persist never runs; the stream
+        handler calls this from its ``finally`` so the text already generated
+        survives. Skips when the last assistant message already carries this
+        exact text (done was persisted in the window before the close).
+        """
+        text = (text or "").strip()
+        if not text and not note_changes and not report_changes:
+            return
+        try:
+            recent = self._store.get_messages(session_id, limit=2)
+            for msg in reversed(recent):
+                if getattr(msg, "role", None) == "assistant":
+                    previous_meta = getattr(msg, "metadata", None) or {}
+                    if isinstance(previous_meta.get("tool_calls"), list):
+                        continue
+                    if (getattr(msg, "content", None) or "") == text and (
+                        not note_changes or (getattr(msg, "metadata", None) or {}).get("note_changes") == note_changes
+                    ) and (
+                        not report_changes or previous_meta.get("report_changes") == report_changes
+                    ):
+                        return
+                    break
+            self._store.add_message(
+                session_id,
+                "assistant",
+                text,
+                metadata={
+                    "tool_calls": 0, "partial": True, "interrupted": True,
+                    **({"note_changes": note_changes} if note_changes else {}),
+                    **({"citations": citations} if citations else {}),
+                    **({"report_changes": report_changes} if report_changes else {}),
+                },
+            )
+            logger.info(
+                "[Chatbox] Persisted interrupted partial answer session=%s chars=%d",
+                session_id, len(text),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist interrupted answer session=%s", session_id
+            )
+
+
+def _preview_tool_content(content, *, max_chars: int = 4000) -> str:
+    """Short plain-text preview of a tool result for Chat timeline UI."""
+    if content is None:
+        return ""
+    if isinstance(content, list):
+        parts: list[str] = []
+        for p in content:
+            if isinstance(p, dict):
+                if p.get("type") == "text":
+                    parts.append(str(p.get("text") or ""))
+                elif p.get("type") == "image_url":
+                    parts.append("[image]")
+            elif isinstance(p, str):
+                parts.append(p)
+        s = "\n".join(x for x in parts if x).strip() or "[multimodal tool result]"
+    else:
+        s = str(content).strip()
+    if len(s) > max_chars:
+        return s[:max_chars] + f"\n…[{len(s)} chars total]"
+    return s
+
+
+def _force_generate_answer(llm, messages: list[dict]) -> str:
+    """Generate a final answer without tools (strips thinking tags).
+
+    Appends a synthesis instruction so the LLM knows to produce an answer
+    from the tool results rather than requesting more tools.
+    """
+    client = getattr(llm, "_client", None)
+    model = getattr(llm, "_model", "gpt-4")
+
+    is_main_chat = any(
+        message.get("role") == "system"
+        and isinstance(message.get("content"), str)
+        and MAIN_CHAT_FORMATTING_RULES in message["content"]
+        for message in messages
+    )
+
+    # Append a clear synthesis instruction — the LLM may have been in a
+    # tool-calling loop and needs an explicit cue to stop and synthesize.
+    _msgs = list(messages)
+    _msgs.append({
+        "role": "user",
+        "content": MAIN_CHAT_FORCE_ANSWER_USER if is_main_chat else CHAT_FORCE_ANSWER_WITH_TOOLS_USER,
+    })
+
+    try:
+        if client:
+            kwargs = dict(model=model, messages=_msgs, temperature=0.1, max_tokens=4096)
+            if "minimax" not in (model or "").lower():
+                kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+            resp = client.chat.completions.create(**kwargs)
+            from src.providers.llm.openai_compat import _strip_think
+
+            content = _strip_think(resp.choices[0].message.content or "")
+            if not content:
+                # Some models (observed on qwen via DashScope) answer 200 with
+                # empty content when thinking is force-disabled on a long tool
+                # trajectory. One retry with the model's default thinking
+                # beats ending the turn with nothing.
+                kwargs.pop("extra_body", None)
+                resp = client.chat.completions.create(**kwargs)
+                content = _strip_think(resp.choices[0].message.content or "")
+            return content
+        else:
+            system = CHAT_FORCE_ANSWER_SYSTEM
+            if is_main_chat:
+                system += "\n\n" + MAIN_CHAT_FORMATTING_RULES
+            if any(
+                message.get("role") == "system"
+                and isinstance(message.get("content"), str)
+                and KNOWLEDGE_ANSWER_EVIDENCE_RULES in message["content"]
+                for message in messages
+            ):
+                system += "\n\n" + KNOWLEDGE_ANSWER_EVIDENCE_RULES
+            return llm.generate(
+                MAIN_CHAT_FORCE_ANSWER_USER if is_main_chat else CHAT_FORCE_ANSWER_USER,
+                system=system,
+                thinking=False,
+            ) or ""
+    except Exception:
+        logger.exception("[Chatbox] Force generate answer failed")
+        return ""
+
+
+@dataclass
+class _ThinkTagStreamParser:
+    """Separate inline reasoning while retaining only a possible delimiter suffix."""
+
+    pending: str = ""
+    in_think: bool = False
+
+    def feed(self, text: str, *, final: bool = False) -> list[tuple[str, str]]:
+        text = self.pending + text
+        self.pending = ""
+        segments = []
+        while text:
+            tag = "</think>" if self.in_think else "<think>"
+            kind = "thinking" if self.in_think else "token"
+            idx = text.find(tag)
+            if idx >= 0:
+                if idx:
+                    segments.append((kind, text[:idx]))
+                text = text[idx + len(tag):]
+                self.in_think = not self.in_think
+                continue
+            partial = -1 if final else _find_partial_tag(text, tag)
+            if partial >= 0:
+                self.pending = text[partial:]
+                text = text[:partial]
+            if text:
+                segments.append((kind, text))
+            break
+        return segments
+
+
+def _find_partial_tag(text: str, tag: str) -> int:
+    """Find the start of a partial delimiter suffix, or return -1."""
+    for i in range(1, len(tag)):
+        if text.endswith(tag[:i]):
+            return len(text) - i
+    return -1
+
+
+_SUPERSEDED_LOOKUP_STUB = (
+    "Superseded by a later lookup_meeting_transcript this turn. "
+    "Use the latest tool result (merged restitch)."
+)
+
+
+def _dialogue_hist_without_this_turn_tools(dialogue_hist: list, user_message: str) -> list:
+    """Keep history through the current user row; drop flushed tool rows after it."""
+    cut = None
+    for i, m in enumerate(dialogue_hist):
+        if getattr(m, "role", None) == "user" and (getattr(m, "content", None) or "") == user_message:
+            cut = i
+    if cut is None:
+        return dialogue_hist
+    return dialogue_hist[: cut + 1]
+
+
+def _lookup_tool_has_excerpts(content: str) -> bool:
+    raw = (content or "").strip()
+    if not raw or raw == _SUPERSEDED_LOOKUP_STUB:
+        return False
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return True
+    if not isinstance(data, dict):
+        return True
+    return bool((data.get("context") or "").strip())
+
+
+def _drop_lookup_tool(tools: list) -> list:
+    out = []
+    for t in tools or []:
+        fn = (t.get("function") or {}) if isinstance(t, dict) else {}
+        if fn.get("name") == "lookup_meeting_transcript":
+            continue
+        out.append(t)
+    return out
+
+
+def _collapse_superseded_lookup_results(messages: list[dict]) -> list[dict]:
+    """Keep one lookup restitch this turn; stub earlier lookup bodies after the last user."""
+    last_user = -1
+    for i, m in enumerate(messages):
+        if m.get("role") == "user":
+            last_user = i
+    if last_user < 0:
+        return messages
+    lookup_ids: list[str] = []
+    for m in messages[last_user + 1 :]:
+        if m.get("role") != "assistant":
+            continue
+        for tc in m.get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") or {}
+            if not isinstance(fn, dict):
+                continue
+            if fn.get("name") != "lookup_meeting_transcript":
+                continue
+            tid = str(tc.get("id") or "")
+            if tid:
+                lookup_ids.append(tid)
+    if len(lookup_ids) < 2:
+        return messages
+    content_by_id: dict[str, str] = {}
+    for m in messages[last_user + 1 :]:
+        if m.get("role") != "tool":
+            continue
+        tid = str(m.get("tool_call_id") or "")
+        if tid in lookup_ids:
+            content_by_id[tid] = m.get("content") or ""
+    keep = lookup_ids[-1]
+    for tid in reversed(lookup_ids):
+        if _lookup_tool_has_excerpts(content_by_id.get(tid) or ""):
+            keep = tid
+            break
+    drop = {tid for tid in lookup_ids if tid != keep}
+    out: list[dict] = []
+    for m in messages:
+        if m.get("role") == "tool" and str(m.get("tool_call_id") or "") in drop:
+            content = m.get("content") or ""
+            if not _lookup_tool_has_excerpts(content):
+                # Budget / turn-done / no-match control payloads are the
+                # model's stop signal — stubbing them into "Superseded…"
+                # erased the instruction and fueled the ghost loop.
+                out.append(m)
+                continue
+            stubbed = dict(m)
+            stubbed["content"] = _SUPERSEDED_LOOKUP_STUB
+            out.append(stubbed)
+        else:
+            out.append(m)
+    return out
+
+
+_MAX_INLINE_HISTORY_IMAGES = 4
+
+
+def _chat_model_is_visual(llm) -> bool:
+    """Checked capability of the actual receiving provider/model instance."""
+    from src.rag.image_evidence import model_supports_vision
+    return model_supports_vision(llm)
+
+
+def _document_tool_evidence(content: str) -> str:
+    """Unwrap document-reader JSON before inspecting fences; keep metadata.
+
+    The API exposes both `content` and its legacy `text` alias. Repeating both
+    doubles the input and hides escaped image fences from the renderer.
+    Projection affects only the model request, never the persisted tool result.
+    """
+    if ":::image" not in content:
+        return content
+    try:
+        result = json.loads(content)
+    except (ValueError, TypeError):
+        return content
+    if not isinstance(result, dict):
+        return content
+    bodies = [result[k] for k in ("content", "text") if isinstance(result.get(k), str)]
+    if not bodies:
+        return content
+    bodies = list(dict.fromkeys(bodies))
+    metadata = {k: v for k, v in result.items() if k not in ("content", "text")}
+    return json.dumps(metadata, ensure_ascii=False) + "\n\n" + "\n\n".join(bodies)
+
+
+def _hydrate_history_images(
+    messages: list[dict],
+    *,
+    session_id: str,
+    image_store_dir,
+    is_visual: bool,
+) -> list[dict]:
+    """Project all tool evidence for this receiver, including JSON document reads.
+
+    Current-turn images are all supplied. Older history keeps a bounded set of
+    originals; omitted originals get explicit references, never OCR demotion.
+    Byte-stable snapshots are reused; absent snapshots can be loaded from the
+    saved original. The caller's canonical message objects remain untouched.
+    """
+    from src.parsers.image_utils import iter_image_fence_fields, encode_image_base64
+    from src.rag.image_evidence import render_image_evidence, image_payload
+    from src.chatbox.image_memory import load_session_image, snapshot_session_images
+
+    out = [dict(m) for m in messages]
+    inventory: list[tuple[int, str, list[dict]]] = []
+    last_user = max((i for i, m in enumerate(out) if m.get("role") == "user"), default=-1)
+    for idx, m in enumerate(out):
+        if m.get("role") != "tool":
+            continue
+        content = m.get("_persist_text") or m.get("content")
+        if not isinstance(content, str):
+            continue
+        source = _document_tool_evidence(content)
+        refs = iter_image_fence_fields(source)
+        if refs or ":::image" in source:
+            inventory.append((idx, source, refs))
+
+    images: dict[str, dict] = {}
+    if is_visual:
+        for _, _, refs in inventory:
+            for ref in refs:
+                iid = ref["image_id"]
+                if iid in images:
+                    continue
+                data_url = load_session_image(session_id, iid, base_dir=image_store_dir) if session_id else None
+                parsed = None
+                if isinstance(data_url, str) and data_url.startswith("data:") and ";base64," in data_url:
+                    mime, b64 = data_url[5:].split(";base64,", 1)
+                    parsed = image_payload({"base64": b64, "mime": mime}, verify_raster=True)
+                if parsed is None:
+                    encoded = encode_image_base64(iid, ref.get("file_id", "")) if ref.get("file_id") else None
+                    parsed = image_payload({"base64": encoded[0], "mime": encoded[1]}) if encoded else None
+                    if parsed and session_id:
+                        snapshot_session_images(session_id, {
+                            iid: f"data:{parsed['mime']};base64,{parsed['base64']}"
+                        }, base_dir=image_store_dir)
+                if parsed:
+                    images[iid] = parsed
+
+    current_ids = {r["image_id"] for idx, _, refs in inventory if idx > last_user for r in refs}
+    old_ids: list[str] = []
+    for idx, _, refs in reversed(inventory):
+        if idx <= last_user:
+            for ref in reversed(refs):
+                iid = ref["image_id"]
+                if iid in images and iid not in current_ids and iid not in old_ids:
+                    old_ids.append(iid)
+    omitted_ids = set(old_ids[_MAX_INLINE_HISTORY_IMAGES:])
+    attached: set[str] = set()
+    for idx, source, refs in inventory:
+        rendered = render_image_evidence(source, images, is_visual=is_visual,
+                                         skip_ids=attached, omitted_ids=omitted_ids)
+        out[idx]["content"] = rendered
+        if isinstance(rendered, list):
+            attached.update(r["image_id"] for r in refs if r["image_id"] in images and r["image_id"] not in omitted_ids)
+    return out
+
+
+def _sanitize_tool_messages(messages: list[dict]) -> list[dict]:
+    """Repair dangling assistant tool_calls in an outgoing message list.
+
+    Strict OpenAI-compatible providers (DeepSeek) return 400 when an
+    assistant message carrying tool_calls is not followed by one tool
+    message per tool_call_id. Histories written before multimodal tool
+    results were persistable contain exactly that damage. Stub a tool
+    response for every unanswered id instead of failing the whole turn.
+    """
+    out: list[dict] = []
+    pending: list[str] = []
+
+    # Canonical API keys — private bookkeeping keys (e.g. _persist_text)
+    # must never leak into an outgoing provider request.
+    _ALLOWED_KEYS = (
+        "role", "content", "tool_calls", "tool_call_id", "name",
+        "reasoning_content",
+    )
+
+    def _project(m: dict) -> dict:
+        return {k: v for k, v in m.items() if k in _ALLOWED_KEYS}
+
+    def _flush_stubs() -> None:
+        for tid in pending:
+            out.append({
+                "role": "tool",
+                "tool_call_id": tid,
+                "content": "[tool result unavailable — history was incomplete]",
+            })
+        pending.clear()
+
+    for m in messages:
+        role = m.get("role")
+        if role == "assistant":
+            # Stubs owed by an EARLIER assistant turn must land before a new
+            # assistant turn starts.
+            _flush_stubs()
+            out.append(_project(m))
+            tcs = m.get("tool_calls")
+            pending = [
+                tc.get("id") for tc in (tcs if isinstance(tcs, list) else [])
+                if isinstance(tc, dict) and tc.get("id")
+            ]
+        elif role == "tool":
+            tid = str(m.get("tool_call_id") or "")
+            if tid in pending:
+                pending.remove(tid)
+            out.append(_project(m))
+        else:
+            _flush_stubs()
+            out.append(_project(m))
+    _flush_stubs()
+    return out
+
+
+def _persist_extra_messages(store, session_id: str, extra_messages: list[dict]) -> None:
+    """Save tool_call and tool_result messages to DB for KV cache reuse."""
+    for em in extra_messages:
+        try:
+            # Multimodal content can't go into the TEXT column — persist the
+            # canonical text form (or a stub) instead of skipping: a dropped
+            # tool row leaves the paired tool_call dangling in history, which
+            # strict providers (DeepSeek) reject for the rest of the session.
+            if isinstance(em.get("content"), list):
+                persist_text = em.get("_persist_text")
+                if isinstance(persist_text, str) and persist_text.strip():
+                    em = dict(em)
+                    em["content"] = persist_text
+                else:
+                    parts = em["content"]
+                    imgs = sum(
+                        1 for p in parts
+                        if isinstance(p, dict) and p.get("type") == "image_url"
+                    )
+                    head = next(
+                        (str(p.get("text") or "") for p in parts
+                         if isinstance(p, dict) and p.get("text")),
+                        "",
+                    ).strip()
+                    if imgs and head:
+                        body = f"[Multimodal tool result: {head[:400]}… +{imgs} image(s)]"
+                    elif imgs:
+                        body = f"[Multimodal tool result: +{imgs} image(s)]"
+                    else:
+                        body = head[:400] or "[multimodal tool result]"
+                    em = dict(em)
+                    em["content"] = body
+            role = em.get("role", "")
+            content = em.get("content") or ""
+            meta: dict = {}
+            if role == "assistant" and em.get("tool_calls"):
+                meta["tool_calls"] = em["tool_calls"]
+                rc = em.get("reasoning_content")
+                if rc:
+                    meta["reasoning_content"] = rc
+            elif role == "tool":
+                meta["tool_call_id"] = em.get("tool_call_id", "")
+            store.add_message(session_id, role, content, metadata=meta if meta else None)
+        except Exception:
+            logger.exception("Failed to persist extra message role=%s", em.get("role", "?"))
+
+
+def _build_thinking_summary(events: list[dict]) -> dict:
+    """Aggregate raw tool_step events into a structured thinking summary."""
+    tasks: dict[str, dict] = {}
+    task_order: list[str] = []
+    total_aqs = 0
+    aq_current_chunks: dict[str, int] = {}  # progressive chunk count
+    status = ""
+
+    for e in events:
+        step = e.get("step", "")
+        content = e.get("content", "")
+
+        # Track latest activity for live status
+        if step in ("decompose", "retrieving", "grading", "variant_generation",
+                     "synthesize_task", "synthesize_merge", "retrieve"):
+            status = content
+
+        if step == "task_start":
+            task_key = e.get("task", "") or content
+            if task_key not in tasks:
+                tasks[task_key] = {
+                    "task": task_key,
+                    "task_query": content,
+                    "aq_count": e.get("aq_count", 0),
+                    "aqs": [],
+                    "useful_chunks": 0,
+                }
+                task_order.append(task_key)
+
+        elif step == "aq_start":
+            total_aqs += 1
+            aq_id = e.get("aq_id", "")
+            task_key = e.get("task", "")
+            if task_key in tasks:
+                tasks[task_key]["aqs"].append({
+                    "aq_id": aq_id,
+                    "query": content,
+                    "variants": [],
+                    "variant_count": 0,
+                    "final_chunks": 0,
+                    "current_chunks": 0,
+                    "has_gaps": False,
+                })
+
+        elif step == "variant_generation":
+            aq_id = e.get("aq_id", "")
+            variants = e.get("variants", [])
+            vc = e.get("variant_count", 0)
+            for t in tasks.values():
+                for aq in t["aqs"]:
+                    if aq["aq_id"] == aq_id:
+                        aq["variants"] = list(variants)
+                        aq["variant_count"] = vc
+                        break
+
+        elif step == "retrieving":
+            aq_id = e.get("aq_id", "")
+            # Parse: "Retrieved N unique chunks across M search variants"
+            if "unique chunks" in content:
+                try:
+                    total = int(content.split("unique chunks")[0].split()[-1])
+                    aq_current_chunks[aq_id] = total
+                except (ValueError, IndexError):
+                    pass
+
+        elif step == "aq_done":
+            aq_id = e.get("aq_id", "")
+            chunks = e.get("chunks", 0)
+            has_gaps = e.get("has_gaps", True)
+            for t in tasks.values():
+                for aq in t["aqs"]:
+                    if aq["aq_id"] == aq_id:
+                        aq["final_chunks"] = chunks
+                        aq["current_chunks"] = chunks
+                        aq["has_gaps"] = has_gaps
+                        t["useful_chunks"] = sum(a["final_chunks"] for a in t["aqs"])
+                        break
+
+    # Apply progressive state (not yet finalized)
+    for t in tasks.values():
+        for aq in t["aqs"]:
+            aid = aq["aq_id"]
+            if aid in aq_current_chunks and aq["final_chunks"] == 0:
+                aq["current_chunks"] = aq_current_chunks[aid]
+
+    return {
+        "aq_count": total_aqs,
+        "task_count": len(tasks),
+        "tasks": [tasks[t] for t in task_order],
+        "status": status,
+    }

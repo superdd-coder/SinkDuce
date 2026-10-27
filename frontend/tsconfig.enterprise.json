@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.enterprise.tsbuildinfo",
+    "paths": {
+      "@/*": ["./src/*"],
+      "#edition/*": ["../ee/frontend/*"],
+      "react": ["./node_modules/@types/react"],
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime"],
+      "sonner": ["./node_modules/sonner"],
+      "lucide-react": ["./node_modules/lucide-react"]
+    }
+  },
+  "include": ["src", "../ee/frontend"]
+}

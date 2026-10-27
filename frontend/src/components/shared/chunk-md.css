@@ -1,0 +1,9 @@
+.pm-chunk-figure-disclosure { display: block; margin: 8px 0 16px; }
+.pm-chunk-figure-disclosure > button { display: inline-flex; align-items: center; gap: 6px; padding: 3px 0; border: 0; background: transparent; color: var(--pm-muted); font: 400 11px/1.6 var(--type-font-ui); cursor: pointer; }
+.pm-chunk-figure-disclosure > button:hover { color: var(--pm-green); }
+.pm-chunk-figure-disclosure > button:focus-visible { outline: 2px solid var(--pm-green); outline-offset: 3px; border-radius: 3px; }
+.pm-chunk-figure-disclosure > button > svg { opacity: .6; transition: transform 180ms var(--pm-ease); }
+.pm-chunk-figure-disclosure > button[aria-expanded=true] > svg { transform: rotate(180deg); }
+.pm-chunk-figure-details { display: block; padding-top: 8px; }
+.pm-chunk-figure-details[hidden] { display: none; }
+@media (prefers-reduced-motion:reduce) { .pm-chunk-figure-disclosure > button > svg { transition: none; } }

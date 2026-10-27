@@ -1,0 +1,18 @@
+.pm-unified-sources.pm-chat-sources { margin-top: 20px; padding-top: 0; border: 0; }
+.pm-unified-sources .pm-chat-sources-toggle { justify-content: flex-start; gap: 8px; width: auto; padding: 6px 0; color: var(--pm-muted); font: 400 12px/1.5 var(--type-font-ui); letter-spacing: 0; text-transform: none; }
+.pm-unified-sources .pm-chat-sources-toggle > svg { opacity: .6; transition: transform 220ms var(--pm-ease); }
+.pm-unified-sources .pm-chat-sources-toggle[aria-expanded=true] > svg { transform: rotate(180deg); }
+.pm-unified-sources .pm-chat-sources-list > div { max-height: 340px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.pm-unified-sources .pm-chat-source-row { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 0; border-radius: 12px; background: transparent; box-shadow: none; text-align: left; }
+.pm-unified-sources .pm-chat-sources-list > div { gap: 2px; }
+.pm-unified-sources .pm-chat-source-row:hover { background: color-mix(in srgb, var(--pm-ink) 2.5%, transparent); }
+.pm-unified-sources .pm-chat-source-row > svg { margin-top: 3px; flex-shrink: 0; color: var(--pm-muted); }
+.pm-unified-sources .pm-chat-source-copy { display: flex; flex: 1; flex-direction: column; min-width: 0; gap: 4px; }
+.pm-unified-sources .pm-chat-source-name { color: var(--pm-text); font: 500 13px/1.5 var(--type-font-ui); }
+.pm-unified-sources .pm-chat-source-snippet { margin: 0; color: var(--pm-muted); font: 400 12px/1.6 var(--type-font-ui); -webkit-line-clamp: 2; }
+.pm-unified-sources .pm-chat-source-context { color: var(--pm-faint); font: 400 11px/1.5 var(--type-font-ui); }
+.pm-unified-sources .pm-chat-source-row > .pm-chat-source-arrow { opacity: 0; transition: opacity 160ms var(--pm-ease); }
+.pm-unified-sources .pm-chat-source-row:is(:hover,:focus-visible) > .pm-chat-source-arrow { opacity: 1; }
+.pm-unified-sources button:focus-visible { outline: 2px solid var(--pm-green); outline-offset: 2px; }
+@media (hover:none) { .pm-unified-sources .pm-chat-source-row > .pm-chat-source-arrow { opacity: .5; } }
+@media (prefers-reduced-motion:reduce) { .pm-unified-sources .pm-chat-sources-toggle > svg, .pm-unified-sources .pm-chat-source-row > .pm-chat-source-arrow { transition:none; } }

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 620">
+  <!-- SinkDuce menubar template icon (single-colour silhouette).
+       Derived from logo-mark-light.svg: the "lake" outer frame with one
+       wave cut as negative space. Pure black + alpha; macOS renders it
+       black on light menubar / white on dark menubar via isTemplate. -->
+  <defs>
+    <mask id="wavecut" maskUnits="userSpaceOnUse" x="0" y="0" width="800" height="620">
+      <rect x="0" y="0" width="800" height="620" fill="#ffffff"/>
+      <path d="M 200 416 C 290 386 360 442 470 414 C 545 394 590 428 650 404"
+            fill="none" stroke="#000000" stroke-width="30" stroke-linecap="round"/>
+    </mask>
+  </defs>
+  <path d="M 471.4 176 L 573.6 276 Q 645 346 573.6 416 L 471.4 516 Q 400 586 328.6 516 L 226.4 416 Q 155 346 226.4 276 L 328.6 176 Q 400 106 471.4 176 Z"
+        fill="#000000" mask="url(#wavecut)"/>
+</svg>

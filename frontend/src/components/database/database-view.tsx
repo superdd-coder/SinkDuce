@@ -1,0 +1,938 @@
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react"
+import { useShallow } from "zustand/react/shallow"
+import { Tabs, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { List, MoreVertical, UploadCloud } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { readSourceScoped, writeSourceScoped } from "@/api/source-scope"
+import {
+  canOpenCollectionConfig,
+  collectionPermsKnown,
+} from "@/lib/collection-perms"
+import { useAppStore } from "@/stores/app-store"
+import { getFiles, deleteDocument, getTasks, getIngestHistory, archiveCollection, unarchiveCollection, type FileListItem } from "@/api/client"
+import { CollectionList } from "./collection-list"
+import { CreateCollectionDialog } from "./create-collection-dialog"
+import { DeleteCollectionDialog } from "./delete-collection-dialog"
+import { RenameCollectionDialog } from "./rename-collection-dialog"
+import { CollectionConfig } from "./collection-config"
+import { InfoPanel } from "./info-panel"
+import { ClassicFilesDialog } from "./classic-files-dialog"
+import { IngestHistoryDialog } from "./ingest-history-dialog"
+import { QuickChat } from "./quick-chat"
+import { FolderView } from "@/components/file-mgmt/folder-view"
+import { TimelineView } from "@/components/file-mgmt/timeline-view"
+import { FileMgmtDetailDialog } from "@/components/file-mgmt/file-detail"
+import { useFileMgmtStore } from "@/stores/file-mgmt-store"
+import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
+
+// Module-level: allows note-editor-dialog to trigger files refresh after ingestion
+let _refreshFilesCallback: (() => void) | null = null
+export function _triggerFilesRefresh() {
+  _refreshFilesCallback?.()
+}
+
+/** Top-level database tabs: Info | Files (folders) | Timeline | Config */
+type DbTab = "info" | "files" | "timeline" | "config"
+
+// 界面偏好按来源隔离：每台盒子记住自己的页签/视图习惯（否则会互相覆盖）
+function loadDbUi<T>(key: string, fallback: T): T {
+  return readSourceScoped<T>(`rag_${key}`, fallback)
+}
+
+function saveDbUi(key: string, value: unknown) {
+  writeSourceScoped(`rag_${key}`, value)
+}
+
+function loadInitialDbTab(): DbTab {
+  const t = loadDbUi<string>("dbActiveTab", "info")
+  if (t === "info" || t === "files" || t === "timeline" || t === "config") {
+    // Migrate legacy: Files tab + Folders/Timeline sub-toggle
+    if (t === "files") {
+      const mode = loadDbUi<string>("dbViewMode", "folders")
+      if (mode === "timeline") return "timeline"
+    }
+    return t
+  }
+  return "info"
+}
+
+export function DatabaseView({ active = true }: { active?: boolean }) {
+  const {
+    activeCollection,
+    setActiveCollection,
+    removeDeletedCollection,
+    pendingCreateCollection,
+    setPendingCreateCollection,
+    pendingOpenFile,
+    setPendingOpenFile,
+    collections,
+    fetchCollections,
+    setSidebarView,
+    setActiveMeeting,
+  } = useAppStore(
+    useShallow((s) => ({
+      activeCollection: s.activeCollection,
+      setActiveCollection: s.setActiveCollection,
+      removeDeletedCollection: s.removeDeletedCollection,
+      pendingCreateCollection: s.pendingCreateCollection,
+      setPendingCreateCollection: s.setPendingCreateCollection,
+      pendingOpenFile: s.pendingOpenFile,
+      setPendingOpenFile: s.setPendingOpenFile,
+      collections: s.collections,
+      fetchCollections: s.fetchCollections,
+      setSidebarView: s.setSidebarView,
+      setActiveMeeting: s.setActiveMeeting,
+    }))
+  )
+  const t = useT()
+  const [createOpen, setCreateOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [renameTarget, setRenameTarget] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<DbTab>(() => loadInitialDbTab())
+  /**
+   * Last Overview/Files/Timeline selection for the pill Tabs.
+   * Settings (config) is opened via the ⋮ button — not a Tabs value.
+   * Base UI Tabs auto-resets to the first tab when `value` is undefined /
+   * unmatched and fires onValueChange, which would undo open-config.
+   */
+  const [contentTab, setContentTab] = useState<"info" | "files" | "timeline">(
+    () => {
+      const t = loadInitialDbTab()
+      return t === "config" ? "info" : t
+    }
+  )
+  /** Tabs visited at least once — keepMounted after first open for snappy re-switch. */
+  const [visitedTabs, setVisitedTabs] = useState<Set<DbTab>>(
+    () => new Set([loadInitialDbTab()])
+  )
+  /**
+   * Sequential panel motion (no dual semi-transparent stack = no ghost):
+   * 1) fade out stageTab  2) swap stageTab to activeTab  3) fade in
+   * Same path for Overview / Files / Timeline / Config.
+   */
+  const [stageTab, setStageTab] = useState<DbTab>(() => loadInitialDbTab())
+  const [stagePhase, setStagePhase] = useState<"shown" | "hiding">("shown")
+  const panelMotionGen = useRef(0)
+  const PANEL_OUT_MS = 140
+  const [files, setFiles] = useState<FileListItem[]>([])
+  /** Unified file detail — fileId for metadata, source for chunks/meeting/note. */
+  const [detailOpen, setDetailOpen] = useState<{
+    fileId?: string | null
+    source?: string | null
+  } | null>(null)
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const fetchFilesRef = useRef<() => void>(() => {})
+  // Per-fetch stale-response tokens. fetchFiles and fetchTasks each own their
+  // own counter because fetchTasks polls every 1s and would otherwise bump a
+  // shared token on every tick, causing an in-flight fetchFiles response to
+  // be discarded as "stale" right when the user switches to the uploading
+  // collection.
+  const filesTokenRef = useRef(0)
+  const tasksTokenRef = useRef(0)
+  const [deleteFileTarget, setDeleteFileTarget] = useState<string | null>(null)
+  const deleteFileDisplay = files.find(f => f.source === deleteFileTarget)?.display_name || deleteFileTarget
+  const [quickChatOpen, setQuickChatOpen] = useState(false)
+  /** All Files flat list — dialog only, not a top-level tab. */
+  const [classicFilesOpen, setClassicFilesOpen] = useState(false)
+  /** Ingest history — entry sits beside All Files on the Files tab. */
+  const [ingestOpen, setIngestOpen] = useState(false)
+  const [ingestBadge, setIngestBadge] = useState({ active: 0, failed: 0 })
+
+  /**
+   * 能否打开这个库的设置面板 = 后端算出的 config 档（判定集中在 lib/collection-perms）。
+   *
+   * 没权限就不画入口：那个面板是 autosave（无保存按钮），进去就会 POST `/config`，
+   * 被拒后弹"保存失败"——用户看到的是一个自己根本进不去的界面。
+   */
+  const canOpenConfig = canOpenCollectionConfig(collections, activeCollection)
+
+  const handleTabChange = useCallback((tab: string) => {
+    const next: DbTab =
+      tab === "info" || tab === "files" || tab === "timeline" || tab === "config"
+        ? tab
+        : "info"
+    setActiveTab(next)
+    if (next === "info" || next === "files" || next === "timeline") {
+      setContentTab(next)
+    }
+    setVisitedTabs((prev) => {
+      if (prev.has(next)) return prev
+      const n = new Set(prev)
+      n.add(next)
+      return n
+    })
+    saveDbUi("dbActiveTab", next)
+  }, [])
+
+  // In-app jump from message mini-graph → Timeline (same SPA route, no new window)
+  const timelineNavRequest = useFileMgmtStore((s) => s.timelineNavRequest)
+  useEffect(() => {
+    if (!timelineNavRequest) return
+    handleTabChange("timeline")
+  }, [timelineNavRequest, handleTabChange])
+
+  /**
+   * 无 config 权限时不许停在设置面板上——**包括上次留下的 `dbActiveTab=config`**。
+   * 只藏入口不够：那个偏好是持久化的，member 打开就会直接落在面板里，而面板是
+   * autosave（无保存按钮），立刻 POST `/config` → 403 → 弹"保存失败"。
+   * 权限信号未到（列表里还没有这个库的 permissions）时不动作，免得误踢 owner。
+   */
+  useEffect(() => {
+    if (activeTab !== "config") return
+    if (!collectionPermsKnown(collections, activeCollection)) return
+    if (!canOpenConfig) handleTabChange(contentTab)
+  }, [activeTab, canOpenConfig, collections, activeCollection, contentTab, handleTabChange])
+
+  /**
+   * Collection switch: keep stage + tab panels mounted (no visitedTabs wipe —
+   * that remounted InfoPanel and flashed white). Soft-fade title, tab bar, and
+   * body together so nothing hard-cuts alone.
+   */
+  const [collectionSoftFaded, setCollectionSoftFaded] = useState(false)
+  const collectionSoftSkipRef = useRef(true)
+  const collectionSoftGenRef = useRef(0)
+
+  useLayoutEffect(() => {
+    // Reset tab stage to current (panels stay mounted; props swap)
+    setStageTab(activeTab)
+    setStagePhase("shown")
+    panelMotionGen.current += 1
+
+    if (collectionSoftSkipRef.current) {
+      collectionSoftSkipRef.current = false
+      return
+    }
+    if (!activeCollection) {
+      setCollectionSoftFaded(false)
+      return
+    }
+    // Paint new collection at opacity 0, then fade in (title + tab bar + body)
+    collectionSoftGenRef.current += 1
+    setCollectionSoftFaded(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only on collection change
+  }, [activeCollection])
+
+  useEffect(() => {
+    if (!collectionSoftFaded) return
+    const gen = collectionSoftGenRef.current
+    // Brief hold so browser commits opacity:0 with new data, then fade up
+    const t = window.setTimeout(() => {
+      if (collectionSoftGenRef.current !== gen) return
+      setCollectionSoftFaded(false)
+    }, 40)
+    return () => window.clearTimeout(t)
+  }, [collectionSoftFaded, activeCollection])
+
+  // Sequential fade: hide current paint → swap → show next (never two UIs at once).
+  useEffect(() => {
+    if (activeTab === stageTab && stagePhase === "shown") return
+
+    // Already on target but still marked hiding — finish show
+    if (activeTab === stageTab && stagePhase === "hiding") {
+      setStagePhase("shown")
+      return
+    }
+
+    const gen = ++panelMotionGen.current
+    setStagePhase("hiding")
+    const t = window.setTimeout(() => {
+      if (panelMotionGen.current !== gen) return
+      setStageTab(activeTab)
+      setStagePhase("shown")
+    }, PANEL_OUT_MS)
+    return () => {
+      window.clearTimeout(t)
+    }
+  }, [activeTab, stageTab, stagePhase])
+
+  // Close float only on Config (FAB hidden). Timeline also has a right rail.
+  useEffect(() => {
+    if (quickChatOpen && activeTab === "config") {
+      setQuickChatOpen(false)
+    }
+  }, [activeTab, quickChatOpen])
+
+  // Listen for "Create New Database" events from other components (e.g. meeting ingest)
+  useEffect(() => {
+    const handler = () => {
+      setCreateOpen(true)
+      const { setSidebarView } = useAppStore.getState()
+      setSidebarView("database")
+    }
+    window.addEventListener("open-create-collection", handler)
+    return () => window.removeEventListener("open-create-collection", handler)
+  }, [])
+
+  // Check pending create flag on mount
+  useEffect(() => {
+    if (pendingCreateCollection) {
+      setCreateOpen(true)
+      setPendingCreateCollection(false)
+    }
+  }, [pendingCreateCollection, setPendingCreateCollection])
+
+  // Switch to Info tab when navigating from Meeting page
+  useEffect(() => {
+    const handler = () => handleTabChange("info")
+    window.addEventListener("show-meeting-log", handler)
+    return () => window.removeEventListener("show-meeting-log", handler)
+  }, [handleTabChange])
+
+  // Open unified file detail from Meeting Log / Info panel / etc.
+  useEffect(() => {
+    if (pendingOpenFile) {
+      const raw = pendingOpenFile
+      const fileId =
+        raw.startsWith("__file__:")
+          ? raw.slice("__file__:".length)
+          : /^[a-f0-9]{32}$/i.test(raw.trim())
+            ? raw.trim()
+            : null
+      setDetailOpen({
+        fileId,
+        // Keep original when it's a document source; when only fileId, detail will fill source
+        source: fileId && raw === fileId ? `__file__:${fileId}` : raw,
+      })
+      setPendingOpenFile(null)
+    }
+  }, [pendingOpenFile, setPendingOpenFile])
+
+  // From note editor: switch to Files tab → Notes folder → open file detail
+  useEffect(() => {
+    const handler = async (ev: Event) => {
+      const detail = (
+        ev as CustomEvent<{
+          collectionId?: string
+          fileId?: string
+          noteId?: string
+        }>
+      ).detail
+      const fileId = detail?.fileId
+      if (!fileId) return
+      const col = detail.collectionId || activeCollection
+      if (!col) return
+
+      handleTabChange("files")
+      try {
+        const store = useFileMgmtStore.getState()
+        await store.fetchFolderTree(col)
+        const tree = useFileMgmtStore.getState().folderTree
+        type TreeN = {
+          name: string
+          is_system?: boolean
+          folder_id: string
+          children?: TreeN[]
+        }
+        const findNotes = (nodes: TreeN[]): string | null => {
+          for (const n of nodes) {
+            if (n.name === "Notes" && n.is_system) return n.folder_id
+            const hit = findNotes(n.children || [])
+            if (hit) return hit
+          }
+          return null
+        }
+        const notesFolderId = findNotes(tree as TreeN[])
+        if (notesFolderId) {
+          await store.selectFolder(col, notesFolderId)
+        } else {
+          await store.refreshFiles(col, { silent: true })
+        }
+      } catch {
+        /* still open detail */
+      }
+      const source = detail.noteId
+        ? `__note__:${detail.noteId}`
+        : `__file__:${fileId}`
+      setDetailOpen({ fileId, source })
+    }
+    window.addEventListener("open-note-file-in-folder", handler)
+    return () => window.removeEventListener("open-note-file-in-folder", handler)
+  }, [activeCollection, handleTabChange])
+
+  // From Meeting ingest UI: Files tab → Meeting folder → open file detail
+  useEffect(() => {
+    const handler = async (ev: Event) => {
+      const detail = (
+        ev as CustomEvent<{
+          collectionId?: string
+          fileId?: string
+          meetingId?: string
+          tabId?: string
+        }>
+      ).detail
+      const fileId = detail?.fileId
+      if (!fileId) return
+      const col = detail.collectionId || activeCollection
+      if (!col) return
+
+      if (detail.collectionId) {
+        setActiveCollection(detail.collectionId)
+      }
+      handleTabChange("files")
+      try {
+        const store = useFileMgmtStore.getState()
+        await store.fetchFolderTree(col)
+        const tree = useFileMgmtStore.getState().folderTree
+        type TreeN = {
+          name: string
+          is_system?: boolean
+          folder_id: string
+          children?: TreeN[]
+        }
+        const findMeeting = (nodes: TreeN[]): string | null => {
+          for (const n of nodes) {
+            if (n.name === "Meeting" && n.is_system) return n.folder_id
+            const hit = findMeeting(n.children || [])
+            if (hit) return hit
+          }
+          return null
+        }
+        const meetingFolderId = findMeeting(tree as TreeN[])
+        if (meetingFolderId) {
+          await store.selectFolder(col, meetingFolderId)
+        } else {
+          await store.refreshFiles(col, { silent: true })
+        }
+      } catch {
+        /* still open detail */
+      }
+      const source =
+        detail.meetingId && detail.tabId
+          ? `__meeting__:${detail.meetingId}:${detail.tabId}`
+          : `__file__:${fileId}`
+      setDetailOpen({ fileId, source })
+    }
+    window.addEventListener("open-meeting-file-in-folder", handler)
+    return () =>
+      window.removeEventListener("open-meeting-file-in-folder", handler)
+  }, [activeCollection, handleTabChange, setActiveCollection])
+
+  const fetchFiles = useCallback(async () => {
+    if (!activeCollection) return
+    const token = ++filesTokenRef.current
+    try {
+      const res = await getFiles(activeCollection)
+      if (token !== filesTokenRef.current) return  // stale, a newer fetch has started
+      setFiles(res.files)
+    } catch {
+      if (token !== filesTokenRef.current) return
+      setFiles([])
+    }
+  }, [activeCollection])
+
+  // Keep ref in sync so polling always calls the latest fetchFiles
+  fetchFilesRef.current = fetchFiles
+
+  // Wire module-level callback for external files refresh (e.g. note ingestion)
+  useEffect(() => {
+    _refreshFilesCallback = fetchFiles
+    return () => { _refreshFilesCallback = null }
+  }, [fetchFiles])
+
+  const fetchTasks = useCallback(async () => {
+    const token = ++tasksTokenRef.current
+    try {
+      const res = await getTasks(activeCollection)
+      if (token !== tasksTokenRef.current) return  // stale, a newer fetch has started
+      // Locks are derived from the server task list, so every device shows the
+      // same spinners — including one that did not start the upload.
+      if (activeCollection) {
+        useFileMgmtStore.getState().syncIngestLocks(activeCollection, res.tasks)
+      }
+      if (res.processing > 0 || res.pending > 0) {
+        if (!pollingRef.current) {
+          pollingRef.current = setInterval(fetchTasks, 1000)
+        }
+      } else {
+        if (pollingRef.current) {
+          clearInterval(pollingRef.current)
+          pollingRef.current = null
+        }
+        fetchFilesRef.current()
+      }
+    } catch {
+      // ignore
+    }
+  }, [activeCollection])
+
+  // Ingest-history badge — light poll while the Files tab is showing.
+  // The dialog itself polls faster; this only keeps the entry count fresh.
+  useEffect(() => {
+    if (!activeCollection || activeTab !== "files") return
+    let alive = true
+    const fetchBadge = async () => {
+      try {
+        const data = await getIngestHistory(activeCollection)
+        if (!alive) return
+        setIngestBadge({
+          active: data.counts.queued + data.counts.processing,
+          failed: data.counts.failed,
+        })
+      } catch {
+        // ignore — badge just stays stale
+      }
+    }
+    void fetchBadge()
+    const id = setInterval(fetchBadge, 15000)
+    return () => {
+      alive = false
+      clearInterval(id)
+    }
+  }, [activeCollection, activeTab])
+
+  useEffect(() => {
+    fetchCollections()
+  }, [])
+
+  // Pause network polling while Collection tab is not the active sidebar view
+  useEffect(() => {
+    if (!active) {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current)
+        pollingRef.current = null
+      }
+      return
+    }
+    fetchFiles()
+    fetchTasks()
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current)
+        pollingRef.current = null
+      }
+    }
+  }, [fetchFiles, fetchTasks, activeCollection, active])
+
+  const handleDeleteFile = async () => {
+    if (!deleteFileTarget) return
+    try {
+      await deleteDocument(activeCollection, deleteFileTarget)
+      setDeleteFileTarget(null)
+      fetchFiles()
+    } catch {
+      // ignore
+    }
+  }
+
+  const collectionDisplayName =
+    collections.find((c) => c.id === activeCollection)?.name || activeCollection || ""
+
+  /**
+   * Pill tabs — Overview | Files | Timeline (same language as Meeting content tabs).
+   * White soft tray + sliding indicator; Settings stays on the title ⋮.
+   */
+  const collectionTabs = (
+    <div className="pm-collection-tabs-bar">
+      <Tabs
+        value={contentTab}
+        onValueChange={handleTabChange}
+        className="min-w-0 gap-0"
+      >
+        <TabsList className="pm-pill-tabs relative shrink-0 items-center isolate">
+          <TabsIndicator
+            renderBeforeHydration
+            className="pm-tabs-indicator"
+          />
+          {(
+            [
+              ["info", t("library.overview")],
+              ["files", t("library.files")],
+              ["timeline", t("library.timeline")],
+            ] as const
+          ).map(([value, label]) => (
+            <TabsTrigger
+              key={value}
+              value={value}
+              // While Settings is open, contentTab may still equal this value —
+              // onValueChange won't re-fire; force leave Settings on click.
+              onClick={() => {
+                if (activeTab === "config") handleTabChange(value)
+              }}
+              className={cn(
+                "pm-vtab relative z-[1]",
+                activeTab === "config" && "opacity-60",
+              )}
+            >
+              {label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
+      {/* All Files — sits beside the pill tray (only on Files tab) */}
+      {activeTab === "files" && (
+        <div className="pm-collection-tabs-actions">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setIngestOpen(true)}
+            title={t("library.ingestTitle")}
+            className="pm-collection-all-files-btn shrink-0 gap-1.5"
+          >
+            <UploadCloud className="size-3.5" />
+            <span>{t("library.ingestEntry")}</span>
+            {ingestBadge.active > 0 && (
+              <span className="pm-ingest-badge is-active">{ingestBadge.active}</span>
+            )}
+            {ingestBadge.active === 0 && ingestBadge.failed > 0 && (
+              <span className="pm-ingest-badge is-failed">{ingestBadge.failed}</span>
+            )}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setClassicFilesOpen(true)}
+            title={t("library.allFiles")}
+            className="pm-collection-all-files-btn shrink-0 gap-1.5"
+          >
+            <List className="size-3.5" />
+            <span>{t("library.allFiles")}</span>
+          </Button>
+        </div>
+      )}
+    </div>
+  )
+
+  const handleArchiveCollection = useCallback(async (id: string, archived: boolean) => {
+    const res = archived
+      ? await archiveCollection(id)
+      : await unarchiveCollection(id)
+    if (res && typeof res === "object" && "error" in res && (res as { error?: string }).error) {
+      return
+    }
+    await fetchCollections()
+  }, [fetchCollections])
+
+  return (
+    /* overflow visible so stage + collections soft shadows are not clipped */
+    <div className="pm-shell-workspace h-full min-h-0 min-w-0">
+      <CollectionList
+        collections={collections}
+        activeCollection={activeCollection}
+        onSelect={setActiveCollection}
+        onCreate={() => setCreateOpen(true)}
+        onDelete={setDeleteTarget}
+        onRename={setRenameTarget}
+        onArchive={handleArchiveCollection}
+      />
+
+      <div className="pm-shell-stage-slot flex-1 min-h-0 min-w-0">
+        {activeCollection ? (
+          /* Big soft stage — stable mount (no key=collectionId remount flash) */
+          <div className="pm-stage pm-float-surface h-full min-h-0 flex flex-col overflow-hidden">
+            {/* Collection header — title left, Settings ⋮ far right (not in tab bar) */}
+            <header
+              className={cn(
+                "pm-collection-chrome shrink-0 min-w-0 flex items-start justify-between gap-3",
+                "pm-collection-soft-fade",
+                collectionSoftFaded && "is-faded",
+              )}
+              style={{ marginBottom: "var(--pm-ov-gap, 14px)" }}
+            >
+              <div className="min-w-0">
+                <p className="pm-label mb-0.5">{t("library.collection")}</p>
+                <h1 className="pm-display truncate">{collectionDisplayName}</h1>
+              </div>
+              {canOpenConfig && (
+                <button
+                  type="button"
+                  title={t("library.collectionSettings")}
+                  aria-label={t("library.collectionSettings")}
+                  aria-pressed={activeTab === "config"}
+                  onClick={() => {
+                    // Toggle: open config, or close back to last content tab
+                    if (activeTab === "config") handleTabChange(contentTab)
+                    else handleTabChange("config")
+                  }}
+                  className={cn(
+                    "shrink-0 mt-1 inline-flex h-8 w-8 items-center justify-center rounded-full",
+                    "transition-colors duration-150",
+                    activeTab === "config"
+                      ? "text-[var(--pm-green)] bg-[var(--pm-green-soft)]"
+                      : "text-[var(--pm-muted)] hover:text-[var(--pm-ink)] hover:bg-black/[0.04]"
+                  )}
+                >
+                  <MoreVertical className="h-4 w-4" />
+                </button>
+              )}
+            </header>
+
+            {/* overflow-visible: QC fab park sits top: -40px above panel */}
+            <div className="pm-collection-body flex-1 flex flex-col min-h-0 min-w-0 overflow-visible">
+              {/*
+                Single always-mounted tab bar (Overview | Files | Timeline).
+                Must NOT move between InfoPanel chrome and this shell — remounting
+                kills TabsIndicator slide (new instance, no left/width tween).
+                value={contentTab} so Config open still keeps last pill for slide-back.
+                Soft-fades with title/body on collection switch (same opacity).
+              */}
+              {/*
+                Do NOT add .is-in here — it forces opacity:1 and overrides
+                .pm-collection-soft-fade.is-faded (same specificity, later in CSS).
+              */}
+              <div
+                className={cn(
+                  "pm-tabs-shell pm-collection-tabs-shell shrink-0 min-w-0",
+                  "pm-collection-soft-fade",
+                  collectionSoftFaded && "is-faded",
+                )}
+                style={{ marginBottom: "var(--pm-ov-gap, 14px)" }}
+              >
+                {collectionTabs}
+              </div>
+
+              {/*
+                Keep-alive surfaces + sequential fade (out → swap → in).
+                Same motion for Overview / Files / Timeline / Config.
+                Soft-fade on collection switch (title + tab bar + body).
+              */}
+              {/*
+                overflow-visible so QC diamond park (top: -40px) is not clipped.
+                transparent — never paint canvas gray over .pm-stage cream
+              */}
+              <div
+                className={cn(
+                  "relative flex-1 min-h-0 min-w-0 bg-transparent isolate overflow-visible",
+                  "pm-collection-soft-fade",
+                  collectionSoftFaded && "is-faded",
+                )}
+              >
+                {(
+                  [
+                    ["info", visitedTabs.has("info")] as const,
+                    ["files", visitedTabs.has("files")] as const,
+                    ["timeline", visitedTabs.has("timeline")] as const,
+                    ["config", visitedTabs.has("config")] as const,
+                  ] as const
+                ).map(([tab, visited]) => {
+                  if (!visited) return null
+                  const isStage = tab === stageTab
+                  const isInteractive =
+                    tab === activeTab &&
+                    stageTab === activeTab &&
+                    stagePhase === "shown"
+                  const phaseClass =
+                    isStage && stagePhase === "shown"
+                      ? "is-active z-20"
+                      : isStage && stagePhase === "hiding"
+                        ? "is-exiting z-20"
+                        : "is-idle z-0 select-none"
+                  return (
+                    <div
+                      key={tab}
+                      className={cn(
+                        "absolute inset-0 flex flex-col bg-transparent",
+                        "pm-panel pm-panel-fade",
+                        /*
+                         * Overview + Files: overflow visible so rail card shadows paint.
+                         * Diamond is parked outside panels (data-pm-qc-fab-anchor).
+                         */
+                        tab === "info" || tab === "files" || tab === "timeline"
+                          ? "overflow-visible"
+                          : "overflow-hidden",
+                        phaseClass,
+                        !isInteractive && "pointer-events-none"
+                      )}
+                      aria-hidden={!isInteractive}
+                      inert={!isInteractive ? true : undefined}
+                    >
+                      {tab === "info" && (
+                        <div className="absolute inset-0 flex min-h-0 flex-col overflow-visible p-0.5">
+                          <InfoPanel
+                            collection={activeCollection}
+                            railCovered={quickChatOpen}
+                          />
+                        </div>
+                      )}
+                      {tab === "files" && (
+                        <div className="absolute inset-0 flex min-h-0 flex-col overflow-visible p-0.5">
+                          <FolderView
+                            collectionId={activeCollection}
+                            railCovered={quickChatOpen}
+                          />
+                        </div>
+                      )}
+                      {tab === "timeline" && (
+                        <div className="absolute inset-0 flex min-h-0 flex-col overflow-visible p-0.5">
+                          <TimelineView
+                            collectionId={activeCollection}
+                            /* Live only when fully shown — avoid pan/measure mid-fade */
+                            active={
+                              active &&
+                              activeTab === "timeline" &&
+                              stageTab === "timeline" &&
+                              stagePhase === "shown"
+                            }
+                            railCovered={quickChatOpen}
+                          />
+                        </div>
+                      )}
+                      {tab === "config" && (
+                        <ScrollArea className="h-full">
+                          {/* Soft pad so nested card shadows aren’t clipped */}
+                          <div className="px-0.5 pb-6">
+                            <CollectionConfig collection={activeCollection} />
+                          </div>
+                        </ScrollArea>
+                      )}
+                    </div>
+                  )
+                })}
+
+                {/*
+                  Stable QC diamond park — same top-right of content for
+                  Overview / Files / Timeline. Config hides the icon (fabVisible).
+                */}
+                <div
+                  className="pm-qc-fab-park"
+                  data-pm-qc-fab-anchor
+                  aria-hidden
+                />
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="pm-stage h-full flex items-center justify-center text-muted-foreground pm-collection-enter">
+            <div className="pm-collection-chrome text-center">
+              <p className="text-sm t-body-family">{t("library.selectOrCreate")}</p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/*
+        Quick Chat: FAB parks on stage (stable). Float still fills right rail
+        on Overview/Files. Hidden on Config.
+      */}
+      {activeCollection && (
+        <QuickChat
+          collectionId={activeCollection}
+          collectionName={
+            collections.find((c) => c.id === activeCollection)?.name ||
+            activeCollection
+          }
+          open={quickChatOpen}
+          onOpen={() => {
+            // Files: Messages curtain may be width-0 — expand before QC portals in
+            if (activeTab === "files") {
+              useFileMgmtStore.getState().setMessageSidebarOpen(true)
+            }
+            setQuickChatOpen(true)
+          }}
+          onClose={() => setQuickChatOpen(false)}
+          /* Rail float cover — Overview / Files / Timeline all have a right rail */
+          railActive={
+            activeTab === "info" ||
+            activeTab === "files" ||
+            activeTab === "timeline"
+          }
+          railKey={activeTab}
+          /* Hide diamond on Collection Settings */
+          fabVisible={activeTab !== "config"}
+          files={files}
+          onSourceClick={(source) => {
+            // Open file detail only — do not switch away from Overview (or current tab)
+            const fileId = source.startsWith("__file__:")
+              ? source.slice("__file__:".length)
+              : /^[a-f0-9]{32}$/i.test(source.trim())
+                ? source.trim()
+                : null
+            setDetailOpen({ fileId, source })
+          }}
+          onMeetingClick={(meetingId) => {
+            setActiveMeeting(meetingId)
+            setSidebarView("meeting")
+          }}
+        />
+      )}
+
+      <CreateCollectionDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={fetchCollections} />
+      <DeleteCollectionDialog
+        collectionId={deleteTarget}
+        collectionName={deleteTarget ? collections.find(c => c.id === deleteTarget)?.name || "" : ""}
+        onOpenChange={(v) => !v && setDeleteTarget(null)}
+        onDeleted={() => { if (deleteTarget) removeDeletedCollection(deleteTarget); setDeleteTarget(null); fetchCollections() }}
+      />
+      {renameTarget && (
+        <RenameCollectionDialog
+          collectionId={renameTarget}
+          currentName={collections.find(c => c.id === renameTarget)?.name || ""}
+          open={!!renameTarget}
+          onOpenChange={(v) => !v && setRenameTarget(null)}
+          onRenamed={() => { setRenameTarget(null); fetchCollections() }}
+        />
+      )}
+
+      {activeCollection && (
+        <FileMgmtDetailDialog
+          collectionId={activeCollection}
+          fileId={detailOpen?.fileId}
+          source={detailOpen?.source}
+          open={!!detailOpen}
+          onOpenChange={(v) => {
+            if (!v) {
+              setDetailOpen(null)
+              fetchFiles()
+              void useFileMgmtStore.getState().refreshFiles(activeCollection)
+            }
+          }}
+          onDeleted={() => {
+            setDetailOpen(null)
+            fetchFiles()
+          }}
+        />
+      )}
+
+      {activeCollection && (
+        <ClassicFilesDialog
+          collectionId={activeCollection}
+          open={classicFilesOpen}
+          onOpenChange={setClassicFilesOpen}
+        />
+      )}
+
+      {activeCollection && (
+        <IngestHistoryDialog
+          collection={activeCollection}
+          open={ingestOpen}
+          onOpenChange={setIngestOpen}
+          onCountsChange={setIngestBadge}
+        />
+      )}
+
+      {/* File deletion confirmation (Quick Chat / pendingOpenFile paths) */}
+      <Dialog open={!!deleteFileTarget} onOpenChange={(v) => !v && setDeleteFileTarget(null)}>
+        <DialogContent className="pm-dialog max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{t("library.deleteFile")}</DialogTitle>
+          </DialogHeader>
+          <p className="pm-dialog-body">
+            {t("library.deleteFileBody", { name: "\u0000" }).split("\u0000")[0]}
+            <span className="font-medium text-[var(--pm-ink)] truncate max-w-[200px] inline-block align-bottom">
+              {deleteFileDisplay}
+            </span>
+            {t("library.deleteFileBody", { name: "\u0000" }).split("\u0000")[1]}
+          </p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              variant="ghost"
+              onClick={() => setDeleteFileTarget(null)}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              variant="destructive-solid"
+              onClick={handleDeleteFile}
+            >
+              {t("common.delete")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}

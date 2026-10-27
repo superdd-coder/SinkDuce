@@ -1,0 +1,183 @@
+"""Aggregator — merge sub-query results by group, then merge groups into final answer.
+
+Supports group-aware aggregation: AQs with the same ``group`` label are aggregated
+together first, then groups are merged into a final Markdown answer.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+
+from src.rag.agent_prompts import AGGREGATE_GROUP_SYSTEM
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SubQueryResult:
+    query: str
+    retained_chunks: list          # list[RetrievedChunk]
+    retained_info: str
+    gap_analysis: str = ""         # what's still missing (empty = complete)
+    answer: str | None = None      # None when generate_answer=False
+    task: str = ""                  # decompose task label
+    task_query: str = ""            # complete task description
+    retrieved_chunks: list = field(default_factory=list)  # pre-grade candidates
+    trace: list[dict] = field(default_factory=list)
+    errors: list[dict] = field(default_factory=list)
+
+
+class Aggregator:
+    """Group-aware aggregation: within-group first, then cross-group merge."""
+
+    def __init__(self, llm):
+        self.llm = llm
+
+    def aggregate(
+        self,
+        results: list[SubQueryResult],
+        *,
+        original_query: str = "",
+    ) -> str:
+        """Merge all *results* into a single Markdown answer.
+
+        Results with the same ``group`` are aggregated within-group first.
+        Ungrouped results (group="") are treated as one flat group.
+        Multiple groups are then merged via a final LLM pass.
+        """
+        logger.info("[Aggregate] %d results, groups=%s",
+                    len(results), {r.task or "(single)" for r in results})
+
+        if not results:
+            return ""
+
+        # Partition results by group
+        by_group: dict[str, list[SubQueryResult]] = {}
+        for r in results:
+            g = r.task or ""  # "" is the default ungrouped bucket
+            by_group.setdefault(g, []).append(r)
+
+        # Aggregate within each group
+        group_answers: dict[str, str] = {}
+        for g_label, grp_results in by_group.items():
+            if not any(r.retained_info or r.retained_chunks for r in grp_results):
+                ans = "No relevant information found."
+            else:
+                ans = self._aggregate_group(g_label, grp_results, original_query=original_query)
+            group_answers[g_label] = ans
+
+        # If only one group, return directly
+        if len(group_answers) == 1:
+            return list(group_answers.values())[0]
+
+        # Merge multiple groups
+        return self._merge_groups(group_answers, original_query=original_query)
+
+    # ── private ──────────────────────────────────────────────────────────
+
+    def build_prompt(self, results: list[SubQueryResult], *,
+                     original_query: str = "") -> str:
+        """Build the aggregate prompt from AQ results without calling LLM."""
+        return self._build_aggregate_prompt(results, original_query=original_query)
+
+    @staticmethod
+    def context_chunks(results: list[SubQueryResult]) -> list:
+        """The exact deduplicated evidence used by the aggregate prompt."""
+        seen: set[str] = set()
+        chunks: list = []
+        for result in results:
+            for chunk in result.retained_chunks or []:
+                cid = chunk.metadata.get("id", "")
+                if cid and cid not in seen:
+                    seen.add(cid)
+                    chunks.append(chunk)
+        return sorted(chunks, key=lambda c: c.score, reverse=True)
+
+    def _build_aggregate_prompt(self, results: list[SubQueryResult],
+                                original_query: str = "") -> str:
+        """Assemble the full aggregate user prompt.
+
+        Deduplicates chunks across all AQs before building a single context,
+        then shows each AQ with just a short summary (query + retained_info).
+        """
+        from src.rag.context_builder import build_context
+
+        task_query = results[0].task_query if results else ""
+        task_label = task_query or "the user's query"
+
+        # ── Dedup chunks across all AQs, build single context ──────
+        all_chunks = self.context_chunks(results)
+
+        context_text = build_context(all_chunks) if all_chunks else "(no relevant chunks found)"
+
+        # ── Sub-query summaries (short — just query + key findings) ─
+        has_incomplete = False
+        sub_parts = []
+        for i, r in enumerate(results):
+            if r.gap_analysis:
+                has_incomplete = True
+            info_text = r.retained_info or "(no information found)"
+            gap_xml = f'\n  <gaps>{r.gap_analysis}</gaps>' if r.gap_analysis else ""
+            sub_parts.append(
+                f'  <sub_query index="{i + 1}">\n'
+                f"    <query>{r.query}</query>\n"
+                f"    <findings>{info_text}</findings>{gap_xml}\n"
+                f"  </sub_query>"
+            )
+
+        gap_note = (
+            "\n<!-- Some sub-queries have gaps. Clearly mark uncertain parts in your answer. -->"
+            if has_incomplete else ""
+        )
+
+        # ── Assemble as XML ────────────────────────────────────────
+        return (
+            f'<task description="{task_label}">\n'
+            f"{chr(10).join(sub_parts)}\n"
+            f"</task>\n"
+            f"{gap_note}\n"
+            f"<context>\n{context_text}\n</context>"
+        )
+
+    def _aggregate_group(self, label: str, results: list[SubQueryResult],
+                         original_query: str = "") -> str:
+        """LLM-aggregate AQ results within a single task."""
+        prompt = self._build_aggregate_prompt(results, original_query=original_query)
+
+        try:
+            from src.rag.image_evidence import evidence_for_model
+            prompt = evidence_for_model(prompt, self.context_chunks(results), self.llm)
+            answer = self.llm.generate(prompt, system=AGGREGATE_GROUP_SYSTEM, max_tokens=16384, thinking=True).strip()
+            logger.info("[Aggregate] task %r: %d AQs → %d chars",
+                        label, len(results), len(answer))
+            return answer
+        except Exception as e:
+            logger.warning("[Aggregate] task %r LLM failed: %s, fallback", label, e)
+            return self._fallback_group(results)
+
+    def _merge_groups(self, group_answers: dict[str, str], original_query: str = "") -> str:
+        """Concatenate multiple task answers with section headers. No LLM call."""
+        labels = list(group_answers.keys())
+        if len(labels) == 1:
+            return group_answers[labels[0]]
+
+        parts = []
+        for label, answer in group_answers.items():
+            header = label if label else "Results"
+            parts.append(f"## {header}\n\n{answer}")
+
+        merged = "\n\n---\n\n".join(parts)
+        logger.info("[Aggregate] merge %d groups → %d chars (concat, no LLM)", len(group_answers), len(merged))
+        return merged
+
+    # ── fallbacks ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _fallback_group(results: list[SubQueryResult]) -> str:
+        parts = []
+        for i, r in enumerate(results):
+            answer = r.answer or "(no answer)"
+            status = "✓" if not r.gap_analysis else "⚠"
+            parts.append(f"**Query {i + 1}** [{status}]: {r.query}\n{answer}")
+        return "\n\n".join(parts) if parts else "No information found"

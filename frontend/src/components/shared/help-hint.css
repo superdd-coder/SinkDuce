@@ -1,0 +1,26 @@
+.pm-help-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  margin-inline: 3px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--pm-muted);
+  vertical-align: middle;
+  cursor: help;
+  transition: color 160ms, background 160ms;
+}
+.pm-help-hint:hover,
+.pm-help-hint:focus-visible,
+.pm-help-hint[data-popup-open] {
+  color: var(--pm-green);
+  background: var(--pm-green-wash);
+}
+.pm-help-hint:focus-visible {
+  outline: 2px solid var(--pm-green);
+  outline-offset: 2px;
+}
