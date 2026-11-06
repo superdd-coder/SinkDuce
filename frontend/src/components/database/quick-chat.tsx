@@ -125,8 +125,7 @@ interface QuickChatProps {
    */
   railKey?: string
   /**
-   * Show the QC FAB. False on Config (Settings) — icon stays parked
-   * elsewhere; do not use fixed fallback that drifts.
+   * Show the launcher and hint only on an active project content tab.
    */
   fabVisible?: boolean
 }
@@ -181,6 +180,7 @@ export function QuickChat({
   const [hintVisible, setHintVisible] = useState(false)
   const [hintExiting, setHintExiting] = useState(false)
   const [hintMessage, setHintMessage] = useState("")
+  const hintSlotRef = useRef<HTMLDivElement>(null)
   const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /**
    * Float host = active panel's right rail (cover To-do / Messages).
@@ -190,15 +190,39 @@ export function QuickChat({
   /** One frame at translateX(100%) after the host attaches so the slide-in can run. */
   const [railDocked, setRailDocked] = useState(false)
   /**
-   * FAB host = stage-level park — same coordinates on Overview / Files / Timeline.
+   * FAB host = project header park, shared by all content tabs.
    * Never use fixed viewport fallback for the diamond (Timeline/Config looked wrong).
    */
   const [fabHost, setFabHost] = useState<HTMLElement | null>(null)
+  const [hintPortalHost, setHintPortalHost] = useState<HTMLElement | null>(null)
+
+  // Keep the hint above the same right edge, outside the stage's clipping box.
+  useLayoutEffect(() => {
+    if (!fabHost || open || !fabVisible || !(hintVisible || hintExiting)) return
+    const positionHint = () => {
+      const slot = hintSlotRef.current
+      if (!slot) return
+      const anchor = fabHost.getBoundingClientRect()
+      slot.style.top = `${anchor.top + (anchor.height - 40) / 2 - 10}px`
+      slot.style.right = `${window.innerWidth - anchor.right}px`
+    }
+    positionHint()
+    const observer = new ResizeObserver(positionHint)
+    observer.observe(fabHost)
+    window.addEventListener("resize", positionHint)
+    window.addEventListener("scroll", positionHint, true)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener("resize", positionHint)
+      window.removeEventListener("scroll", positionHint, true)
+    }
+  }, [fabHost, open, fabVisible, hintVisible, hintExiting, railKey])
 
   useLayoutEffect(() => {
     const findFab = () => {
       const el = document.querySelector(FAB_ANCHOR_SEL) as HTMLElement | null
       setFabHost(el)
+      setHintPortalHost(el?.ownerDocument.body ?? null)
     }
     findFab()
     const t = window.setTimeout(findFab, 0)
@@ -454,7 +478,9 @@ export function QuickChat({
 
   // ── Hint bubble cycle ──
   useEffect(() => {
-    if (open) return
+    setHintVisible(false)
+    setHintExiting(false)
+    if (open || !fabVisible) return
     const scheduleHint = () => {
       const key = HINT_KEYS[Math.floor(Math.random() * HINT_KEYS.length)]
       setHintMessage(t(key))
@@ -477,7 +503,7 @@ export function QuickChat({
     return () => {
       if (hintTimerRef.current) clearTimeout(hintTimerRef.current)
     }
-  }, [collectionId, open, t])
+  }, [collectionId, open, railKey, t, fabVisible])
 
   // ── Send ──
 
@@ -989,45 +1015,18 @@ export function QuickChat({
 
   const fabBlock = (
     <div className="pm-qc-fab pm-qc-fab--park">
-      {/*
-        Row: bubble LEFT of diamond, nudged slightly UP (左边偏上).
-        Shared bob on the group.
-      */}
       <div
         className="qc-float-group flex flex-row items-center justify-end gap-2.5"
         style={{ position: "relative" }}
       >
-        {(hintVisible || hintExiting) && !open && (
-          <div
-            className={cn(
-              "inline-flex h-8 items-center rounded-full px-2.5",
-              "pointer-events-none whitespace-nowrap shrink-0",
-              "border border-white/55 text-[color:var(--ze-green,#1A5E3D)]",
-              "shadow-sm backdrop-blur-[10px]",
-              hintExiting
-                ? "animate-[hint-retract_0.4s_cubic-bezier(0.4,0,0.2,1)_both]"
-                : "animate-[hint-emerge_0.55s_cubic-bezier(0.34,1.56,0.64,1)_both]"
-            )}
-            style={{
-              background: "color-mix(in srgb, #fff 78%, transparent)",
-              lineHeight: 1,
-              boxSizing: "border-box",
-              /* 左边偏上：relative top 不与 emerge 动画的 transform 冲突 */
-              position: "relative",
-              top: -10,
-            }}
-          >
-            <span className="block text-[11px] font-medium leading-none whitespace-nowrap">
-              {hintMessage}
-            </span>
-          </div>
-        )}
         <button
           type="button"
           onClick={open ? onClose : onOpen}
           className="relative shrink-0 transition-all ease-out quick-chat-btn"
           style={{ color: "var(--ze-green, #1A5E3D)" }}
           aria-label={open ? t("meeting.closeQuickQa") : t("library.openQuickQa")}
+          title={open ? t("meeting.closeQuickQa") : t("library.openQuickQa")}
+          aria-expanded={open}
         >
           <LogoMark className="qc-logo" flowing={open} />
         </button>
@@ -1040,7 +1039,7 @@ export function QuickChat({
       {/*
         Float: portal into the active tab's right rail (Overview / Files / Timeline).
         Fallback: fixed column only when this tab has no rail.
-        FAB: always stage park — same top-right for all content tabs.
+        FAB: stable header park across all content tabs.
       */}
       {railHost
         ? createPortal(floatPanel, railHost)
@@ -1049,6 +1048,31 @@ export function QuickChat({
           : null}
       {fabVisible &&
         (fabHost ? createPortal(fabBlock, fabHost) : null)}
+      {fabVisible && fabHost && hintPortalHost && !open && (hintVisible || hintExiting) && createPortal(
+        <div ref={hintSlotRef} className="pm-qc-launcher-hint-slot" aria-hidden="true">
+          <div
+            className={cn(
+              "pm-qc-launcher-hint inline-flex h-8 items-center rounded-full px-2.5",
+              "pointer-events-none whitespace-nowrap shrink-0",
+              "border border-white/55 text-[color:var(--ze-green,#1A5E3D)]",
+              "shadow-sm backdrop-blur-[10px]",
+              hintExiting
+                ? "animate-[hint-retract_0.4s_cubic-bezier(0.4,0,0.2,1)_both]"
+                : "animate-[hint-emerge_0.55s_cubic-bezier(0.34,1.56,0.64,1)_both]"
+            )}
+            style={{
+              background: "color-mix(in srgb, #fff 78%, transparent)",
+              lineHeight: 1,
+              boxSizing: "border-box",
+            }}
+          >
+            <span className="block text-[11px] font-medium leading-none whitespace-nowrap">
+              {hintMessage}
+            </span>
+          </div>
+        </div>,
+        hintPortalHost,
+      )}
     </>
   )
 }

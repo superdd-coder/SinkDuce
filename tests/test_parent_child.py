@@ -506,7 +506,8 @@ def test_query_parent_child_returns_parent_text():
         "text": "full parent paragraph text with much more context",
         "chunk_type": "parent",
     }
-    mock_client.retrieve.return_value = [parent_point]
+    parent_point.id = "parent-1"
+    mock_client.scroll.return_value = ([parent_point], None)
 
     # Search for child chunks with filter
     from qdrant_client.models import Filter, FieldCondition, MatchValue

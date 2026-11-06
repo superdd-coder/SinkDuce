@@ -5751,14 +5751,63 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   min-width: 0;
   flex-wrap: wrap;
 }
-/* Collection: All Files sits immediately beside the pill tray (not far-right) */
+/* Collection file tools precede the shared tab tray. */
 .pm-collection-tabs-actions {
   display: flex;
   align-items: center;
   gap: 4px;
   min-width: 0;
-  margin-left: 2px;
   flex-shrink: 0;
+}
+.pm-collection-header-rail {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 0 0 var(--pm-collection-rail-w);
+  width: var(--pm-collection-rail-w);
+  min-width: 0;
+}
+.pm-collection-tabs-shell {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.pm-collection-tabs-shell .pm-collection-tabs-bar [data-slot="tabs-list"] {
+  display: flex !important;
+  width: 100% !important;
+}
+.pm-collection-tabs-shell .pm-vtab {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-inline: 8px !important;
+}
+.pm-collection-header {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  position: relative;
+  z-index: 30;
+}
+.pm-collection-name {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.pm-collection-header-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+  gap: 14px;
+  min-width: 0;
+}
+@media (max-width: 960px) {
+  .pm-collection-header { flex-wrap: wrap; gap: 14px 24px; }
+  .pm-collection-header-tools { margin-left: auto; max-width: 100%; }
+  .pm-collection-header-tools .pm-collection-tabs-bar { flex-wrap: wrap; }
+  .pm-collection-header-tools .pm-collection-tabs-actions { flex-wrap: wrap; flex-shrink: 1; }
+}
+@media (max-width: 540px) {
+  .pm-collection-header-tools { width: 100%; gap: 10px; }
+  .pm-collection-header-tools .pm-collection-header-rail { flex-shrink: 1; max-width: 100%; gap: 10px; }
 }
 .pm-collection-all-files-btn {
   height: 30px !important;
@@ -19440,26 +19489,17 @@ button.pm-files-row-edit {
   width: min(320px, 28vw);
   z-index: 40;
 }
-/*
- * Diamond FAB — above To-do card (top-right of right rail).
- * Hint bubble: left of diamond, slightly elevated (左边偏上) — see quick-chat.tsx.
- */
-/*
- * QC diamond park — stage content top-right (below tabs).
- * Same coordinates on Overview / Files / Timeline so the icon never jumps.
- * Config hides the FAB via fabVisible=false.
- */
+/* Quick Chat launcher occupies the final slot in the shared project header. */
 .pm-qc-fab-park {
-  position: absolute;
-  /* Align with former rail-top diamond (above right rail / content top) */
-  top: -40px;
-  right: 4px;
-  width: 40px;
-  height: 40px;
+  position: relative;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
   z-index: 50;
   pointer-events: none;
   overflow: visible;
 }
+.pm-qc-fab-park[hidden] { display: none; }
 .pm-qc-fab-park > * {
   pointer-events: auto;
 }
@@ -19475,6 +19515,7 @@ button.pm-files-row-edit {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  height: 100%;
   overflow: visible;
 }
 /* Legacy: rail-relative FAB (float still uses rail host) */
@@ -20332,6 +20373,38 @@ button.pm-files-row-edit {
 .qc-float-group {
   position: relative;
   animation: qc-float-bob 3s ease-in-out infinite;
+}
+.pm-qc-fab-park .qc-float-group { animation: none; }
+.pm-qc-launcher-hint-slot {
+  position: fixed;
+  z-index: 70;
+  pointer-events: none;
+  transform: translateY(-100%);
+}
+.pm-qc-fab-park .quick-chat-btn {
+  cursor: pointer;
+  border-radius: 12px;
+  transform: translateY(0) scale(1);
+  transition: transform 220ms var(--pm-ease), filter 220ms var(--pm-ease);
+}
+.pm-qc-fab-park .quick-chat-btn::after { inset: -2px; }
+.pm-qc-fab-park .quick-chat-btn:hover {
+  transform: translateY(-3px) scale(1.08);
+  filter: drop-shadow(0 7px 7px rgba(20, 58, 36, 0.26));
+}
+.pm-qc-fab-park .quick-chat-btn:active {
+  transform: translateY(0) scale(0.96);
+  filter: drop-shadow(0 1px 3px rgba(20, 58, 36, 0.18));
+}
+.pm-qc-fab-park .quick-chat-btn:focus-visible {
+  outline: 2px solid var(--pm-green);
+  outline-offset: 3px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-qc-fab-park .quick-chat-btn { transition: none; }
+  .pm-qc-fab-park .quick-chat-btn:hover,
+  .pm-qc-fab-park .quick-chat-btn:active { transform: none; }
+  .pm-qc-launcher-hint-slot .pm-qc-launcher-hint { animation: none !important; }
 }
 
 /* Emerge from diamond (right) — horizontal; vertical offset via relative top on pill */

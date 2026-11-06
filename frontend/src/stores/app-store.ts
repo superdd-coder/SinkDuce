@@ -162,6 +162,8 @@ export interface CollectionItem {
 import { getCollections, createSession, getSession, deleteSession } from "@/api/client"
 
 interface AppState {
+  qaDrafts: Record<string, string>
+  setQaDraft: (key: string, value: string | null) => void
   reportComments: Record<string, ReportComment[]>
   reportReviewEpoch: Record<string, number>
   clearReportReviewSession: (sid: string) => void
@@ -386,6 +388,13 @@ function _saveActiveToCache() {
 }
 
 export const useAppStore = create<AppState>((set) => ({
+  qaDrafts: {},
+  setQaDraft: (key, value) => set(s => {
+    const qaDrafts = { ...s.qaDrafts }
+    if (value === null) delete qaDrafts[key]
+    else qaDrafts[key] = value
+    return { qaDrafts }
+  }),
   reportComments: {},
   reportReviewEpoch: {},
   clearReportReviewSession: (sid) => set((s) => {

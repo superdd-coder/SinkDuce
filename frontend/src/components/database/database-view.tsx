@@ -12,6 +12,7 @@ import {
 } from "@/lib/collection-perms"
 import { useAppStore } from "@/stores/app-store"
 import { getFiles, deleteDocument, getTasks, getIngestHistory, archiveCollection, unarchiveCollection, type FileListItem } from "@/api/client"
+import { QaWorkspace } from "@/components/qa/qa-workspace"
 import { CollectionList } from "./collection-list"
 import { CreateCollectionDialog } from "./create-collection-dialog"
 import { DeleteCollectionDialog } from "./delete-collection-dialog"
@@ -35,7 +36,7 @@ export function _triggerFilesRefresh() {
 }
 
 /** Top-level database tabs: Info | Files (folders) | Timeline | Config */
-type DbTab = "info" | "files" | "timeline" | "config"
+type DbTab = "info" | "files" | "timeline" | "qa" | "config"
 
 // 界面偏好按来源隔离：每台盒子记住自己的页签/视图习惯（否则会互相覆盖）
 function loadDbUi<T>(key: string, fallback: T): T {
@@ -48,7 +49,7 @@ function saveDbUi(key: string, value: unknown) {
 
 function loadInitialDbTab(): DbTab {
   const t = loadDbUi<string>("dbActiveTab", "info")
-  if (t === "info" || t === "files" || t === "timeline" || t === "config") {
+  if (t === "info" || t === "files" || t === "timeline" || t === "qa" || t === "config") {
     // Migrate legacy: Files tab + Folders/Timeline sub-toggle
     if (t === "files") {
       const mode = loadDbUi<string>("dbViewMode", "folders")
@@ -98,7 +99,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
    * Base UI Tabs auto-resets to the first tab when `value` is undefined /
    * unmatched and fires onValueChange, which would undo open-config.
    */
-  const [contentTab, setContentTab] = useState<"info" | "files" | "timeline">(
+  const [contentTab, setContentTab] = useState<"info" | "files" | "timeline" | "qa">(
     () => {
       const t = loadInitialDbTab()
       return t === "config" ? "info" : t
@@ -151,11 +152,11 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
 
   const handleTabChange = useCallback((tab: string) => {
     const next: DbTab =
-      tab === "info" || tab === "files" || tab === "timeline" || tab === "config"
+      tab === "info" || tab === "files" || tab === "timeline" || tab === "qa" || tab === "config"
         ? tab
         : "info"
     setActiveTab(next)
-    if (next === "info" || next === "files" || next === "timeline") {
+    if (next === "info" || next === "files" || next === "timeline" || next === "qa") {
       setContentTab(next)
     }
     setVisitedTabs((prev) => {
@@ -529,7 +530,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
       <Tabs
         value={contentTab}
         onValueChange={handleTabChange}
-        className="min-w-0 gap-0"
+        className="w-full min-w-0 gap-0"
       >
         <TabsList className="pm-pill-tabs relative shrink-0 items-center isolate">
           <TabsIndicator
@@ -541,6 +542,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
               ["info", t("library.overview")],
               ["files", t("library.files")],
               ["timeline", t("library.timeline")],
+              ["qa", t("qa.title")],
             ] as const
           ).map(([value, label]) => (
             <TabsTrigger
@@ -561,39 +563,39 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
           ))}
         </TabsList>
       </Tabs>
-      {/* All Files — sits beside the pill tray (only on Files tab) */}
-      {activeTab === "files" && (
-        <div className="pm-collection-tabs-actions">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => setIngestOpen(true)}
-            title={t("library.ingestTitle")}
-            className="pm-collection-all-files-btn shrink-0 gap-1.5"
-          >
-            <UploadCloud className="size-3.5" />
-            <span>{t("library.ingestEntry")}</span>
-            {ingestBadge.active > 0 && (
-              <span className="pm-ingest-badge is-active">{ingestBadge.active}</span>
-            )}
-            {ingestBadge.active === 0 && ingestBadge.failed > 0 && (
-              <span className="pm-ingest-badge is-failed">{ingestBadge.failed}</span>
-            )}
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => setClassicFilesOpen(true)}
-            title={t("library.allFiles")}
-            className="pm-collection-all-files-btn shrink-0 gap-1.5"
-          >
-            <List className="size-3.5" />
-            <span>{t("library.allFiles")}</span>
-          </Button>
-        </div>
-      )}
+    </div>
+  )
+
+  const collectionFileActions = activeTab === "files" && (
+    <div className="pm-collection-tabs-actions">
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={() => setIngestOpen(true)}
+        title={t("library.ingestTitle")}
+        className="pm-collection-all-files-btn shrink-0 gap-1.5"
+      >
+        <UploadCloud className="size-3.5" />
+        <span>{t("library.ingestEntry")}</span>
+        {ingestBadge.active > 0 && (
+          <span className="pm-ingest-badge is-active">{ingestBadge.active}</span>
+        )}
+        {ingestBadge.active === 0 && ingestBadge.failed > 0 && (
+          <span className="pm-ingest-badge is-failed">{ingestBadge.failed}</span>
+        )}
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={() => setClassicFilesOpen(true)}
+        title={t("library.allFiles")}
+        className="pm-collection-all-files-btn shrink-0 gap-1.5"
+      >
+        <List className="size-3.5" />
+        <span>{t("library.allFiles")}</span>
+      </Button>
     </div>
   )
 
@@ -624,76 +626,57 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
         {activeCollection ? (
           /* Big soft stage — stable mount (no key=collectionId remount flash) */
           <div className="pm-stage pm-float-surface h-full min-h-0 flex flex-col overflow-hidden">
-            {/* Collection header — title left, Settings ⋮ far right (not in tab bar) */}
+            {/* Stable project header: title, content tabs, settings and Quick Chat. */}
             <header
               className={cn(
-                "pm-collection-chrome shrink-0 min-w-0 flex items-start justify-between gap-3",
+                "pm-collection-chrome pm-collection-header shrink-0 min-w-0",
                 "pm-collection-soft-fade",
                 collectionSoftFaded && "is-faded",
               )}
               style={{ marginBottom: "var(--pm-ov-gap, 14px)" }}
             >
-              <div className="min-w-0">
-                <p className="pm-label mb-0.5">{t("library.collection")}</p>
-                <h1 className="pm-display truncate">{collectionDisplayName}</h1>
-              </div>
-              {canOpenConfig && (
-                <button
-                  type="button"
-                  title={t("library.collectionSettings")}
-                  aria-label={t("library.collectionSettings")}
-                  aria-pressed={activeTab === "config"}
-                  onClick={() => {
-                    // Toggle: open config, or close back to last content tab
-                    if (activeTab === "config") handleTabChange(contentTab)
-                    else handleTabChange("config")
-                  }}
-                  className={cn(
-                    "shrink-0 mt-1 inline-flex h-8 w-8 items-center justify-center rounded-full",
-                    "transition-colors duration-150",
-                    activeTab === "config"
-                      ? "text-[var(--pm-green)] bg-[var(--pm-green-soft)]"
-                      : "text-[var(--pm-muted)] hover:text-[var(--pm-ink)] hover:bg-black/[0.04]"
+              <h1 className="pm-display pm-collection-name truncate">{collectionDisplayName}</h1>
+              <div className="pm-collection-header-tools">
+                {collectionFileActions}
+                <div className="pm-collection-header-rail">
+                  <div className="pm-tabs-shell pm-collection-tabs-shell min-w-0">
+                    {collectionTabs}
+                  </div>
+                  {canOpenConfig && (
+                    <button
+                      type="button"
+                      title={t("library.collectionSettings")}
+                      aria-label={t("library.collectionSettings")}
+                      aria-pressed={activeTab === "config"}
+                      onClick={() => {
+                        // Toggle: open config, or close back to last content tab
+                        if (activeTab === "config") handleTabChange(contentTab)
+                        else handleTabChange("config")
+                      }}
+                      className={cn(
+                        "shrink-0 inline-flex h-8 w-8 items-center justify-center rounded-full",
+                        "transition-colors duration-150",
+                        activeTab === "config"
+                          ? "text-[var(--pm-green)] bg-[var(--pm-green-soft)]"
+                          : "text-[var(--pm-muted)] hover:text-[var(--pm-ink)] hover:bg-black/[0.04]"
+                      )}
+                    >
+                      <MoreVertical className="h-4 w-4" />
+                    </button>
                   )}
-                >
-                  <MoreVertical className="h-4 w-4" />
-                </button>
-              )}
+                  <div className="pm-qc-fab-park" data-pm-qc-fab-anchor hidden={activeTab === "config"} />
+                </div>
+              </div>
             </header>
 
-            {/* overflow-visible: QC fab park sits top: -40px above panel */}
+            {/* Content keeps its own scroll/rail hosts beneath the shared header. */}
             <div className="pm-collection-body flex-1 flex flex-col min-h-0 min-w-0 overflow-visible">
-              {/*
-                Single always-mounted tab bar (Overview | Files | Timeline).
-                Must NOT move between InfoPanel chrome and this shell — remounting
-                kills TabsIndicator slide (new instance, no left/width tween).
-                value={contentTab} so Config open still keeps last pill for slide-back.
-                Soft-fades with title/body on collection switch (same opacity).
-              */}
-              {/*
-                Do NOT add .is-in here — it forces opacity:1 and overrides
-                .pm-collection-soft-fade.is-faded (same specificity, later in CSS).
-              */}
-              <div
-                className={cn(
-                  "pm-tabs-shell pm-collection-tabs-shell shrink-0 min-w-0",
-                  "pm-collection-soft-fade",
-                  collectionSoftFaded && "is-faded",
-                )}
-                style={{ marginBottom: "var(--pm-ov-gap, 14px)" }}
-              >
-                {collectionTabs}
-              </div>
-
               {/*
                 Keep-alive surfaces + sequential fade (out → swap → in).
                 Same motion for Overview / Files / Timeline / Config.
                 Soft-fade on collection switch (title + tab bar + body).
               */}
-              {/*
-                overflow-visible so QC diamond park (top: -40px) is not clipped.
-                transparent — never paint canvas gray over .pm-stage cream
-              */}
+              {/* Transparent content surface; rail card shadows remain visible. */}
               <div
                 className={cn(
                   "relative flex-1 min-h-0 min-w-0 bg-transparent isolate overflow-visible",
@@ -706,6 +689,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
                     ["info", visitedTabs.has("info")] as const,
                     ["files", visitedTabs.has("files")] as const,
                     ["timeline", visitedTabs.has("timeline")] as const,
+                    ["qa", visitedTabs.has("qa")] as const,
                     ["config", visitedTabs.has("config")] as const,
                   ] as const
                 ).map(([tab, visited]) => {
@@ -731,7 +715,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
                          * Overview + Files: overflow visible so rail card shadows paint.
                          * Diamond is parked outside panels (data-pm-qc-fab-anchor).
                          */
-                        tab === "info" || tab === "files" || tab === "timeline"
+                        tab === "info" || tab === "files" || tab === "timeline" || tab === "qa"
                           ? "overflow-visible"
                           : "overflow-hidden",
                         phaseClass,
@@ -771,6 +755,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
                           />
                         </div>
                       )}
+                      {tab === "qa" && <QaWorkspace collectionId={activeCollection} railCovered={quickChatOpen} />}
                       {tab === "config" && (
                         <ScrollArea className="h-full">
                           {/* Soft pad so nested card shadows aren’t clipped */}
@@ -782,16 +767,6 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
                     </div>
                   )
                 })}
-
-                {/*
-                  Stable QC diamond park — same top-right of content for
-                  Overview / Files / Timeline. Config hides the icon (fabVisible).
-                */}
-                <div
-                  className="pm-qc-fab-park"
-                  data-pm-qc-fab-anchor
-                  aria-hidden
-                />
               </div>
             </div>
           </div>
@@ -805,8 +780,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
       </div>
 
       {/*
-        Quick Chat: FAB parks on stage (stable). Float still fills right rail
-        on Overview/Files. Hidden on Config.
+        Quick Chat: launcher stays in the project header, and the panel fills the active rail.
       */}
       {activeCollection && (
         <QuickChat
@@ -824,15 +798,9 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
             setQuickChatOpen(true)
           }}
           onClose={() => setQuickChatOpen(false)}
-          /* Rail float cover — Overview / Files / Timeline all have a right rail */
-          railActive={
-            activeTab === "info" ||
-            activeTab === "files" ||
-            activeTab === "timeline"
-          }
+          railActive={activeTab !== "config"}
           railKey={activeTab}
-          /* Hide diamond on Collection Settings */
-          fabVisible={activeTab !== "config"}
+          fabVisible={active && activeTab !== "config"}
           files={files}
           onSourceClick={(source) => {
             // Open file detail only — do not switch away from Overview (or current tab)

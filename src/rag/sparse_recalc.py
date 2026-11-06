@@ -111,6 +111,7 @@ def run_sparse_recalc(db: QdrantManager, collection: str) -> dict:
                 offset=offset,
                 with_payload=True,
                 with_vectors=False,
+                include_qa_materials=True,
             )
             if not batch:
                 break

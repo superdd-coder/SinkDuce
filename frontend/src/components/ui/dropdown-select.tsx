@@ -22,6 +22,9 @@ export type DropdownSelectOption = {
 }
 
 interface DropdownSelectProps {
+  id?: string
+  "aria-label"?: string
+  "aria-labelledby"?: string
   value: string
   onChange: (value: string) => void
   options: DropdownSelectOption[]
@@ -68,6 +71,9 @@ function optionMatches(opt: DropdownSelectOption, query: string): boolean {
  * While open: type to filter options; ↑↓ navigate; Enter select; Esc clear/close.
  */
 export function DropdownSelect({
+  id,
+  "aria-label": ariaLabel,
+  "aria-labelledby": ariaLabelledBy,
   value,
   onChange,
   options,
@@ -395,6 +401,9 @@ export function DropdownSelect({
     >
       <button
         ref={triggerRef}
+        id={id}
+        aria-label={ariaLabel}
+        aria-labelledby={ariaLabelledBy}
         type="button"
         disabled={disabled}
         aria-haspopup="listbox"

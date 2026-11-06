@@ -67,6 +67,10 @@ _EXACT: dict[str, tuple[str, str]] = {
     "collection.read": (DOMAIN_COLLECTION, "read"),
     "collection.update": (DOMAIN_COLLECTION, "config"),
     "collection.delete": (DOMAIN_COLLECTION, "delete"),
+    "qa.read": (DOMAIN_COLLECTION, "read"),
+    "qa.create": (DOMAIN_COLLECTION, "write"),
+    "qa.update": (DOMAIN_COLLECTION, "write"),
+    "qa.delete": (DOMAIN_COLLECTION, "write"),
     # ── meeting 域（三档：read 纯读 / create 建+管自己的 / manage 管别人的）──
     "meeting.create": (acl_mod.DOMAIN_MEETING, "create"),
     "meeting.read": (acl_mod.DOMAIN_MEETING, "read"),

@@ -1,0 +1,47 @@
+.qa-refinement-dialog [data-slot="dialog-header"] { padding-inline-end: 24px; }
+.qa-refinement-dialog [data-slot="dialog-description"] { max-width: none; overflow-wrap: anywhere; }
+
+.qa-refinement-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--pm-ink) 9%, transparent);
+}
+.qa-refinement-footer > p { flex: 1 1 160px; margin-inline-end: auto; }
+
+.qa-refinement-dialog .qa-history-rows { list-style: none; margin: 0; padding: 2px; }
+.qa-refinement-dialog .qa-history-open { padding-block: 12px; }
+.qa-refinement-dialog .qa-history-row + .qa-history-row { margin-top: 2px; }
+
+.qa-refinement-dialog .qa-option-row { gap: 8px; padding-block: 6px; }
+.qa-refinement-dialog .qa-option-colors { gap: 2px; }
+.qa-refinement-dialog .qa-option-colors button { border-color: transparent; background: transparent; }
+.qa-refinement-dialog .qa-option-colors button:hover { background: var(--pm-green-wash); }
+.qa-refinement-dialog .qa-option-colors button[aria-pressed="true"] { border-color: var(--pm-green); box-shadow: none; }
+
+.qa-refinement-logo, .qa-refinement-toggles { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.qa-refinement-dialog .qa-refinement-template {
+  min-height: 0;
+  margin: 0;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--pm-ink) 9%, transparent);
+  box-shadow: none;
+}
+.qa-refinement-template > figcaption { margin-bottom: 12px; }
+.qa-refinement-template > header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.qa-refinement-dialog .qa-refinement-template > p { margin-block: 8px 12px; }
+.qa-refinement-template .qa-template-columns > span { min-width: 0; text-overflow: ellipsis; overflow: hidden; }
+.qa-refinement-template .qa-template-columns > span:nth-child(-n + 2) { flex-shrink: 0; max-width: 50%; }
+.qa-refinement-dialog .qa-refinement-template .qa-paper-lines { height: 36px; }
+
+.qa-refinement-filename { overflow-wrap: anywhere; }
+.qa-refinement-dialog .qa-refinement-comparison { margin: 0; gap: 16px; }
+.qa-refinement-comparison dt, .qa-refinement-replies dt { margin-bottom: 6px; color: var(--pm-muted); font: var(--type-meta); }
+.qa-refinement-comparison dd, .qa-refinement-replies dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: var(--type-reading-compact); }
+.qa-refinement-replies { display: grid; gap: 12px; margin: 0; padding-top: 12px; border-top: 1px solid color-mix(in srgb, var(--pm-ink) 9%, transparent); }
+.qa-refinement-disclosure { color: var(--pm-muted); font: var(--type-meta); }
+.qa-refinement-disclosure > summary { cursor: pointer; }
+.qa-refinement-disclosure[open] > summary { margin-bottom: 8px; }
