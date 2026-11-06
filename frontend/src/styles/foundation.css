@@ -189,15 +189,18 @@
   .sd-navigation:hover { --sd-nav-width: 204px; --sd-label-opacity: 1; --sd-label-visibility: visible; box-shadow: var(--sd-shadow-float); }
 }
 
-/* Apply frosted material only to outer workspace surfaces, not every inner card. */
+/* Stationary workspace panels sit over the canvas, so tint and grain supply
+ * their frosted material without sampling neighboring green controls through
+ * a live backdrop filter. Keep real backdrop blur on floating navigation,
+ * menus and dialogs, where content actually passes behind the surface. */
 .sd-shell :is(.pm-float-surface, .pm-stage, .pm-chat-stage-surface, .pm-meeting-stage-surface, .pm-meeting-group-stage, .pm-shell-view-skeleton) {
   background-color: transparent !important;
   background-image: var(--sd-grain), var(--sd-stage-fill) !important;
   background-size: 128px 128px, 100% 100%;
   border-radius: var(--sd-radius-panel);
   box-shadow: var(--sd-shadow-panel) !important;
-  backdrop-filter: blur(28px) saturate(1.05);
-  -webkit-backdrop-filter: blur(28px) saturate(1.05);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 .sd-shell :is(.pm-shell-collections-surface, .pm-chat-sessions-surface, .pm-meeting-rail-surface) {
   background-color: transparent !important;
@@ -205,8 +208,8 @@
   background-size: 128px 128px, 100% 100%;
   border-radius: var(--sd-radius-panel);
   box-shadow: var(--sd-shadow-panel) !important;
-  backdrop-filter: blur(28px) saturate(1.05);
-  -webkit-backdrop-filter: blur(28px) saturate(1.05);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 /* Shared controls: semantic focus/error outlines stay, decorative strokes go. */
