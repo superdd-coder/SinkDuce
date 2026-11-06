@@ -116,11 +116,11 @@
   --muted: #ffffff0a;
 }
 
-/* A fixed icon rail, a working header, and the existing keep-alive view host. */
+/* A fixed icon rail beside the full-height keep-alive view host. */
 .pm-shell-root.sd-shell {
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr);
-  grid-template-rows: 72px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   column-gap: 16px;
   padding: 16px;
   height: 100dvh;
@@ -129,26 +129,7 @@
   isolation: isolate;
 }
 .sd-shell .pm-shell-body { display: contents; }
-.sd-shell .pm-shell-header {
-  grid-column: 2;
-  grid-row: 1;
-  height: auto;
-  padding: 0 12px;
-  gap: 12px;
-  background: transparent;
-  min-width: 0;
-}
-.sd-shell-title {
-  margin: 0;
-  font: 550 24px/1.3 var(--type-font-ui);
-  letter-spacing: -.6px;
-  color: var(--sd-ink);
-}
-.sd-shell .pm-shell-edition-label { font-size: 10px; letter-spacing: .06em; color: var(--pm-faint); }
-.sd-shell .pm-shell-main { grid-column: 2; grid-row: 2; padding: 8px 10px 10px; background: transparent; }
-.sd-shell .pm-shell-refresh { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border-radius: 50%; background: var(--sd-field); }
-.sd-shell .pm-source-pill { border: 0; background: var(--sd-surface); border-radius: 999px; min-height: 34px; box-shadow: none; }
-.sd-shell .pm-source-pill:hover, .sd-shell .pm-source-pill.is-open { background: var(--sd-surface-raised); }
+.sd-shell .pm-shell-main { grid-column: 2; grid-row: 1; padding: 8px 10px 10px; background: transparent; }
 
 /* The sidebar's slot never grows, so hover cannot shift documents underneath. */
 .sd-nav-slot { position: relative; grid-column: 1; grid-row: 1 / -1; min-height: 0; z-index: 40; }
@@ -189,12 +170,21 @@
   flex-shrink: 0; opacity: var(--sd-label-opacity); visibility: var(--sd-label-visibility);
   transition: opacity 140ms ease, visibility 140ms ease;
 }
-.sd-nav-bottom { margin-top: auto; padding-top: 24px; display: flex; flex-direction: column; gap: 4px; }
+.sd-nav-bottom { margin-top: auto; padding-top: 16px; display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
+.sd-nav-source { min-width: 0; }
+.sd-navigation .pm-source-pill { border: 0; background: var(--sd-field); box-shadow: none; }
+.sd-navigation .pm-source-pill:hover, .sd-navigation .pm-source-pill.is-open { background: var(--sd-surface-raised); color: var(--sd-ink); }
+.sd-source-icon { position: relative; display: flex; flex: 0 0 18px; width: 18px; height: 18px; }
+.sd-source-icon .pm-source-dot { position: absolute; right: -3px; bottom: -2px; width: 6px; height: 6px; }
+.sd-navigation .pm-source-pill-name { flex: 1 1 auto; min-width: 0; max-width: none; text-align: left; font: inherit; }
+.sd-navigation .pm-source-pill-chevron { flex: 0 0 12px; width: 12px; height: 12px; }
+.sd-nav-meta { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; font-size: 11px; line-height: 1.2; }
+.sd-nav-edition { font-size: 9px; font-weight: 550; letter-spacing: .06em; color: var(--pm-faint); }
 .sd-navigation .pm-shell-update-stack { width: 100%; }
 .sd-navigation .pm-shell-version-pill { opacity: 1; transform: none; color: var(--sd-brand); }
-.sd-navigation .pm-shell-version-pill-label { padding: 0; background: transparent; font: inherit; color: inherit; letter-spacing: 0; }
+.sd-navigation .pm-shell-version-pill-label { padding: 0; background: transparent; box-shadow: none; font-size: 11px; color: inherit; letter-spacing: 0; }
 .sd-navigation .pm-shell-update-card { left: 0; border-radius: 20px; background: var(--sd-surface-overlay); box-shadow: var(--sd-shadow-float); }
-.sd-navigation:has(:focus-visible) { --sd-nav-width: 204px; --sd-label-opacity: 1; --sd-label-visibility: visible; box-shadow: var(--sd-shadow-float); }
+.sd-navigation:has(:focus-visible), .sd-navigation:has([data-source-menu-open="true"]) { --sd-nav-width: 204px; --sd-label-opacity: 1; --sd-label-visibility: visible; box-shadow: var(--sd-shadow-float); }
 @media (hover: hover) and (pointer: fine) {
   .sd-navigation:hover { --sd-nav-width: 204px; --sd-label-opacity: 1; --sd-label-visibility: visible; box-shadow: var(--sd-shadow-float); }
 }

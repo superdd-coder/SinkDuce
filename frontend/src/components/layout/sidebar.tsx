@@ -7,6 +7,7 @@ import { EDITION_LABEL } from "#edition/edition-label"
 import { useUpdateCheck } from "@/hooks/use-update-check"
 import { useT } from "@/i18n/use-t"
 import { UpdateDialog } from "./update-dialog"
+import { SidebarUtilities } from "./sidebar-utilities"
 
 /** Float update card fade duration — keep in sync with --pm-update-card-ms in CSS */
 const UPDATE_CARD_MS = 280
@@ -140,6 +141,7 @@ export function Sidebar() {
                 <Icon size={18} strokeWidth={1.65} aria-hidden="true" /><span className="sd-nav-label">{label}</span>
               </button>
             ))}
+            <SidebarUtilities />
             {/* Shared stack so float card + version pill share the same left edge */}
             <div className="pm-shell-update-stack">
               {cardMounted && update && (
@@ -200,12 +202,19 @@ export function Sidebar() {
                   aria-label={t("shell.updateAvailableAria", { version: currentVersion })}
                 >
                   <ArrowUpCircle size={18} strokeWidth={1.65} aria-hidden="true" />
-                  <span className="pm-shell-version-pill-label">
-                    v{currentVersion}
+                  <span className="pm-shell-version-pill-label sd-nav-meta">
+                    <span className="sd-nav-edition">{EDITION_LABEL}</span>
+                    <span>v{currentVersion}</span>
                   </span>
                 </button>
               ) : (
-                <div className="sd-nav-version" title={`SinkDuce · ${EDITION_LABEL} · v${currentVersion}`} aria-label={`SinkDuce ${EDITION_LABEL} v${currentVersion}`}><Info size={18} strokeWidth={1.65} aria-hidden="true" /><span className="sd-nav-label">v{currentVersion}</span></div>
+                <div className="sd-nav-version" title={`SinkDuce · ${EDITION_LABEL} · v${currentVersion}`} aria-label={`SinkDuce ${EDITION_LABEL} v${currentVersion}`}>
+                  <Info size={18} strokeWidth={1.65} aria-hidden="true" />
+                  <span className="sd-nav-label sd-nav-meta">
+                    <span className="sd-nav-edition">{EDITION_LABEL}</span>
+                    <span>v{currentVersion}</span>
+                  </span>
+                </div>
               )}
             </div>
           </div>

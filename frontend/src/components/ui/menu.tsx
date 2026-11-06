@@ -236,6 +236,8 @@ function SoftMenu({
         ? new ResizeObserver(() => place())
         : null
     if (menuEl && ro) ro.observe(menuEl)
+    // Sidebar anchors resize while the icon rail expands; keep its flyout attached.
+    if (anchorRef.current && ro) ro.observe(anchorRef.current)
     window.addEventListener("scroll", place, true)
     window.addEventListener("resize", place)
     return () => {

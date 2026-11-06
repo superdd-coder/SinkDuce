@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, memo, useRef, Profiler, type CSSProperties } from "react"
 import { useShallow } from "zustand/react/shallow"
 import { useAppStore, type SidebarView } from "@/stores/app-store"
-import { Header } from "./header"
 import { cn } from "@/lib/utils"
 import { Sidebar } from "./sidebar"
 import { LogViewer } from "./log-viewer"
@@ -239,7 +238,6 @@ export function AppLayout() {
 
   return (
     <div className="pm-shell-root sd-shell h-screen">
-      <Header />
       <div className="pm-shell-body">
         <Sidebar />
         {developerMode && <PerfHud />}
