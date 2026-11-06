@@ -238,13 +238,13 @@ export function AppLayout() {
   )
 
   return (
-    <div className="pm-shell-root h-screen flex flex-col">
+    <div className="pm-shell-root sd-shell h-screen">
       <Header />
-      <div className="flex flex-1 overflow-hidden min-h-0">
+      <div className="pm-shell-body">
         <Sidebar />
         {developerMode && <PerfHud />}
         {/*
-          Sage canvas behind float cards; padding = soft-shadow bleed.
+          Workspace keeps the shared card shadow gutter.
         */}
         <main
           className={cn(

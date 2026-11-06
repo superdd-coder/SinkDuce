@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { useShallow } from "zustand/react/shallow"
 import { Button } from "@/components/ui/button"
-import { Terminal } from "lucide-react"
+import { RotateCw, Terminal } from "lucide-react"
 import { useAppStore } from "@/stores/app-store"
 import { getLocalHealth } from "@/api/client"
 import { useT } from "@/i18n/use-t"
@@ -10,11 +10,12 @@ import { SourcePill } from "./source-pill"
 
 export function Header() {
   const t = useT()
-  const { toggleLogPanel, developerMode } =
+  const { toggleLogPanel, developerMode, sidebarView } =
     useAppStore(
       useShallow((s) => ({
         toggleLogPanel: s.toggleLogPanel,
         developerMode: s.developerMode,
+        sidebarView: s.sidebarView,
       }))
     )
   const [desktop, setDesktop] = useState(false)
@@ -37,16 +38,7 @@ export function Header() {
 
   return (
     <header className="pm-shell-header flex items-center h-[48px] shrink-0 px-5 gap-4">
-      <div className="pm-shell-brand-lockup shrink-0">
-        {/* Keep product wordmark — SINK + italic green DUCE */}
-        <h1 className="pm-shell-brand">
-          SINK
-          <em className="pm-shell-brand-em">DUCE</em>
-        </h1>
-        <span className="pm-shell-edition-label">{EDITION_LABEL}</span>
-      </div>
-
-      <span className="pm-shell-tagline hidden sm:inline">Spark. Sink. Educe.</span>
+      <h1 className="sd-shell-title">{t({ chat: "nav.chat", database: "nav.library", meeting: "nav.meeting", recall: "nav.recall", llm_provider: "nav.settings" }[sidebarView])}</h1>
 
       <div className="flex-1" />
 
@@ -57,6 +49,7 @@ export function Header() {
           onClick={toggleLogPanel}
           className="shrink-0 h-7 w-7 text-[var(--pm-muted)] hover:text-[var(--pm-green)] hover:bg-[var(--pm-green-soft)]"
           title={t("shell.toggleLogs")}
+          aria-label={t("shell.toggleLogs")}
         >
           <Terminal className="h-3.5 w-3.5" />
         </Button>
@@ -66,13 +59,15 @@ export function Header() {
         <button
           type="button"
           className="pm-shell-refresh"
+          aria-label={t("shell.reload")}
           title={t("shell.reload")}
           onClick={() => window.location.reload()}
         >
-          {t("common.refresh")}
+          <RotateCw size={16} aria-hidden="true" />
         </button>
       )}
 
+      <span className="pm-shell-edition-label">{EDITION_LABEL}</span>
       <SourcePill />
     </header>
   )
