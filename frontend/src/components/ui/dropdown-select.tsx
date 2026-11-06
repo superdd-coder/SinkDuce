@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react"
 import { createPortal } from "react-dom"
-import { ChevronDown } from "lucide-react"
+import { Check, ChevronDown } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 export type DropdownSelectOption = {
@@ -373,10 +373,6 @@ export function DropdownSelect({
                   hi && "is-highlight"
                 )}
               >
-                <span
-                  className={cn("pm-select-dot shrink-0", on && "is-on")}
-                  aria-hidden
-                />
                 <span className="pm-select-opt-label min-w-0 truncate">
                   {opt.label}
                 </span>
@@ -387,6 +383,7 @@ export function DropdownSelect({
                     aria-label="Has test cases"
                   />
                 ) : null}
+                <Check className={cn("pm-select-check", on && "is-on")} aria-hidden />
               </button>
             )
           })

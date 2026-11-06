@@ -5849,8 +5849,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   color: var(--pm-muted) !important;
   height: auto !important;
   min-height: 0 !important;
-  /* Tab hover = text color only (no wash / lift) */
-  transition: color 180ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) !important;
+  transition: color 180ms var(--pm-ease), background-color 180ms var(--pm-ease) !important;
 }
 .pm-tabs [role="tab"]::after,
 .pm-tabs [role="tab"][data-active]::after,
@@ -5872,11 +5871,11 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 .pm-tabs [role="tab"]:not([aria-selected="true"]):not([data-active]):not([data-state="active"]) {
   color: var(--pm-muted) !important;
 }
-/* Hover: text green only — no background wash */
+/* Hover is neutral; emerald consistently means selected. */
 .pm-tabs [role="tab"]:not([aria-selected="true"]):not([data-active]):not([data-state="active"]):hover,
-.pm-vtab:not(.is-on):hover {
-  color: var(--pm-green) !important;
-  background: transparent !important;
+.pm-vtab:not(.is-on):not([data-active]):not([aria-selected="true"]):hover {
+  color: var(--sd-ink) !important;
+  background: var(--sd-hover) !important;
 }
 /* Sliding pill indicator (Base UI sets --active-tab-*) */
 .pm-tabs [data-slot="tabs-indicator"],
@@ -10278,22 +10277,31 @@ body.pm-dnd-active .pm-shell-header::after {
     background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
     color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
-.pm-menu-item:hover:not(:disabled) {
-  background: var(--pm-green-wash);
-  color: var(--pm-ink);
+.pm-menu-item:where(:hover, [data-highlighted]):not(:disabled):not([data-disabled]) {
+  background: var(--sd-hover);
+  color: var(--sd-ink);
+  outline: none;
 }
-.pm-menu-item:disabled {
+.pm-menu-item:disabled, .pm-menu-item[data-disabled] {
   opacity: 0.45;
   cursor: not-allowed;
 }
-.pm-menu-item.is-on {
-  background: var(--pm-green-soft);
-  color: var(--pm-green);
+.pm-menu-item.is-on, .pm-menu-item[aria-checked="true"] {
+  background: var(--sd-selected);
+  color: var(--sd-selected-ink);
+}
+.pm-menu-item:is(.is-on, [aria-checked="true"]):is(:hover, [data-highlighted]):not(:disabled) {
+  background: var(--sd-selected-hover);
+  color: var(--sd-selected-ink);
+}
+.pm-menu-item:focus-visible {
+  outline: 2px solid var(--sd-focus);
+  outline-offset: -2px;
 }
 .pm-menu-item.is-danger {
   color: var(--pm-danger);
 }
-.pm-menu-item.is-danger:hover:not(:disabled) {
+.pm-menu-item.is-danger:is(:hover, [data-highlighted]):not(:disabled) {
   background: color-mix(in srgb, var(--pm-danger) 8%, transparent);
   color: var(--pm-danger);
 }
@@ -13425,12 +13433,12 @@ html:lang(zh) .pm-settings-card-desc {
   box-sizing: border-box;
   font: var(--type-ui);
   color: var(--pm-text);
-  background: #ffffff;
+  background: var(--sd-field);
   border: none;
   border-radius: 999px;
   outline: none;
   cursor: pointer;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-ink) 7%, transparent);
+  box-shadow: none;
   transition:
     color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
     box-shadow 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
@@ -13462,29 +13470,19 @@ html:lang(zh) .pm-settings-card-desc {
   height: auto;
   padding: 2px 8px;
   font: var(--type-ui);
-  color: var(--pm-green, #1a5e3d);
-  background: var(--pm-green-wash, rgba(26, 94, 61, 0.06));
+  color: var(--sd-text);
+  background: var(--sd-field);
   box-shadow: none;
   max-width: 100%;
 }
-.pm-select-trigger:hover:not(.is-disabled):not(.pm-select-trigger--tag) {
-  background: color-mix(in srgb, var(--pm-ink) 2%, #ffffff);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-ink) 11%, transparent);
+.pm-select-trigger:hover:not(.is-disabled),
+.pm-select-trigger.is-open {
+  background: var(--sd-hover);
+  color: var(--sd-ink);
 }
-.pm-select-trigger--tag:hover:not(.is-disabled) {
-  background: color-mix(in srgb, var(--pm-green) 11%, #ffffff);
-}
-.pm-select-trigger.is-open,
 .pm-select-trigger:focus-visible {
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--pm-green) 35%, transparent),
-    0 0 0 3px var(--pm-green-wash);
-}
-.pm-select-trigger--tag.is-open,
-.pm-select-trigger--tag:focus-visible {
-  background: color-mix(in srgb, var(--pm-green) 12%, #ffffff);
-  /* Keep pill quiet — same language as static tag, soft wash only */
-  box-shadow: none;
+  outline: 2px solid var(--sd-focus);
+  outline-offset: 2px;
 }
 .pm-select-trigger.is-disabled {
   opacity: 0.55;
@@ -13545,13 +13543,14 @@ html:lang(zh) .pm-settings-card-desc {
   width: 100%;
   align-items: center;
   gap: 8px;
-  padding: 7px 10px;
+  min-height: 34px;
+  padding: 8px 11px;
   text-align: left;
   font: var(--type-ui);
   color: var(--pm-text);
   background: transparent;
   border: none;
-  border-radius: 999px;
+  border-radius: 12px;
   cursor: pointer;
   transition:
     background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
@@ -13582,16 +13581,16 @@ html:lang(zh) .pm-settings-card-desc {
 }
 .pm-select-opt:hover,
 .pm-select-opt.is-highlight {
-  background: var(--pm-green-wash);
-  color: var(--pm-ink);
+  background: var(--sd-hover);
+  color: var(--sd-ink);
 }
 .pm-select-opt.is-on {
-  background: color-mix(in srgb, var(--pm-green) 12%, #ffffff);
-  color: var(--pm-green);
+  background: var(--sd-selected);
+  color: var(--sd-selected-ink);
   font-weight: var(--type-weight-medium);
 }
-.pm-select-opt.is-on.is-highlight {
-  background: color-mix(in srgb, var(--pm-green) 18%, #ffffff);
+.pm-select-opt.is-on:is(.is-highlight, :hover) {
+  background: var(--sd-selected-hover);
 }
 .pm-select-opt.is-empty {
   cursor: default;
@@ -13601,20 +13600,14 @@ html:lang(zh) .pm-settings-card-desc {
 .pm-select-opt.is-empty:hover {
   background: transparent;
 }
-.pm-select-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  border: none;
-  background: color-mix(in srgb, var(--pm-ink) 12%, transparent);
-  transform: none;
-  transition: background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+.pm-select-check {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--sd-selected-ink);
+  opacity: 0;
 }
-.pm-select-dot.is-on {
-  background: var(--pm-green);
-  border-color: var(--pm-green);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pm-green) 14%, transparent);
-}
+.pm-select-check.is-on { opacity: 1; }
 
 /*
  * Premium DatePicker — compact soft float calendar (replaces native type=date).
@@ -14017,7 +14010,7 @@ html:lang(zh) .pm-settings-card-desc {
   width: 28px !important;
   padding: 0 !important;
   border: none !important;
-  border-radius: var(--pm-r-sm) !important;
+  border-radius: 999px !important;
   color: var(--pm-muted) !important;
   background: transparent !important;
   cursor: pointer;
@@ -14026,7 +14019,7 @@ html:lang(zh) .pm-settings-card-desc {
     color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
 .pm-ws-icon-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--pm-ink) 6%, transparent) !important;
+  background: var(--sd-hover) !important;
   color: var(--pm-ink) !important;
 }
 .pm-ws-icon-btn.is-danger:hover:not(:disabled) {
@@ -14512,7 +14505,7 @@ html:lang(zh) .pm-settings-card-desc {
   transition: color 180ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
 .pm-ws-seg-btn:hover {
-  color: var(--pm-muted);
+  color: var(--sd-ink);
 }
 .pm-ws-seg-btn.is-on {
   color: var(--pm-green);
@@ -14740,7 +14733,7 @@ html:lang(zh) .pm-settings-card-desc {
   color: var(--pm-muted) !important;
   background: transparent !important;
   border: none !important;
-  border-radius: var(--pm-r-sm) !important;
+  border-radius: 999px !important;
   cursor: pointer;
   flex-shrink: 0;
   transition:
@@ -14748,11 +14741,11 @@ html:lang(zh) .pm-settings-card-desc {
     color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
 .pm-ws-action:hover:not(:disabled) {
-  background: rgba(18, 20, 16, 0.05) !important;
-  color: var(--pm-green) !important;
+  background: var(--sd-hover) !important;
+  color: var(--sd-ink) !important;
 }
 .pm-ws-action.is-on {
-  background: var(--pm-green-wash) !important;
+  background: var(--sd-selected) !important;
   color: var(--pm-green) !important;
 }
 .pm-ws-action.is-danger:hover:not(:disabled) {
@@ -14764,7 +14757,7 @@ html:lang(zh) .pm-settings-card-desc {
   cursor: not-allowed;
 }
 .pm-ws-icon-btn.is-on {
-  background: var(--pm-green-wash) !important;
+  background: var(--sd-selected) !important;
   color: var(--pm-green) !important;
 }
 .pm-ws-status {
@@ -16061,27 +16054,27 @@ html:lang(zh) .pm-settings-card-desc {
   opacity: 0.5;
   cursor: not-allowed;
 }
-/* Update — soft primary (green wash) */
+/* Update uses the same solid primary as other main actions. */
 .pm-ws-foot-btn--pri {
-  color: var(--pm-green) !important;
-  background: var(--pm-green-soft, rgba(26, 94, 61, 0.1)) !important;
+  color: var(--pm-on) !important;
+  background: var(--sd-brand) !important;
 }
 .pm-ws-foot-btn--pri:hover:not(:disabled) {
-  color: var(--pm-green-deep, #0f4a2d) !important;
-  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 16%, transparent) !important;
+  color: var(--pm-on) !important;
+  background: var(--sd-brand-hover) !important;
 }
 /* Archive — quiet ghost wash */
 .pm-ws-foot-btn--ghost {
   color: var(--pm-muted) !important;
-  background: rgba(18, 20, 16, 0.05) !important;
+  background: var(--sd-field) !important;
 }
 .pm-ws-foot-btn--ghost:hover:not(:disabled) {
   color: var(--pm-ink) !important;
-  background: rgba(18, 20, 16, 0.09) !important;
+  background: var(--sd-hover) !important;
 }
 .pm-ws-foot-btn--ghost.is-on {
-  color: var(--pm-green) !important;
-  background: var(--pm-green-wash) !important;
+  color: var(--sd-ink) !important;
+  background: var(--sd-hover) !important;
 }
 /* Delete — danger wash */
 .pm-ws-foot-btn--danger {
@@ -16519,7 +16512,7 @@ html:lang(zh) .pm-settings-card-desc {
   transition: background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
 .pm-ws-menu-item:hover {
-  background: var(--pm-green-wash);
+  background: var(--sd-hover);
 }
 .pm-ws-menu-item.is-danger:hover {
   background: color-mix(in srgb, var(--pm-danger) 8%, transparent);
@@ -16624,8 +16617,8 @@ button.pm-ws-path-row {
   transition: color 200ms var(--pm-ws-scope-ease);
 }
 .pm-ws-scope-btn:hover:not(.is-on) {
-  color: var(--pm-muted);
-  background: transparent !important;
+  color: var(--sd-ink);
+  background: var(--sd-hover) !important;
 }
 .pm-ws-scope-btn.is-on {
   color: var(--pm-green);
@@ -17102,12 +17095,12 @@ button.pm-ws-path-row {
     background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
     padding 220ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
-.pm-files-tb-act:hover:not(:disabled) {
-  color: var(--pm-ink) !important;
-  background: color-mix(in srgb, var(--pm-ink) 4.5%, transparent) !important;
-}
-.pm-files-tb-act.is-on,
+.pm-files-tb-act:hover:not(:disabled),
 .pm-files-tb-act[data-state="open"] {
+  color: var(--pm-ink) !important;
+  background: var(--sd-hover) !important;
+}
+.pm-files-tb-act.is-on {
   color: var(--pm-green) !important;
   background: var(--pm-green-soft) !important;
 }
@@ -17171,12 +17164,12 @@ button.pm-ws-path-row {
     color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
     background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
-.pm-files-tb-btn:hover:not(:disabled) {
-  color: var(--pm-ink) !important;
-  background: color-mix(in srgb, var(--pm-ink) 4.5%, transparent) !important;
-}
-.pm-files-tb-btn.is-on,
+.pm-files-tb-btn:hover:not(:disabled),
 .pm-files-tb-btn[data-state="open"] {
+  color: var(--pm-ink) !important;
+  background: var(--sd-hover) !important;
+}
+.pm-files-tb-btn.is-on {
   color: var(--pm-green) !important;
   background: var(--pm-green-soft) !important;
 }
@@ -17218,14 +17211,14 @@ button.pm-ws-path-row {
 }
 .pm-files-tb-icon:hover:not(:disabled) {
   color: var(--pm-ink) !important;
-  background: color-mix(in srgb, var(--pm-ink) 5%, transparent) !important;
+  background: var(--sd-hover) !important;
 }
 .pm-files-tb-icon.is-on {
   color: var(--pm-green) !important;
   background: var(--pm-green-soft) !important;
 }
 .pm-files-tb-nav .pm-files-tb-icon:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--pm-ink) 5%, transparent) !important;
+  background: var(--sd-hover) !important;
 }
 .pm-files-tb-icon:disabled {
   opacity: 0.32;
@@ -17318,7 +17311,7 @@ button.pm-ws-path-row {
     color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
 .pm-files-menu-item:hover {
-  background: var(--pm-green-wash);
+  background: var(--sd-hover);
   color: var(--pm-ink);
 }
 .pm-files-menu-item.is-danger:hover {
@@ -17371,7 +17364,7 @@ button.pm-ws-path-row {
     color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
 .pm-files-menu-opt:hover {
-  background: var(--pm-green-wash);
+  background: var(--sd-hover);
 }
 .pm-files-menu-opt.is-on {
   background: var(--pm-green-soft);
@@ -18439,11 +18432,11 @@ button.pm-files-row-edit {
 }
 .pm-files-scope-btn:hover {
   color: var(--pm-ink);
-  background: color-mix(in srgb, var(--pm-ink) 3.5%, transparent);
+  background: var(--sd-hover);
 }
 .pm-files-scope-btn.is-on {
   color: var(--pm-green);
-  background: var(--pm-green-wash);
+  background: var(--sd-selected);
 }
 .pm-files-scope-hint {
   padding: 0 10px 8px;

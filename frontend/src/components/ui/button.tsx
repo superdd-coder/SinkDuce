@@ -32,22 +32,22 @@ const buttonVariants = cva(
         default: [
           "bg-[var(--pm-green)] text-[var(--pm-on)] border-transparent",
           "shadow-none",
-          "hover:bg-[var(--pm-green-deep)]",
+          "hover:bg-[var(--sd-brand-hover)]",
         ].join(" "),
         ghost: [
-          "bg-[color-mix(in_srgb,var(--pm-ink)_5%,transparent)] text-[var(--pm-text)]",
+          "bg-transparent text-[var(--sd-muted)]",
           "shadow-none",
-          "hover:bg-[color-mix(in_srgb,var(--pm-ink)_8%,transparent)] hover:text-[var(--pm-ink)]",
+          "hover:bg-[var(--sd-hover)] hover:text-[var(--sd-ink)]",
         ].join(" "),
         outline: [
           "border-transparent bg-[var(--sd-surface-raised)] text-[var(--pm-text)]",
           "shadow-none",
-          "hover:bg-[var(--pm-green-wash)] hover:text-[var(--pm-green)]",
+          "hover:bg-[var(--sd-hover)] hover:text-[var(--sd-ink)]",
         ].join(" "),
         secondary: [
-          "bg-[var(--pm-green-wash)] text-[var(--pm-green)]",
+          "bg-[var(--sd-field)] text-[var(--sd-text)]",
           "shadow-none",
-          "hover:bg-[var(--pm-green-soft)]",
+          "hover:bg-[var(--sd-hover)] hover:text-[var(--sd-ink)]",
         ].join(" "),
         destructive: [
           "bg-[color-mix(in_srgb,var(--pm-danger)_10%,transparent)] text-[var(--pm-danger)]",

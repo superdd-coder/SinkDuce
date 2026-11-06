@@ -19,7 +19,7 @@
 .sd-project-rail .pm-shell-col-row { min-height: 48px; padding: 11px 10px; gap: 10px; margin-bottom: 5px; border-radius: 17px; }
 .sd-project-folder { flex-shrink: 0; color: var(--sd-muted); }
 .sd-project-rail .pm-shell-col-name { font-size: 12.5px; }
-.sd-project-rail .pm-shell-col-indicator { border-radius: 17px; background: color-mix(in srgb, var(--sd-brand) 9%, white); box-shadow: 0 3px 8px #17281c06; }
+.sd-project-rail .pm-shell-col-indicator { border-radius: 17px; background: var(--sd-selected); box-shadow: 0 3px 8px #17281c06; }
 .sd-project-rail .pm-shell-col-row.is-active .sd-project-folder { color: var(--sd-brand); }
 .sd-project-more { display: grid; place-items: center; flex: 0 0 24px; height: 26px; margin-right: -4px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--sd-muted); opacity: 0; cursor: pointer; }
 .pm-shell-col-row:is(:hover,:focus-within) .sd-project-more, .sd-project-more[data-popup-open] { opacity: 1; }
@@ -28,7 +28,9 @@
 .sd-project-menu { min-width: 170px; padding: 6px; border-radius: 18px; background: var(--sd-surface-overlay); box-shadow: var(--sd-shadow-float); outline: none; }
 .sd-project-menu, .sd-folder-popover { backdrop-filter: blur(20px) saturate(1.05); -webkit-backdrop-filter: blur(20px) saturate(1.05); }
 .sd-project-menu .pm-shell-col-action { display: flex; width: 100%; height: 36px; gap: 10px; justify-content: flex-start; border-radius: 12px; padding: 0 12px; font-size: 12px; color: var(--sd-text); }
+.sd-project-menu .pm-shell-col-action:is(:hover, [data-highlighted]) { background: var(--sd-hover); color: var(--sd-ink); outline: none; }
 .sd-project-menu .pm-shell-col-action--danger { color: var(--pm-danger); }
+.sd-project-menu .pm-shell-col-action--danger:is(:hover, [data-highlighted]) { background: color-mix(in srgb, var(--pm-danger) 8%, transparent); color: var(--pm-danger); }
 
 .sd-files { min-width: 0; --pm-files-rail-w: clamp(250px, 27cqw, 340px); }
 .sd-files .pm-files-browser { background: #ffffff99; box-shadow: none; container-type: inline-size; container-name: file-browser; }
@@ -50,19 +52,20 @@
 .sd-files .pm-files-tb-act, .sd-files .pm-files-tb-icon { width: 34px !important; height: 34px !important; padding: 0 !important; gap: 0 !important; justify-content: center !important; border-radius: 50% !important; }
 .sd-files .pm-files-tb-act .pm-tb-act-label, .sd-files .pm-files-tb-act .pm-tb-act-chevron { display: none !important; }
 .sd-files .pm-files-tb-act:has(.lucide-upload) { background: var(--sd-brand) !important; color: var(--pm-on) !important; }
-.sd-files .pm-files-tb-btn { height: 30px !important; border-radius: 999px; letter-spacing: 0 !important; text-transform: none !important; background: var(--sd-field) !important; }
+.sd-files .pm-files-tb-act:has(.lucide-upload):hover:not(:disabled) { background: var(--sd-brand-hover) !important; }
+.sd-files .pm-files-tb-btn { height: 30px !important; border-radius: 999px; letter-spacing: 0 !important; text-transform: none !important; }
 .sd-files .pm-files-tb-label { font-size: 11px; letter-spacing: 0; text-transform: none; }
 .sd-files-view-tools { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .sd-files .pm-files-view-toggle { padding: 3px; border-radius: 999px; background: var(--sd-field); }
 .sd-files .pm-files-view-toggle .pm-files-tb-icon { width: 28px !important; height: 28px !important; }
-.sd-files .pm-files-view-toggle .is-on { background: var(--sd-surface-raised) !important; box-shadow: var(--sd-shadow-control) !important; }
+.sd-files .pm-files-view-toggle .is-on { background: var(--sd-selected) !important; box-shadow: none !important; }
 .sd-files .pm-files-msg-reopen { height: 32px; border-radius: 999px; }
 .sd-files .pm-files-list { padding: 0 12px 12px; gap: 3px; }
 .sd-files-list-heading { display: grid; grid-template-columns: minmax(0,1fr) 64px 100px 52px; align-items: center; gap: 8px; min-height: 34px; padding: 0 12px 0 44px; color: var(--sd-muted); font-size: 10px; position: sticky; top: 0; z-index: 5; background: #f6f6f6f5; border-radius: 12px; }
 .sd-files-list-heading>span:nth-child(2), .sd-files-list-heading>span:nth-child(3) { text-align: right; }
 .sd-files .pm-files-row { min-height: 58px; border-radius: 14px; gap: 0; contain-intrinsic-size: auto 58px; }
 .sd-files .pm-files-row-main { min-height: 58px; padding: 8px 10px; gap: 10px; border-radius: 14px; }
-.sd-files .pm-files-row.is-selected { background: color-mix(in srgb, var(--sd-brand) 9%, white); }
+.sd-files .pm-files-row.is-selected { background: var(--sd-selected); }
 .sd-files .pm-files-row.is-selected .pm-files-row-main { background: transparent; box-shadow: none; }
 .sd-files .pm-files-row-icon { width: 24px; height: 28px; }
 .sd-files .pm-files-row-name { color: var(--sd-text); font-size: 13px; font-weight: 450; }
@@ -72,7 +75,7 @@
 .sd-files .pm-files-row-meta { width: 100px; color: var(--sd-muted); font-size: 10px; }
 .sd-files .pm-files-row:is(:focus-within,:hover) .pm-files-row-edit { opacity: 1; }
 .sd-files .pm-files-row-edit, .sd-folder-open { display: grid; place-items: center; width: 26px; height: 30px; padding: 0; border-radius: 50%; flex-shrink: 0; border: 0; color: var(--sd-muted); background: transparent; cursor: pointer; }
-.sd-folder-open:hover { background: var(--sd-hover); color: var(--sd-brand); }
+.sd-folder-open:hover { background: var(--sd-hover); color: var(--sd-ink); }
 .sd-file-choice { display: grid; place-items: center; width: 15px; height: 15px; border-radius: 5px; border: 1px solid #20202030; flex-shrink: 0; }
 .sd-file-choice.is-checked { border-color: var(--sd-brand); background: var(--sd-brand); color: var(--pm-on); }
 .sd-files .pm-files-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(154px,1fr)); gap: 10px; padding: 4px 18px 18px; }
@@ -82,13 +85,13 @@
 .sd-files .pm-files-item-name { color: var(--sd-text); text-align: left; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 12px; line-height: 1.6; font-weight: 450; min-height: 38px; overflow-wrap: anywhere; }
 .sd-files .pm-files-item-meta { font-size: 10px; letter-spacing: 0; margin-top: auto; }
 .sd-files .pm-files-item-badge { display: none; }
-.sd-files .pm-files-item.is-selected { background: color-mix(in srgb, var(--sd-brand) 10%, white); box-shadow: 0 5px 14px #174c3912; }
+.sd-files .pm-files-item.is-selected { background: var(--sd-selected); box-shadow: 0 5px 14px #174c3912; }
 .sd-files .pm-files-item.is-archived, .sd-files .pm-files-row.is-archived { opacity: .65; }
 .sd-files .pm-files-empty { grid-column: 1 / -1; padding: 60px 18px; color: var(--sd-muted); text-align: center; font-size: 12px; }
 .sd-files-pagination { display: flex; align-items: center; gap: 9px; min-height: 48px; padding: 7px 16px; color: var(--sd-muted); font-size: 11px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .sd-files-selection-count { flex: 1; display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
 .sd-files-icon { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; border: 0; padding: 0; background: transparent; color: var(--sd-muted); cursor: pointer; flex-shrink: 0; }
-.sd-files-icon:hover:not(:disabled) { background: var(--sd-hover); color: var(--sd-brand); }
+.sd-files-icon:hover:not(:disabled) { background: var(--sd-hover); color: var(--sd-ink); }
 .sd-files-icon:disabled { opacity: .3; cursor: default; }
 .sd-files :is(button,input):focus-visible, .sd-project-rail :is(button,input,[role=button]):focus-visible { outline: 2px solid var(--sd-focus); outline-offset: -2px; }
 .sd-folder-positioner { z-index: 450; }
@@ -103,6 +106,7 @@
 .sd-folder-link>small { color: var(--sd-muted); font-size: 10px; }
 .sd-folder-disclosure { display: grid; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--sd-muted); width: 24px; height: 28px; padding: 0; flex-shrink: 0; cursor: pointer; }
 .sd-folder-branch:hover, .sd-folder-root:hover { background: var(--sd-hover); }
+.sd-folder-branch[data-active]:hover, .sd-folder-root[aria-current]:hover { background: var(--sd-selected-hover); }
 .sd-folder-popover button:focus-visible, .sd-project-menu button:focus-visible { outline: 2px solid var(--sd-focus); outline-offset: -2px; }
 @container project-stage (max-width: 1150px) {
   .sd-files .pm-qc-panel { --pm-qc-header-solid: 88px; }
