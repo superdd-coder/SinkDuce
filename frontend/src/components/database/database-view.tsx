@@ -574,10 +574,10 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
         size="sm"
         onClick={() => setIngestOpen(true)}
         title={t("library.ingestTitle")}
-        className="pm-collection-all-files-btn shrink-0 gap-1.5"
+        aria-label={t("library.ingestTitle")}
+        className="pm-collection-all-files-btn sd-project-header-action shrink-0"
       >
         <UploadCloud className="size-3.5" />
-        <span>{t("library.ingestEntry")}</span>
         {ingestBadge.active > 0 && (
           <span className="pm-ingest-badge is-active">{ingestBadge.active}</span>
         )}
@@ -591,10 +591,10 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
         size="sm"
         onClick={() => setClassicFilesOpen(true)}
         title={t("library.allFiles")}
-        className="pm-collection-all-files-btn shrink-0 gap-1.5"
+        aria-label={t("library.allFiles")}
+        className="pm-collection-all-files-btn sd-project-header-action shrink-0"
       >
         <List className="size-3.5" />
-        <span>{t("library.allFiles")}</span>
       </Button>
     </div>
   )
@@ -611,7 +611,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
 
   return (
     /* overflow visible so stage + collections soft shadows are not clipped */
-    <div className="pm-shell-workspace h-full min-h-0 min-w-0">
+    <div className="pm-shell-workspace sd-project-workspace h-full min-h-0 min-w-0">
       <CollectionList
         collections={collections}
         activeCollection={activeCollection}
@@ -635,7 +635,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
               )}
               style={{ marginBottom: "var(--pm-ov-gap, 14px)" }}
             >
-              <h1 className="pm-display pm-collection-name truncate">{collectionDisplayName}</h1>
+              <h1 className="pm-display pm-collection-name truncate" title={collectionDisplayName}>{collectionDisplayName}</h1>
               <div className="pm-collection-header-tools">
                 {collectionFileActions}
                 <div className="pm-collection-header-rail">

@@ -1,4 +1,4 @@
-import { Check, Pencil } from "lucide-react"
+import { Check, ChevronRight, Pencil, Star } from "lucide-react"
 import type { FileSummary, FolderTreeNode, NodeGroup } from "@/types/file-mgmt"
 import { cn } from "@/lib/utils"
 import { FileTypeIcon } from "@/components/file-mgmt/file-type-icon"
@@ -49,12 +49,17 @@ export function FolderListRow({
       <button
         type="button"
         className="pm-files-row-main"
+        title={fullName}
+        aria-label={fullName}
+        aria-pressed={selected}
         onClick={onSelect}
+        onKeyDown={e => { if (e.key === "Enter" && !multiSelectMode) { e.preventDefault(); onOpen() } }}
         onDoubleClick={(e) => {
           e.preventDefault()
           onOpen()
         }}
       >
+        {multiSelectMode && <span className={cn("sd-file-choice", selected && "is-checked")} aria-hidden="true">{selected && <Check size={11} />}</span>}
         <span className="pm-files-row-icon">
           <FolderIconView
             folder={folder}
@@ -62,14 +67,9 @@ export function FolderListRow({
             className="h-5 w-5"
           />
         </span>
-        <span className="pm-files-row-name">{fullName}</span>
-        <span className="pm-files-row-type" />
+        <span className="pm-files-row-name"><strong>{fullName}</strong><small>{t("fileMgmt.fileAndFolderCounts", { files: folder.file_count || 0, folders: folder.children.length })}</small></span>
+        <span className="pm-files-row-type">{t("fileBrowser.folder")}</span>
         <span className="pm-files-row-meta">{date}</span>
-        {selected && multiSelectMode && (
-          <span className="pm-files-row-check">
-            <Check className="h-2.5 w-2.5" />
-          </span>
-        )}
       </button>
       {onEdit ? (
         <button
@@ -83,9 +83,8 @@ export function FolderListRow({
         >
           <Pencil className="h-3 w-3" />
         </button>
-      ) : (
-        <span className="pm-files-row-edit" aria-hidden />
-      )}
+      ) : <span className="pm-files-row-edit" aria-hidden />}
+      {!multiSelectMode && <button className="sd-folder-open" title={t("fileBrowser.openFolder", { name: fullName })} aria-label={t("fileBrowser.openFolder", { name: fullName })} onClick={onOpen}><ChevronRight size={15} /></button>}
     </div>
   )
 }
@@ -127,6 +126,11 @@ export function FileListRow({
       <button
         type="button"
         className="pm-files-row-main"
+        title={fullName}
+        aria-label={fullName}
+        aria-pressed={selected}
+        aria-disabled={isIngesting}
+        onKeyDown={e => { if (e.key === "Enter" && !multiSelectMode && !isIngesting && onOpen) { e.preventDefault(); onOpen() } }}
         onClick={() => {
           if (isIngesting) return
           onSelect()
@@ -138,6 +142,7 @@ export function FileListRow({
           onOpen()
         }}
       >
+        {multiSelectMode && <span className={cn("sd-file-choice", selected && "is-checked")} aria-hidden="true">{selected && <Check size={11} />}</span>}
         <span className="pm-files-row-icon">
           <FileTypeIcon
             source={{
@@ -151,16 +156,11 @@ export function FileListRow({
             className="h-5 w-5"
           />
         </span>
-        <span className="pm-files-row-name">{fullName}</span>
+        <span className="pm-files-row-name"><strong>{fullName}</strong>{(isIngesting || isArchived || file.is_definitive || (file.filename && file.filename !== fullName)) && <small>{isIngesting ? t("fileMgmt.ingestingEllipsis") : isArchived ? t("fileMgmt.archived") : file.is_definitive ? <><Star size={10} fill="currentColor" />{t("fileBrowser.definitive")}</> : file.filename}</small>}</span>
         <span className="pm-files-row-type">{ext}</span>
         <span className="pm-files-row-meta">
           {isIngesting ? t("fileMgmt.ingestingEllipsis") : date}
         </span>
-        {selected && multiSelectMode && !isIngesting && (
-          <span className="pm-files-row-check">
-            <Check className="h-2.5 w-2.5" />
-          </span>
-        )}
       </button>
       {onEdit && !isIngesting ? (
         <button
@@ -177,6 +177,7 @@ export function FileListRow({
       ) : (
         <span className="pm-files-row-edit" aria-hidden />
       )}
+      {!multiSelectMode && <span className="sd-folder-open" aria-hidden="true" />}
     </div>
   )
 }

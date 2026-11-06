@@ -90,7 +90,7 @@ const tbLabel = "pm-files-tb-label"
  * Keep in sync with .animate-fm-toolbar-in/out duration in index.css.
  */
 const TB_SWAP_MS = 180
-const tbPanelBase = "absolute inset-y-0 left-0 flex items-center gap-0.5"
+const tbPanelBase = "sd-files-tool-actions flex items-center gap-1 flex-wrap"
 
 type ArchiveUiSnap = {
   showArchiveHere: boolean
@@ -190,7 +190,7 @@ function chromeToolKey(c: ToolbarChrome): string {
   }
 }
 
-/** v2: icon-only toolbar action — label slides out to the right on hover. */
+/** Compact action with an accessible name and a hover hint. */
 function TbAct({
   icon: Icon,
   label,
@@ -275,9 +275,13 @@ function MenuItem({
 export function Toolbar({
   collectionId,
   trailing,
+  selectableFileIds,
+  selectionFiltered = false,
 }: {
   collectionId: string
   trailing?: ReactNode
+  selectableFileIds?: string[]
+  selectionFiltered?: boolean
 }) {
   const t = useT()
   const {
@@ -685,39 +689,27 @@ export function Toolbar({
         <>
           {chrome.showCreate && (
             <>
-              <Button
-                variant="ghost"
-                size="xs"
+              <TbAct
+                icon={FolderPlus}
+                label={t("fileMgmt.newFolder")}
                 onClick={() => on && setNewFolderDialog(true)}
                 title={t("fileMgmt.newFolder")}
-                className={tbBtn}
                 tabIndex={tab}
-              >
-                <FolderPlus />
-                {t("fileMgmt.newFolder")}
-              </Button>
-              <Button
-                variant="ghost"
-                size="xs"
+              />
+              <TbAct
+                icon={Upload}
+                label={t("common.upload")}
                 onClick={() => on && fileInputRef.current?.click()}
                 title={t("fileMgmt.uploadFile")}
-                className={tbBtn}
                 tabIndex={tab}
-              >
-                <Upload />
-                {t("common.upload")}
-              </Button>
-              <Button
-                variant="ghost"
-                size="xs"
+              />
+              <TbAct
+                icon={FolderInput}
+                label={t("fileMgmt.uploadFolder")}
                 onClick={() => on && folderInputRef.current?.click()}
                 title={t("fileMgmt.uploadFolder")}
-                className={tbBtn}
                 tabIndex={tab}
-              >
-                <FolderInput />
-                {t("fileMgmt.uploadFolder")}
-              </Button>
+              />
               <ToolbarDivider />
             </>
           )}
@@ -736,21 +728,17 @@ export function Toolbar({
           )}
           {/* Sort / Select — secondary cluster */}
           <div className="relative">
-            <Button
-              variant="ghost"
-              size="xs"
+            <TbAct
+              icon={ArrowUpDown}
+              label={t("fileMgmt.sort")}
               onClick={() =>
                 on &&
                 setOpenMenu((m) => (m === "sort" ? null : "sort"))
               }
               title={t("fileMgmt.sortFiles")}
-              className={cn(tbBtn, openMenu === "sort" && opts.menus && "is-on")}
+              active={openMenu === "sort" && opts.menus}
               tabIndex={tab}
-            >
-              <ArrowUpDown />
-              {t("fileMgmt.sort")}
-              <ChevronDown className="size-3 opacity-60" />
-            </Button>
+            />
             {opts.menus && (
               <SoftMenu
                 open={openMenu === "sort"}
@@ -829,17 +817,13 @@ export function Toolbar({
               </SoftMenu>
             )}
           </div>
-          <Button
-            variant="ghost"
-            size="xs"
+          <TbAct
+            icon={CheckSquare}
+            label={t("common.select")}
             onClick={() => on && enterMultiSelectMode()}
             title={t("fileMgmt.selectMultiple")}
-            className={tbBtn}
             tabIndex={tab}
-          >
-            <CheckSquare />
-            {t("common.select")}
-          </Button>
+          />
         </>
       )
     }
@@ -863,8 +847,8 @@ export function Toolbar({
           <Button
             variant="ghost"
             size="xs"
-            onClick={() => on && selectAllFiles()}
-            title={t("fileMgmt.selectAllFolder")}
+            onClick={() => on && selectAllFiles(selectableFileIds)}
+            title={t(selectionFiltered ? "fileBrowser.selectResults" : "fileMgmt.selectAllFolder")}
             className={tbBtn}
             tabIndex={tab}
           >
@@ -886,47 +870,35 @@ export function Toolbar({
             <ToolbarDivider />
           )}
           {chrome.canMove && (
-            <Button
-              variant="ghost"
-              size="xs"
+            <TbAct
+              icon={MoveRight}
+              label={t("fileMgmt.move")}
               onClick={() => {
                 if (!on) return
                 setMoveDialogMode("folders")
                 setMoveDialogOpen(true)
               }}
               title={t("fileMgmt.moveFolder")}
-              className={tbBtn}
               tabIndex={tab}
-            >
-              <MoveRight />
-              {t("fileMgmt.move")}
-            </Button>
+            />
           )}
           {chrome.canArchive && (
-            <Button
-              variant="ghost"
-              size="xs"
+            <TbAct
+              icon={Archive}
+              label={t("common.archive")}
               onClick={() => on && setConfirmAction("archiveFolders")}
               title={t("fileMgmt.archiveFolder")}
-              className={tbBtn}
               tabIndex={tab}
-            >
-              <Archive />
-              {t("common.archive")}
-            </Button>
+            />
           )}
           {chrome.canRestore && (
-            <Button
-              variant="ghost"
-              size="xs"
+            <TbAct
+              icon={ArchiveRestore}
+              label={t("common.restore")}
               onClick={() => on && setConfirmAction("restoreFolders")}
               title={t("common.restore")}
-              className={tbBtn}
               tabIndex={tab}
-            >
-              <ArchiveRestore />
-              {t("common.restore")}
-            </Button>
+            />
           )}
           {chrome.canDelete ? (
             <>
@@ -1046,8 +1018,8 @@ export function Toolbar({
               <Button
                 variant="ghost"
                 size="xs"
-                onClick={() => on && selectAllFiles()}
-                title={t("fileMgmt.selectAllFolder")}
+                onClick={() => on && selectAllFiles(selectableFileIds)}
+                title={t(selectionFiltered ? "fileBrowser.selectResults" : "fileMgmt.selectAllFolder")}
                 className={tbBtn}
                 tabIndex={tab}
               >
@@ -1338,6 +1310,7 @@ export function Toolbar({
           onClick={handleGoUp}
           disabled={!canGoUp}
           title={canGoUp ? t("fileMgmt.goUp") : t("fileMgmt.alreadyAtRoot")}
+          aria-label={t("fileMgmt.goUp")}
           className={tbIconBtn}
         >
           <ChevronLeft />
@@ -1353,6 +1326,7 @@ export function Toolbar({
             key={`leave-${leaving.swapId}`}
             className={cn(tbPanelBase, "animate-fm-toolbar-out")}
             aria-hidden
+            inert
           >
             {renderChrome(leaving.chrome, { interactive: false, menus: false })}
           </div>
@@ -1371,14 +1345,16 @@ export function Toolbar({
           })}
         </div>
       </div>
+      <div className="sd-files-view-tools">
       {trailing}
-      <div className="pm-files-tb-sep" aria-hidden />
       <div className="pm-files-view-toggle" role="group" aria-label={t("fileMgmt.gridView")}>
         <Button
           variant="ghost"
           size="icon-sm"
           className={cn(tbIconBtn, folderFileView === "grid" && "is-on")}
           title={t("fileMgmt.gridView")}
+          aria-label={t("fileMgmt.gridView")}
+          aria-pressed={folderFileView === "grid"}
           onClick={() => setFolderFileView(collectionId, "grid")}
         >
           <LayoutGrid />
@@ -1388,10 +1364,13 @@ export function Toolbar({
           size="icon-sm"
           className={cn(tbIconBtn, folderFileView === "list" && "is-on")}
           title={t("fileMgmt.listView")}
+          aria-label={t("fileMgmt.listView")}
+          aria-pressed={folderFileView === "list"}
           onClick={() => setFolderFileView(collectionId, "list")}
         >
           <List />
         </Button>
+      </div>
       </div>
     </div>
 
