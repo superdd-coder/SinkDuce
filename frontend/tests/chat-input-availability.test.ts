@@ -42,7 +42,7 @@ before(async () => {
         `
         if (id === "\0virtual:composer-portals") return "export const createPortal = () => null"
         if (id === "\0virtual:composer-store") return "export const useAppStore = (select) => select(globalThis.__composerState); useAppStore.getState = () => globalThis.__composerState"
-        if (id === "\0virtual:composer-stream") return "export const useStreamChat = () => ({sendMessage: async () => {}, stopGeneration: () => {}})"
+        if (id === "\0virtual:composer-stream") return "export const useStreamChat = () => ({sendMessage: async () => true, stopGeneration: () => {}, resumeQueue: async () => {}})"
         if (id === "\0virtual:composer-locale") return "export const useT = () => (key) => key"
         if (id === "\0virtual:composer-button") return 'export const Button = ({variant, size, ...props}) => globalThis.__composerReact.createElement("button", props)'
       },
@@ -70,6 +70,7 @@ async function render(text: string, isOnline: boolean, isStreaming = false, draf
     activeProvider: null, activeModel: null, providers: [], sessionId: "saved",
     sidebarView: "chat", fetchCollections: async () => {},
     chatAttachmentDrafts: { saved: drafts },
+    chatQueues: {},
     reportComments: {saved:comments}, reportCommentDrafts:{}, reportCommentFocus:null,
   }
   const { ChatInput } = await server.ssrLoadModule("/src/components/chat/chat-input.tsx")
@@ -92,13 +93,19 @@ test("a stale failed health probe cannot prevent a real send attempt", async () 
   }
 })
 
-test("blank input stays disabled and active generation retains its stop action", async () => {
+test("during generation, the editable composer shows Stop when empty and queues a typed message", async () => {
   const empty = await render(" \n ", false)
   assert.match(empty, /<button\b[^>]*disabled=""[^>]*aria-label="common.send"/)
+  const streamingEmpty = await render("", true, true)
+  assert.doesNotMatch(streamingEmpty, /<textarea\b[^>]*disabled/)
+  const stop = streamingEmpty.match(/<button\b[^>]*aria-label="chat.stopGenerating"[^>]*>/)?.[0]
+  assert.ok(stop)
+  assert.doesNotMatch(stop, /\bdisabled(?:=|\s|>)/)
   const busy = await render("Queued thought", true, true)
-  assert.match(busy, /<textarea\b[^>]*disabled=""/)
-  assert.match(busy, /common.cancel/)
-  assert.doesNotMatch(busy, /aria-label="common.send"/)
+  assert.doesNotMatch(busy, /<textarea\b[^>]*disabled|aria-label="chat.stopGenerating"/)
+  const queue = busy.match(/<button\b[^>]*aria-label="chat.queue.send"[^>]*>/)?.[0]
+  assert.ok(queue)
+  assert.doesNotMatch(queue, /\bdisabled(?:=|\s|>)/)
 })
 
 test("a ready attachment can send without text, while processing attachments block send", async () => {

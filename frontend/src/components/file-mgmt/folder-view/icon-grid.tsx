@@ -48,13 +48,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useT } from "@/i18n/use-t"
 import { systemFolderDisplayName } from "@/i18n/system-folder"
-import {
-  getSubfolders,
-  groupRootFoldersForGrid,
-  getVirtualViewFolders,
-  isVirtualFolderId,
-  sortFolderGridItems,
-} from "@/components/file-mgmt/folder-view/sorted-items"
+import { getSubfolders, isVirtualFolderId, type FolderGridItem } from "./sorted-items"
 import {
   FileListRow,
   FolderListRow,
@@ -63,10 +57,16 @@ import {
 export function IconGrid({
   collectionId,
   onOpenFile,
+  items,
+  pageKey,
+  filtered,
 }: {
   collectionId: string
   /** Double-click a file to open detail dialog (Phase 8). */
   onOpenFile?: (fileId: string) => void
+  items: FolderGridItem[]
+  pageKey: string
+  filtered: boolean
 }) {
   const t = useT()
   const {
@@ -330,19 +330,6 @@ export function IconGrid({
     return m
   }, [groups])
 
-  const sortedItems = useMemo(() => {
-    const virtualView =
-      currentFolderId !== null ? getVirtualViewFolders(folderTree, currentFolderId) : null
-    if (virtualView) {
-      return sortFolderGridItems(virtualView, [], folderFileSort)
-    }
-    let subfolders = getSubfolders(folderTree, currentFolderId)
-    if (!currentFolderId) {
-      subfolders = groupRootFoldersForGrid(subfolders)
-    }
-    return sortFolderGridItems(subfolders, currentFolderFiles, folderFileSort)
-  }, [folderTree, currentFolderId, currentFolderFiles, folderFileSort])
-
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     setDragOver(true)
@@ -474,8 +461,8 @@ export function IconGrid({
         }}
       />
 
-      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
-        {filesLoading && sortedItems.length === 0 ? (
+      <div key={pageKey} className="sd-files-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
+        {filesLoading && items.length === 0 ? (
           <div className="flex items-center justify-center h-32">
             <Loader2 className="h-5 w-5 animate-spin text-[var(--pm-faint)]" />
           </div>
@@ -486,7 +473,8 @@ export function IconGrid({
                 folderFileView === "list" ? "pm-files-list" : "pm-files-grid"
               }
             >
-              {sortedItems.map((item) =>
+              {folderFileView === "list" && items.length > 0 && <div className="sd-files-list-heading" aria-hidden="true"><span>{t("common.name")}</span><span>{t("fileBrowser.type")}</span><span>{t(folderFileSort.startsWith("created") ? "fileBrowser.created" : "fileBrowser.updated")}</span><span /></div>}
+              {items.map((item) =>
                 item.kind === "folder" ? (
                   folderFileView === "list" ? (
                     <FolderListRow
@@ -499,7 +487,7 @@ export function IconGrid({
                         groupByFolderId.get(item.folder.folder_id) ?? null
                       }
                       onOpen={() =>
-                        selectFolder(collectionId, item.folder.folder_id)
+                        !multiSelectMode && selectFolder(collectionId, item.folder.folder_id)
                       }
                       onSelect={() => {
                         if (multiSelectMode)
@@ -519,7 +507,7 @@ export function IconGrid({
                     selected={selectedFolderIds.has(item.folder.folder_id)}
                     multiSelectMode={multiSelectMode}
                     onOpen={() =>
-                      selectFolder(collectionId, item.folder.folder_id)
+                      !multiSelectMode && selectFolder(collectionId, item.folder.folder_id)
                     }
                     onSelect={() => {
                       if (multiSelectMode)
@@ -585,9 +573,9 @@ export function IconGrid({
                   />
                 )
               )}
-              {sortedItems.length === 0 && (
+              {items.length === 0 && (
                 <div className="pm-files-empty">
-                  {t("fileMgmt.emptyFolderHint")}
+                  {t(filtered ? "fileBrowser.noResults" : "fileMgmt.emptyFolderHint")}
                 </div>
               )}
             </div>
@@ -772,6 +760,9 @@ function FolderIconItem({
               folder.archived && "is-archived"
             )}
             onClick={onSelect}
+            aria-label={fullName}
+            aria-pressed={selected}
+            onKeyDown={e => { if (e.key === "Enter" && !multiSelectMode) { e.preventDefault(); onOpen() } }}
             onDoubleClick={(e) => {
               e.preventDefault()
               onOpen()
@@ -803,6 +794,7 @@ function FolderIconItem({
               )}
             </div>
             <span className="pm-files-item-name">{fullName}</span>
+            <span className="pm-files-item-meta">{t("fileBrowser.items", { n: itemCount })}</span>
           </button>
         }
       />
@@ -885,6 +877,10 @@ function FileIconItem({
               isIngesting && "is-busy"
             )}
             onClick={onSelect}
+            aria-label={fullName}
+            aria-pressed={selected}
+            aria-disabled={isIngesting}
+            onKeyDown={e => { if (e.key === "Enter" && !multiSelectMode && !isIngesting && onOpen) { e.preventDefault(); onOpen() } }}
             onDoubleClick={(e) => {
               e.preventDefault()
               e.stopPropagation()

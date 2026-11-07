@@ -67,10 +67,10 @@ function DialogContent({
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(
-          "pm-dialog pm-dialog--silk fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)]",
+          "sd-dialog pm-dialog pm-dialog--silk fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)]",
           "-translate-x-1/2 -translate-y-1/2 gap-4 outline-none sm:max-w-sm",
           /* Shell = canvas (unified with workspace / All Files); nested cards stay white */
-          "rounded-[var(--pm-r-lg)] bg-[var(--pm-canvas,#f6f5f1)] p-5",
+          "rounded-[var(--pm-r-lg)] bg-[var(--sd-surface-overlay)] p-5",
           "text-[var(--pm-text)] font-[family-name:var(--type-font-ui)] text-[length:var(--type-size-ui)] font-normal leading-[var(--type-leading-ui)]",
           "border-0 shadow-[var(--pm-shadow)]",
           /*

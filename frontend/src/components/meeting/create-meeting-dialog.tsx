@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Loader2 } from "lucide-react"
+import { Loader2, Plus } from "lucide-react"
 import { createMeeting } from "@/api/client"
 import { formatApiError } from "@/api/http"
 import { useT } from "@/i18n/use-t"
@@ -64,14 +64,14 @@ export function CreateMeetingButton({
       className="pm-rail-new shrink-0"
       onClick={handleCreate}
       disabled={creating}
+      aria-label={stayOnCurrent ? t("meeting.newMeetingStay") : t("meeting.newMeeting")}
       title={
         stayOnCurrent
           ? t("meeting.newMeetingStay")
           : t("meeting.newMeeting")
       }
     >
-      {creating ? <Loader2 className="size-3 animate-spin" /> : null}
-      {t("common.new")}
+      {creating ? <Loader2 className="size-4 animate-spin" /> : <Plus size={16} aria-hidden="true" />}
     </button>
   )
 }

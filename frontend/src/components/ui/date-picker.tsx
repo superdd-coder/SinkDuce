@@ -18,8 +18,8 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { useT } from "@/i18n/use-t"
 import { useAppStore } from "@/stores/app-store"
-
-const PANEL_MS = 180
+import { placeFloatingMenu } from "@/lib/menu-position"
+import { useMenuPresence } from "@/hooks/use-menu-presence"
 
 function weekdayLabels(locale: string): string[] {
   const fmt = new Intl.DateTimeFormat(locale, { weekday: "narrow" })
@@ -42,7 +42,7 @@ export interface DatePickerProps {
   size?: "default" | "sm"
 }
 
-type PanelPos = { top: number; left: number; width: number }
+type PanelPos = { top: number; left: number; width: number; maxHeight: number; flip: "up" | "down" }
 
 function parseYmd(s: string): Date | null {
   if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return null
@@ -96,8 +96,7 @@ export function DatePicker({
   const t = useT()
   const locale = useAppStore((s) => s.locale)
   const [open, setOpen] = useState(false)
-  const [mounted, setMounted] = useState(false)
-  const [shown, setShown] = useState(false)
+  const { mounted, shown } = useMenuPresence(open)
   const [panelPos, setPanelPos] = useState<PanelPos | null>(null)
   const selected = useMemo(() => parseYmd(value), [value])
   const today = useMemo(() => {
@@ -124,45 +123,19 @@ export function DatePicker({
     /* Compact panel — avoid spanning full form width when trigger is wide */
     const minW = size === "sm" ? 220 : 236
     const width = Math.min(Math.max(minW, Math.min(rect.width, 280)), 280)
-    const gap = 6
-    const pad = 8
-    const panelH = size === "sm" ? 268 : 286
-    let top = rect.bottom + gap
-    let left = rect.left
-
-    left = Math.max(pad, Math.min(left, window.innerWidth - width - pad))
-    const spaceBelow = window.innerHeight - rect.bottom - gap - pad
-    const spaceAbove = rect.top - gap - pad
-    if (spaceBelow < panelH && spaceAbove > spaceBelow) {
-      top = Math.max(pad, rect.top - gap - panelH)
-    }
-    setPanelPos({ top, left, width })
+    const panel = panelRef.current
+    const position = placeFloatingMenu({
+      anchor: rect, width, height: Math.max(panel?.offsetHeight || 0, panel?.scrollHeight || 0, size === "sm" ? 268 : 286),
+      viewportWidth: window.innerWidth, viewportHeight: window.innerHeight,
+    })
+    const next = { top: position.top, left: position.left, width: Math.min(width, position.maxWidth), maxHeight: position.maxHeight, flip: position.flip }
+    setPanelPos(previous => previous && Object.keys(next).every(key => previous[key as keyof PanelPos] === next[key as keyof PanelPos]) ? previous : next)
   }, [size])
 
   useEffect(() => {
-    let exitTimer: ReturnType<typeof setTimeout> | null = null
-    let raf1 = 0
-    let raf2 = 0
-    if (open) {
-      setMounted(true)
-      if (selected) {
-        setViewYear(selected.getFullYear())
-        setViewMonth(selected.getMonth())
-      }
-      raf1 = requestAnimationFrame(() => {
-        raf2 = requestAnimationFrame(() => setShown(true))
-      })
-    } else {
-      setShown(false)
-      exitTimer = setTimeout(() => {
-        setMounted(false)
-        setPanelPos(null)
-      }, PANEL_MS)
-    }
-    return () => {
-      if (exitTimer) clearTimeout(exitTimer)
-      if (raf1) cancelAnimationFrame(raf1)
-      if (raf2) cancelAnimationFrame(raf2)
+    if (open && selected) {
+      setViewYear(selected.getFullYear())
+      setViewMonth(selected.getMonth())
     }
   }, [open, selected])
 
@@ -171,9 +144,12 @@ export function DatePicker({
     updatePanelPos()
     if (!open) return
     const onReposition = () => updatePanelPos()
+    const observer = new ResizeObserver(onReposition)
+    if (panelRef.current) observer.observe(panelRef.current)
     window.addEventListener("resize", onReposition)
     window.addEventListener("scroll", onReposition, true)
     return () => {
+      observer.disconnect()
       window.removeEventListener("resize", onReposition)
       window.removeEventListener("scroll", onReposition, true)
     }
@@ -257,6 +233,9 @@ export function DatePicker({
         <div
           ref={panelRef}
           role="dialog"
+          inert={!open || undefined}
+          aria-hidden={!open || undefined}
+          data-menu-flip={panelPos?.flip}
           aria-modal="false"
           aria-label={t("common.chooseDate")}
           className={cn(
@@ -270,6 +249,8 @@ export function DatePicker({
                   top: panelPos.top,
                   left: panelPos.left,
                   width: panelPos.width,
+                  maxHeight: panelPos.maxHeight,
+                  overflowY: "auto",
                 }
               : undefined
           }

@@ -106,7 +106,7 @@ const FOLDER_FILE_SORT_LEGACY_KEY = "sinkduce:folder-file-sort"
 const FOLDER_FILE_VIEW_MAP_KEY = "sinkduce:folder-file-view-by-collection"
 
 export type FolderFileViewMode = "grid" | "list"
-const DEFAULT_FOLDER_FILE_VIEW: FolderFileViewMode = "grid"
+const DEFAULT_FOLDER_FILE_VIEW: FolderFileViewMode = "list"
 
 const SORT_MODES: FolderFileSortMode[] = [
   "name",
@@ -404,7 +404,7 @@ function isArchivedFolder(folderId: string | null, folder?: Folder | null): bool
   toggleSelection: (fileId: string) => void
   /** Replace selection with a single file (normal / non-multi mode). */
   selectSingleFile: (fileId: string) => void
-  selectAllFiles: () => void
+  selectAllFiles: (visibleFileIds?: string[]) => void
   clearSelection: () => void
   setMultiSelectMode: (on: boolean) => void
   enterMultiSelectMode: () => void
@@ -1342,14 +1342,15 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
     })
   },
 
-  selectAllFiles: () => {
+  selectAllFiles: (visibleFileIds) => {
     if (!get().multiSelectMode) return
     const { currentFolderFiles, ingestingFiles } = get()
+    const visible = visibleFileIds ? new Set(visibleFileIds) : null
     set({
       selectedFileIds: new Set(
         currentFolderFiles
           .map((f) => f.file_id)
-          .filter((id) => !ingestingFiles[id])
+          .filter((id) => !ingestingFiles[id] && (!visible || visible.has(id)))
       ),
       selectedFolderIds: new Set(),
     })

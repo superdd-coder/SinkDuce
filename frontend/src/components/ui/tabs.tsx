@@ -27,13 +27,13 @@ const tabsListVariants = cva(
     variants: {
       variant: {
         pill: [
-          "pm-tabs relative isolate !h-auto items-center gap-1 border-0 bg-transparent p-0 rounded-none",
+          "pm-tabs relative isolate !h-auto items-center gap-1 border-0 bg-[var(--sd-field)] p-1 rounded-full",
         ].join(" "),
         line: "gap-1 bg-transparent rounded-none h-auto p-0",
         muted:
           "h-8 gap-0.5 rounded-[var(--pm-r-sm)] bg-[color-mix(in_srgb,var(--pm-ink)_5%,transparent)] p-[3px]",
         default: [
-          "pm-tabs relative isolate !h-auto items-center gap-1 border-0 bg-transparent p-0 rounded-none",
+          "pm-tabs relative isolate !h-auto items-center gap-1 border-0 bg-[var(--sd-field)] p-1 rounded-full",
         ].join(" "),
       },
     },
@@ -72,18 +72,18 @@ function TabsTrigger({ className, ...props }: TabsPrimitive.Tab.Props) {
         "after:!opacity-0 after:!content-none after:!bg-transparent",
         "group-data-[variant=pill]/tabs-list:rounded-full group-data-[variant=pill]/tabs-list:px-3 group-data-[variant=pill]/tabs-list:py-1.5",
         "group-data-[variant=pill]/tabs-list:bg-transparent group-data-[variant=pill]/tabs-list:text-[var(--pm-muted)]",
-        "group-data-[variant=pill]/tabs-list:hover:text-[var(--pm-green)]",
+        "group-data-[variant=pill]/tabs-list:hover:text-[var(--sd-ink)]",
         "group-data-[variant=pill]/tabs-list:data-active:bg-transparent group-data-[variant=pill]/tabs-list:data-active:text-[var(--pm-green)]",
         "group-data-[variant=pill]/tabs-list:data-active:shadow-none",
         "group-data-[variant=default]/tabs-list:rounded-full group-data-[variant=default]/tabs-list:px-3 group-data-[variant=default]/tabs-list:py-1.5",
         "group-data-[variant=default]/tabs-list:bg-transparent group-data-[variant=default]/tabs-list:text-[var(--pm-muted)]",
-        "group-data-[variant=default]/tabs-list:hover:text-[var(--pm-green)]",
+        "group-data-[variant=default]/tabs-list:hover:text-[var(--sd-ink)]",
         "group-data-[variant=default]/tabs-list:data-active:bg-transparent group-data-[variant=default]/tabs-list:data-active:text-[var(--pm-green)]",
         "group-data-[variant=line]/tabs-list:rounded-none group-data-[variant=line]/tabs-list:px-2 group-data-[variant=line]/tabs-list:py-1",
         "group-data-[variant=line]/tabs-list:text-[var(--pm-muted)]",
         "group-data-[variant=line]/tabs-list:data-active:text-[var(--pm-green)]",
         "group-data-[variant=muted]/tabs-list:rounded-[6px] group-data-[variant=muted]/tabs-list:px-2.5 group-data-[variant=muted]/tabs-list:py-1",
-        "group-data-[variant=muted]/tabs-list:data-active:bg-white group-data-[variant=muted]/tabs-list:data-active:text-[var(--pm-green)]",
+        "group-data-[variant=muted]/tabs-list:data-active:bg-[var(--sd-selected)] group-data-[variant=muted]/tabs-list:data-active:text-[var(--pm-green)]",
         "group-data-[variant=muted]/tabs-list:data-active:shadow-sm",
         className
       )}

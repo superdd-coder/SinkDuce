@@ -1,5 +1,14 @@
 .pm-unified-sources.pm-chat-sources { margin-top: 20px; padding-top: 0; border: 0; }
-.pm-unified-sources .pm-chat-sources-toggle { justify-content: flex-start; gap: 8px; width: auto; padding: 6px 0; color: var(--pm-muted); font: 400 12px/1.5 var(--type-font-ui); letter-spacing: 0; text-transform: none; }
+.pm-unified-sources .pm-chat-sources-toggle {
+  justify-content: flex-start;
+  gap: 8px;
+  width: auto;
+  padding: 6px 14px;
+  color: var(--pm-muted);
+  font: 400 12px/1.5 var(--type-font-ui);
+  letter-spacing: 0;
+  text-transform: none;
+}
 .pm-unified-sources .pm-chat-sources-toggle > svg { opacity: .6; transition: transform 220ms var(--pm-ease); }
 .pm-unified-sources .pm-chat-sources-toggle[aria-expanded=true] > svg { transform: rotate(180deg); }
 .pm-unified-sources .pm-chat-sources-list > div { max-height: 340px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; }

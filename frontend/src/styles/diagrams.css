@@ -1,0 +1,84 @@
+/* One diagram surface for answers, reports, meeting minutes and Note editors.
+ * The drawing stays on neutral porcelain paper so supplied semantic colors and
+ * exported document artwork retain their contrast in either application theme. */
+:is(.chat-answer-markdown, .pm-chat-prose.chat-answer-markdown, .pm-report-paper, .pm-editor-svg) .chat-md-visual {
+  position: relative;
+  border: 0;
+  border-radius: var(--sd-radius-card);
+  background: #fafafa;
+  box-shadow: var(--sd-shadow-control);
+  overflow: hidden;
+}
+:is(.chat-answer-markdown, .pm-chat-prose.chat-answer-markdown, .pm-report-paper, .pm-editor-svg) .chat-md-visual .chat-md-visual-toolbar {
+  position: absolute;
+  z-index: 2;
+  top: 10px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 3px;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--sd-radius-pill);
+  background: var(--sd-surface-overlay);
+  color: var(--sd-muted);
+  box-shadow: var(--sd-shadow-control);
+  backdrop-filter: blur(18px) saturate(1.1);
+  opacity: 1;
+}
+:is(.chat-answer-markdown, .pm-chat-prose.chat-answer-markdown, .pm-report-paper, .pm-editor-svg) .chat-md-visual-toolbar button,
+.chat-svg-zoom-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--sd-muted);
+  cursor: pointer;
+  transition: background 160ms var(--pm-ease), color 160ms var(--pm-ease);
+}
+:is(.chat-answer-markdown, .pm-chat-prose.chat-answer-markdown, .pm-report-paper, .pm-editor-svg) .chat-md-visual-toolbar button:hover:not(:disabled),
+.chat-svg-zoom-toolbar button:hover:not(:disabled) { background: var(--sd-hover); color: var(--sd-ink); }
+:is(.chat-answer-markdown, .pm-chat-prose.chat-answer-markdown, .pm-report-paper, .pm-editor-svg) .chat-md-visual-toolbar button[aria-pressed="true"] {
+  background: var(--sd-selected); color: var(--sd-selected-ink);
+}
+:is(.chat-answer-markdown, .pm-chat-prose.chat-answer-markdown, .pm-report-paper, .pm-editor-svg) .chat-md-visual-toolbar button:focus-visible,
+.chat-svg-zoom-toolbar button:focus-visible, .chat-svg-canvas:focus-visible { outline: 2px solid var(--sd-focus); outline-offset: 2px; }
+:is(.chat-answer-markdown, .pm-chat-prose.chat-answer-markdown, .pm-report-paper, .pm-editor-svg) .chat-md-visual-toolbar button:disabled {
+  opacity: .4; cursor: default;
+}
+:is(.chat-answer-markdown, .pm-chat-prose.chat-answer-markdown, .pm-report-paper, .pm-editor-svg) .chat-md-visual .chat-md-visual-preview {
+  padding: 58px 18px 18px;
+}
+:is(.chat-answer-markdown, .pm-chat-prose.chat-answer-markdown, .pm-report-paper, .pm-editor-svg) .chat-md-visual .chat-md-visual-image {
+  max-width: 100%; margin: 0 auto;
+}
+:is(.chat-answer-markdown, .pm-chat-prose.chat-answer-markdown, .pm-report-paper, .pm-editor-svg) .chat-md-visual .chat-md-visual-source {
+  padding: 60px 20px 20px;
+  background: var(--sd-surface-raised);
+  color: var(--sd-text);
+}
+.chat-svg-zoom-toolbar {
+  align-self: center;
+  width: fit-content;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--sd-radius-pill);
+  background: var(--sd-surface-overlay);
+  color: var(--sd-muted);
+  box-shadow: var(--sd-shadow-control);
+}
+.chat-svg-zoom-toolbar output { padding: 0 5px; }
+.chat-svg-canvas { border: 0; border-radius: var(--sd-radius-card); background: #fafafa; color: #202020; }
+.chat-svg-dialog.pm-dialog[data-slot="dialog-content"] { padding: 22px; border-radius: var(--sd-radius-panel); }
+.chat-svg-viewer-hint { text-align: center; }
+@media (prefers-reduced-motion: reduce) {
+  .chat-md-visual-toolbar button, .chat-svg-zoom-toolbar button { transition: none; }
+}

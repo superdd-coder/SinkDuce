@@ -256,6 +256,33 @@ def test_agent_retry_handles_always_think_error():
 # ══════════════ save-time probe wiring ══════════════
 
 
+@pytest.fixture
+def local_config_client(tmp_path, monkeypatch):
+    """Exercise the real local gate without loading the installed app or its data."""
+    monkeypatch.setenv("SINKDUCE_DATA", str(tmp_path))
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.api.routes.config import router
+    from src.identity import acl, roles
+    from src.pairing import store
+    from src.pairing.middleware import PairingGateMiddleware
+
+    identity_dir = tmp_path / "identity"
+    monkeypatch.setattr(roles, "IDENTITY_DIR", identity_dir)
+    monkeypatch.setattr(roles, "ROLES_PATH", identity_dir / "roles.json")
+    monkeypatch.setattr(acl, "IDENTITY_DIR", identity_dir)
+    monkeypatch.setattr(acl, "DOMAIN_ACL_PATH", identity_dir / "domain_acl.json")
+    monkeypatch.setattr(store, "PAIRING_DIR", tmp_path / "pairing")
+
+    app = FastAPI()
+    app.add_middleware(PairingGateMiddleware)
+    app.include_router(router, prefix="/api")
+    with TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
+        yield client
+
+
 def _patch_llm_route_env(monkeypatch, providers):
     import src.api.routes.config as config_routes
 
@@ -271,7 +298,7 @@ def _patch_llm_route_env(monkeypatch, providers):
     return cfg
 
 
-def test_create_llm_provider_probes_and_persists_mode(monkeypatch):
+def test_create_llm_provider_probes_and_persists_mode(monkeypatch, local_config_client):
     import src.api.routes.config as config_routes
 
     _patch_llm_route_env(monkeypatch, [])
@@ -280,11 +307,7 @@ def test_create_llm_provider_probes_and_persists_mode(monkeypatch):
         lambda p: "always", raising=False,
     )
 
-    from fastapi.testclient import TestClient
-
-    from src.main import app
-
-    resp = TestClient(app).post(
+    resp = local_config_client.post(
         "/api/llm/providers",
         json={
             "name": "Zhipu", "provider": "openai_compatible",
@@ -295,7 +318,7 @@ def test_create_llm_provider_probes_and_persists_mode(monkeypatch):
     assert resp.json()["thinking_mode"] == "always"
 
 
-def test_update_llm_provider_reprobes_on_model_change(monkeypatch):
+def test_update_llm_provider_reprobes_on_model_change(monkeypatch, local_config_client):
     import src.api.routes.config as config_routes
 
     existing = LLMProviderConfig(
@@ -309,11 +332,7 @@ def test_update_llm_provider_reprobes_on_model_change(monkeypatch):
         lambda p: "always", raising=False,
     )
 
-    from fastapi.testclient import TestClient
-
-    from src.main import app
-
-    resp = TestClient(app).put(
+    resp = local_config_client.put(
         "/api/llm/providers/p1",
         json={"model": "glm-new"},
     )

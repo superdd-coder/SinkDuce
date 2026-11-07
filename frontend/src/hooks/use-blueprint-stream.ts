@@ -62,6 +62,28 @@ function notify() {
   listeners.forEach((fn) => fn())
 }
 
+/** Read the current generation when coordinating asynchronous markdown loads. */
+export function getBlueprintStreamState(meetingId: string): BlueprintStreamState {
+  return getEntry(meetingId).state
+}
+
+/** Keep the new generation visible until its result has been handed to the cache. */
+export function resolveBlueprintSummary(state: BlueprintStreamState, cachedMd = ""): string {
+  if (state.isStreaming || state.summaryGenState !== "idle" || state.streamingMd) {
+    return state.settledSummaryMd || state.streamingMd
+  }
+  return cachedMd || state.settledSummaryMd
+}
+
+export function dismissBlueprintStream(meetingId: string): void {
+  const entry = streams.get(meetingId)
+  // A delayed completion callback must not clear a newer, active generation.
+  if (!entry || entry.state.isStreaming) return
+  if (entry.state.summaryGenState === "idle" && entry.state.streamingMd === "") return
+  entry.state = { ...entry.state, summaryGenState: "idle", streamingMd: "" }
+  notify()
+}
+
 export function startStream(meetingId: string) {
   const entry = getEntry(meetingId)
 
@@ -252,15 +274,7 @@ export function useBlueprintStream(
   const dismissStreaming = useCallback(() => {
     const id = meetingIdRef.current
     if (!id) return
-    const entry = streams.get(id)
-    if (entry && (entry.state.summaryGenState !== "idle" || entry.state.streamingMd !== "")) {
-      entry.state = {
-        ...entry.state,
-        summaryGenState: "idle",
-        streamingMd: "",
-      }
-      notify()
-    }
+    dismissBlueprintStream(id)
   }, [])
 
   return [state, { start, abort, dismissStreaming }]

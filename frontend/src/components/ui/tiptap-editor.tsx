@@ -29,8 +29,9 @@ import {
   Bold, Italic, Strikethrough,
   List, ListOrdered, ListTodo,
 } from "lucide-react"
-import { SoftMenu, MenuItem } from "@/components/ui/menu"
+import { SoftMenu, MenuItem, MENU_MS } from "@/components/ui/menu"
 import { scrollCaretIntoNearestView } from "@/lib/editor-scroll"
+import { placeFloatingMenu } from "@/lib/menu-position"
 import { tr } from "@/i18n/tr"
 import { SvgPreviewProvider } from "@/components/shared/svg-preview-context"
 
@@ -2340,7 +2341,10 @@ function showSlashMenu(
     closeMenu()
   }
 
+  let closing = false
   const closeMenu = () => {
+    if (closing) return
+    closing = true
     try {
       editor.off?.("destroy", onEditorDestroy)
     } catch {
@@ -2351,7 +2355,12 @@ function showSlashMenu(
       document.removeEventListener("keydown", onDocKeyDown, true)
       return
     }
-    menu.remove()
+    menu.classList.remove("is-open")
+    menu.inert = true
+    menu.setAttribute("aria-hidden", "true")
+    menu.removeAttribute("id")
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    window.setTimeout(() => menu.remove(), reduced ? 0 : MENU_MS)
     document.removeEventListener("pointerdown", onPointerDownOutside, true)
     document.removeEventListener("keydown", onDocKeyDown, true)
   }
@@ -2431,9 +2440,10 @@ function showSlashMenu(
 
   menu.style.top = `${Math.round(top)}px`
   menu.style.left = `${Math.round(left)}px`
+  menu.dataset.menuFlip = top < coords.top ? "up" : "down"
   menu.style.visibility = "visible"
   requestAnimationFrame(() => {
-    menu.classList.add("is-open")
+    if (!closing) menu.classList.add("is-open")
   })
 
   searchInput.focus()
@@ -2441,6 +2451,7 @@ function showSlashMenu(
   // Capture-phase pointerdown so clicks on editor / sidebar still dismiss.
   // Defer one frame so the opening keystroke doesn't immediately close.
   requestAnimationFrame(() => {
+    if (closing) return
     document.addEventListener("pointerdown", onPointerDownOutside, true)
     document.addEventListener("keydown", onDocKeyDown, true)
   })
@@ -2449,63 +2460,126 @@ function showSlashMenu(
 // ──────────────────────────────────────────────
 // Table Context Menu
 // ──────────────────────────────────────────────
-function showTableContextMenu(event: MouseEvent, editor: any) {
+function showTableContextMenu(event: MouseEvent, editor: Editor) {
   if (_isPreviewMode) return
-  const existingMenu = document.getElementById("table-context-menu")
-  if (existingMenu) existingMenu.remove()
+  const existingMenu = document.getElementById("table-context-menu") as (HTMLElement & { dismiss?: () => void }) | null
+  existingMenu?.dismiss?.()
+  dismissPremiumFloatBars()
 
   const menu = document.createElement("div")
   menu.id = "table-context-menu"
-  menu.style.cssText = `
-    position: fixed; background: white; border: 1px solid #e0e0e0;
-    border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-    padding: 4px 0; z-index: 1000; min-width: 180px;
-  `
-
+  menu.className = "pm-menu pm-menu--soft pm-table-context-menu"
+  menu.setAttribute("role", "menu")
+  menu.setAttribute("aria-label", tr("editor.table"))
+  menu.style.visibility = "hidden"
+  const addIcon = '<path d="M12 5v14M5 12h14"/>'
+  const removeIcon = '<path d="M5 12h14"/>'
+  const deleteIcon = '<path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6"/>'
   const commands = [
-    { label: "➕ Add row above", action: () => editor.chain().focus().addRowBefore().run() },
-    { label: "➕ Add row below", action: () => editor.chain().focus().addRowAfter().run() },
-    { label: "➕ Add column left", action: () => editor.chain().focus().addColumnBefore().run() },
-    { label: "➕ Add column right", action: () => editor.chain().focus().addColumnAfter().run() },
-    { divider: true },
-    { label: "🗑️ Delete row", action: () => editor.chain().focus().deleteRow().run() },
-    { label: "🗑️ Delete column", action: () => editor.chain().focus().deleteColumn().run() },
-    { divider: true },
-    { label: "❌ Delete table", action: () => editor.chain().focus().deleteTable().run() },
+    { label: tr("editor.addRowAbove"), icon: addIcon, action: () => editor.chain().focus().addRowBefore().run() },
+    { label: tr("editor.addRowBelow"), icon: addIcon, action: () => editor.chain().focus().addRowAfter().run() },
+    { label: tr("editor.addColumnLeft"), icon: addIcon, action: () => editor.chain().focus().addColumnBefore().run() },
+    { label: tr("editor.addColumnRight"), icon: addIcon, action: () => editor.chain().focus().addColumnAfter().run() },
+    { label: tr("editor.deleteRow"), icon: removeIcon, danger: true, separator: true, action: () => editor.chain().focus().deleteRow().run() },
+    { label: tr("editor.deleteColumn"), icon: removeIcon, danger: true, action: () => editor.chain().focus().deleteColumn().run() },
+    { label: tr("editor.deleteTable"), icon: deleteIcon, danger: true, separator: true, action: () => editor.chain().focus().deleteTable().run() },
   ]
+  let closing = false
+  let frame = 0
+  const outside = (e: PointerEvent) => {
+    if (e.target instanceof globalThis.Node && !menu.contains(e.target)) close()
+  }
+  const escape = (e: KeyboardEvent) => {
+    if (e.key !== "Escape") return
+    e.preventDefault()
+    e.stopPropagation()
+    close()
+    if (!editor.isDestroyed) editor.commands.focus()
+  }
+  const close = () => {
+    if (closing) return
+    closing = true
+    cancelAnimationFrame(frame)
+    menu.classList.remove("is-open")
+    menu.inert = true
+    menu.setAttribute("aria-hidden", "true")
+    menu.removeAttribute("id")
+    document.removeEventListener("pointerdown", outside, true)
+    document.removeEventListener("keydown", escape, true)
+    window.removeEventListener("resize", close)
+    document.removeEventListener("scroll", onScroll, true)
+    editor.off("destroy", close)
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    window.setTimeout(() => menu.remove(), reduced ? 0 : MENU_MS)
+  }
+  const onScroll = (e: Event) => {
+    if (e.target !== menu) close()
+  }
+  ;(menu as HTMLElement & { dismiss?: () => void }).dismiss = close
 
   commands.forEach((cmd) => {
-    if ((cmd as any).divider) {
+    if (cmd.separator) {
       const divider = document.createElement("div")
-      divider.style.cssText = `height: 1px; background: #e0e0e0; margin: 4px 0;`
+      divider.setAttribute("role", "separator")
       menu.appendChild(divider)
-      return
     }
-    const item = document.createElement("div")
-    item.style.cssText = `padding: 8px 14px; cursor: pointer; font-size: 13px;`
-    item.textContent = (cmd as any).label
-    item.addEventListener("mouseenter", () => { item.style.background = "#f0f7ff" })
-    item.addEventListener("mouseleave", () => { item.style.background = "white" })
-    item.addEventListener("click", () => { menu.remove(); (cmd as any).action() })
+    const item = document.createElement("button")
+    item.type = "button"
+    item.className = `pm-menu-item${cmd.danger ? " is-danger" : ""}`
+    item.setAttribute("role", "menuitem")
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg")
+    icon.setAttribute("viewBox", "0 0 24 24")
+    icon.setAttribute("fill", "none")
+    icon.setAttribute("stroke", "currentColor")
+    icon.setAttribute("stroke-width", "1.6")
+    icon.setAttribute("stroke-linecap", "round")
+    icon.setAttribute("stroke-linejoin", "round")
+    icon.setAttribute("aria-hidden", "true")
+    icon.innerHTML = cmd.icon
+    const label = document.createElement("span")
+    label.textContent = cmd.label
+    item.append(icon, label)
+    // Keep the editor's table selection when opening an action with the mouse.
+    item.addEventListener("mousedown", (e) => e.preventDefault())
+    item.addEventListener("click", () => { close(); if (!editor.isDestroyed) cmd.action() })
     menu.appendChild(item)
   })
 
-  menu.style.top = `${event.clientY}px`
-  menu.style.left = `${event.clientX}px`
+  menu.addEventListener("keydown", (e) => {
+    if (e.key === "Tab") { close(); return }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return
+    e.preventDefault()
+    const items = Array.from(menu.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]'))
+    const current = items.indexOf(document.activeElement as HTMLButtonElement)
+    const next = e.key === "Home" ? 0 : e.key === "End" ? items.length - 1
+      : (current + (e.key === "ArrowUp" ? -1 : 1) + items.length) % items.length
+    items[next]?.focus({ preventScroll: true })
+    items[next]?.scrollIntoView({ block: "nearest" })
+  })
   document.body.appendChild(menu)
-
   const rect = menu.getBoundingClientRect()
-  if (rect.right > window.innerWidth) menu.style.left = `${window.innerWidth - rect.width - 8}px`
-  if (rect.bottom > window.innerHeight) menu.style.top = `${window.innerHeight - rect.height - 8}px`
-
-  setTimeout(() => {
-    document.addEventListener("click", function closeMenu(e) {
-      if (!menu.contains(e.target as HTMLElement)) {
-        menu.remove()
-        document.removeEventListener("click", closeMenu)
-      }
+  const position = placeFloatingMenu({
+    anchor: { left: event.clientX, right: event.clientX, top: event.clientY, bottom: event.clientY, width: 0 },
+    width: rect.width, height: rect.height, viewportWidth: window.innerWidth, viewportHeight: window.innerHeight,
+  })
+  menu.style.top = `${position.top}px`
+  menu.style.left = `${position.left}px`
+  menu.style.maxHeight = `${position.maxHeight}px`
+  menu.style.maxWidth = `${position.maxWidth}px`
+  menu.dataset.menuFlip = position.flip
+  menu.style.visibility = "visible"
+  frame = requestAnimationFrame(() => {
+    frame = requestAnimationFrame(() => {
+      if (closing) return
+      menu.classList.add("is-open")
+      menu.querySelector<HTMLButtonElement>("button")?.focus({ preventScroll: true })
     })
-  }, 10)
+  })
+  document.addEventListener("pointerdown", outside, true)
+  document.addEventListener("keydown", escape, true)
+  window.addEventListener("resize", close)
+  document.addEventListener("scroll", onScroll, true)
+  editor.on("destroy", close)
 }
 
 // ──────────────────────────────────────────────
@@ -2805,12 +2879,12 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
 
   // Row buttons
   menu.appendChild(makeBtn(
-    "Insert row above",
+    tr("editor.addRowAbove"),
     `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M8 1v3M5 1l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="6" width="12" height="3" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/><rect x="2" y="11" width="12" height="3" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/></svg>`,
     () => editor.chain().focus().addRowBefore().run(),
   ))
   menu.appendChild(makeBtn(
-    "Insert row below",
+    tr("editor.addRowBelow"),
     `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 12h12M8 15v-3M5 15l3-3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="2" width="12" height="3" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/><rect x="2" y="7" width="12" height="3" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/></svg>`,
     () => editor.chain().focus().addRowAfter().run(),
   ))
@@ -2819,12 +2893,12 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
 
   // Column buttons
   menu.appendChild(makeBtn(
-    "Insert column left",
+    tr("editor.addColumnLeft"),
     `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M4 2v12M1 8h3M1 5l3 3-3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="6" y="2" width="3" height="12" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/><rect x="11" y="2" width="3" height="12" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/></svg>`,
     () => editor.chain().focus().addColumnBefore().run(),
   ))
   menu.appendChild(makeBtn(
-    "Insert column right",
+    tr("editor.addColumnRight"),
     `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M12 2v12M15 8h-3M15 5l-3 3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="2" width="3" height="12" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/><rect x="7" y="2" width="3" height="12" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/></svg>`,
     () => editor.chain().focus().addColumnAfter().run(),
   ))
@@ -2833,13 +2907,13 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
 
   // Delete row/column — Lucide-weight icons (row/col bands + small X), close after
   menu.appendChild(makeBtn(
-    "Delete row",
+    tr("editor.deleteRow"),
     `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="2" width="13" height="2.4" rx="0.7" stroke="currentColor" stroke-width="1.25" opacity="0.32"/><rect x="1.5" y="6.8" width="8.2" height="2.4" rx="0.7" stroke="currentColor" stroke-width="1.25"/><rect x="1.5" y="11.6" width="13" height="2.4" rx="0.7" stroke="currentColor" stroke-width="1.25" opacity="0.32"/><path d="M11.2 6.4l3.2 3.2M14.4 6.4l-3.2 3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
     () => editor.chain().focus().deleteRow().run(),
     true,
   ))
   menu.appendChild(makeBtn(
-    "Delete column",
+    tr("editor.deleteColumn"),
     `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2" y="1.5" width="2.4" height="13" rx="0.7" stroke="currentColor" stroke-width="1.25" opacity="0.32"/><rect x="6.8" y="1.5" width="2.4" height="8.2" rx="0.7" stroke="currentColor" stroke-width="1.25"/><rect x="11.6" y="1.5" width="2.4" height="13" rx="0.7" stroke="currentColor" stroke-width="1.25" opacity="0.32"/><path d="M6.4 11.2l3.2 3.2M9.6 11.2l-3.2 3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
     () => editor.chain().focus().deleteColumn().run(),
     true,
@@ -2849,7 +2923,7 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
 
   // Delete table
   menu.appendChild(makeBtn(
-    "Delete table",
+    tr("editor.deleteTable"),
     `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" stroke="currentColor" stroke-width="1.3" rx="1"/><path d="M5 5l6 6M11 5l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
     () => editor.chain().focus().deleteTable().run(),
     true,

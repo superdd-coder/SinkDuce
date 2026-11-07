@@ -43,15 +43,12 @@ def test_timeline_index_imports_chain_row_and_does_not_define_it():
     assert "parseStartDropId" in idx
 
 
-def test_groups_menu_scrim_does_not_dim_the_page():
-    """Groups dropdown click-catcher must not veil Files/folder windows."""
+def test_groups_menu_opens_without_a_page_scrim():
+    """The shared menu closes on outside click without veiling the page."""
     src = MENU.read_text(encoding="utf-8")
-    css = CSS.read_text(encoding="utf-8")
-    assert "pm-timeline-menu-scrim" in src
-    block = css.split(".pm-timeline-menu-scrim {", 1)[1].split("}", 1)[0]
-    assert "position: fixed" in block
-    assert "rgba(18, 20, 16, 0.12)" not in block
-    assert "transparent" in block
+    assert "<SoftMenu open={open} portal" in src
+    assert "onClose={() => setOpen(false)}" in src
+    assert "pm-timeline-menu-scrim" not in src
 
 
 def test_add_node_and_live_notes_toolbars_stay_put():

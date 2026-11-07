@@ -13,7 +13,7 @@ $$\text{\textbf{Spark. Sink. Educe.}}$$
 [![Docker](https://img.shields.io/badge/docker-ready-2496ed.svg?style=flat-square)](https://www.docker.com/)
 [![MCP](https://img.shields.io/badge/MCP-65_工具-6e47ff.svg?style=flat-square)](https://modelcontextprotocol.io/)
 
-[快速启动](#快速启动) · [报告与修订](#报告与修订) · [功能](#功能) · [MCP](#mcp) · [English](README.md)
+[快速启动](#快速启动) · [项目 Q&A](#项目-qa) · [报告与修订](#报告与修订) · [功能](#功能) · [MCP](#mcp) · [English](README.md)
 
 </div>
 
@@ -25,6 +25,8 @@ LLM、Embedding 与语音转写既可使用云端 API，也可接入 **本地模
 
 **从资料到成稿：** 在聊天中上传附件、生成带引用的报告，添加批注并逐项审阅修改。会议纪要支持表格和 SVG 图示，可导出 Word、PDF、Markdown；macOS 桌面版已内置 PDF 转换组件。
 
+工作区采用可展开的窄导航栏、统一的菜单与弹窗样式，以及微透的聊天来源面板。
+
 源码统一采用 **AGPL-3.0-or-later**，包含角色与权限管理。历次更新见 [CHANGELOG](CHANGELOG.md)。
 
 ---
@@ -33,7 +35,7 @@ LLM、Embedding 与语音转写既可使用云端 API，也可接入 **本地模
 
 ### macOS（Apple Silicon）
 
-1. 下载 **[SinkDuce v1.6.2（Apple Silicon）](https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/SinkDuce-macos-arm64-v1.6.2.dmg)**（[SHA-256 校验文件](https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/SinkDuce-macos-arm64-v1.6.2.dmg.sha256)）。
+1. 下载 **[SinkDuce v1.7.0（Apple Silicon）](https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/SinkDuce-macos-arm64-v1.7.0.dmg)**（[SHA-256 校验文件](https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/SinkDuce-macos-arm64-v1.7.0.dmg.sha256)）。
 2. 打开磁盘映像，把 **SinkDuce** 拖进 Applications。
 3. 应用采用 ad-hoc 签名，尚未经 Apple 公证。如果 macOS 拦截，请在**系统设置 → 隐私与安全性 → 仍要打开**中允许并确认。
 4. 升级后请 **Cmd+Q 再开**——点红灯只是藏到菜单栏。
@@ -123,6 +125,15 @@ Library / 会议旁有 **Quick Chat**。要评测召回用 **Recall**。同一�
 
 ---
 
+## 项目 Q&A
+
+在 **Library → 项目 → Q&A** 中管理多轮问题清单。可以新建空清单，也可以导入 Excel 工作簿（`.xlsx`）。
+
+1. **预览导入。** 选择工作表，确认问题与回复列的映射，并检查分组结构。导入已有清单时，先审阅新旧问题与列如何匹配，再应用更新。
+2. **逐项处理。** 按章节、状态和类型管理问题，为不同回复方或轮次添加回复列，并查看历史版本与回复修订。
+3. **根据资料起草。** 为清单上传参考材料，或选用项目文件。可实时查看 AI 助手的起草进度，审阅草稿与来源引用后应用到对应回复。
+4. **交付下一轮。** 将当前工作版本导出为 Excel，可从导出历史取回之前的文件，并用模板复用标题、标志和导出列配置。
+
 ## 报告与修订
 
 在 Chat 或 Quick Chat 中，要求 Agent 根据对话、上传附件和检索资料生成报告。报告在聊天旁的可调宽工作区打开，右上角 **Output / Sources** 卡片集中展示生成文件与来源。
@@ -141,8 +152,10 @@ Library / 会议旁有 **Quick Chat**。要评测召回用 **Recall**。同一�
 | **会中实时** | 实时字幕 + **实时纪要**（要点 / 决策 / 行动项）；**实时翻译**双语字幕，录制中可开关、可换语言。 |
 | **Notes** | 所见即所得编辑（Markdown、表格、图片、任务）。蒸馏、传播引用、入库（图片做 OCR 和视觉描述）。 |
 | **Library** | 文件夹、版本、时间线（链 / 节点）、消息、智能待办。移动 / 归档、列表或网格视图。Definitive、集合总览、冲突对照。 |
+| **全局搜索** | 按 **⌘K / Ctrl+K** 搜索项目名称、文件名和已解析的正文、笔记、会议标题与纪要内容。结果按类别分组，可直接打开对应条目。 |
+| **项目 Q&A** | 多版本问题清单、可审阅的 Excel 导入、回复列与历史、带来源的 AI 草稿，以及可配置的 Excel 导出。 |
 | **入库** | 常见办公 / 网页格式 + OCR；可选 MinerU。图片会生成检索用描述。 |
-| **Chat** | 跨库提问、对话附件、可见步骤、源文件预览、对话内换模型。可选、需确认的联网搜索。Quick Chat + Recall、跨后续会议的**会议群聊**。 |
+| **Chat** | 跨库提问、对话附件、生成期间排队发送后续消息、可见步骤、源文件预览、对话内换模型。可选、需确认的联网搜索。Quick Chat + Recall、跨后续会议的**会议群聊**。 |
 | **报告** | 聊天旁生成带引用的文档；锚定批注、关联修订讨论、逐项接受 / 拒绝、分组审阅、历史恢复，以及 Word / PDF / HTML 导出。 |
 | **配置** | DashScope / OpenRouter 一键配置。Chat / Vision / 会议总结可分模型。Settings 内下载本地 ONNX 语音。中英双语界面。 |
 | **MCP** | 同一进程 65 个工具（只经回环） — 库、文件、检索、会议、笔记、热词、任务，外加访问其他盒子的 **Hub** 工具。 |

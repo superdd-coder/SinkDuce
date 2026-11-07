@@ -9,6 +9,8 @@ const UI_PORT = Number(process.env.UI_PORT) || 5173
 // Prefer 127.0.0.1 over localhost — on macOS localhost often resolves to ::1,
 // which can hit a Docker-published IPv6 listener instead of local uvicorn.
 const API_TARGET = `http://127.0.0.1:${API_PORT}`
+// Optional read-only preview companion; production serves the same route in main.
+const SEARCH_API_TARGET = `http://127.0.0.1:${process.env.SEARCH_API_PORT || API_PORT}`
 const EDITION = process.env.SINKDUCE_EDITION || "community"
 if (!["community", "enterprise"].includes(EDITION)) {
   throw new Error(`Unknown SINKDUCE_EDITION: ${EDITION}`)
@@ -58,6 +60,7 @@ export default defineConfig({
   server: {
     port: UI_PORT,
     proxy: {
+      "/api/search/workspace": { target: SEARCH_API_TARGET, changeOrigin: true },
       // SSE: avoid proxy buffering so chat tokens flush incrementally
       "/api/logs/stream": {
         target: API_TARGET,

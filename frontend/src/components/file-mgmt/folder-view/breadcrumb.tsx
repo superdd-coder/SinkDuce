@@ -6,6 +6,7 @@ import { getFolder } from "@/api/file-mgmt"
 import type { Folder } from "@/types/file-mgmt"
 import { useT } from "@/i18n/use-t"
 import { systemFolderDisplayName } from "@/i18n/system-folder"
+import { groupRootFoldersForGrid } from "./sorted-items"
 
 export function Breadcrumb({ collectionId }: { collectionId: string }) {
   const t = useT()
@@ -62,7 +63,7 @@ export function Breadcrumb({ collectionId }: { collectionId: string }) {
         return null
       }
 
-      const treeHit = findParents(folderTree, currentFolderId!, [])
+      const treeHit = findParents(groupRootFoldersForGrid(folderTree), currentFolderId!, [])
       if (treeHit) {
         if (!cancelled) setPath(treeHit)
         return
@@ -88,14 +89,15 @@ export function Breadcrumb({ collectionId }: { collectionId: string }) {
   }, [currentFolderId, collectionId, folderTree])
 
   return (
-    <div className="pm-files-breadcrumb">
+    <nav className="pm-files-breadcrumb" aria-label={t("fileBrowser.currentPath")}>
       <button
         type="button"
         className="pm-files-crumb shrink-0"
         onClick={() => navigateToRoot(collectionId)}
         title={t("common.root")}
+        aria-current={path.length === 0 ? "location" : undefined}
       >
-        <Home className="h-3.5 w-3.5" />
+        <Home className="h-3.5 w-3.5" aria-hidden="true" /><span>{t("common.root")}</span>
       </button>
       {path.map((folder, i) => (
         <div key={folder.folder_id} className="flex items-center gap-0.5 shrink-0">
@@ -106,6 +108,8 @@ export function Breadcrumb({ collectionId }: { collectionId: string }) {
               "pm-files-crumb truncate",
               i === path.length - 1 && "is-current"
             )}
+            title={systemFolderDisplayName(folder.name, t)}
+            aria-current={i === path.length - 1 ? "location" : undefined}
             onClick={() => {
               if (i < path.length - 1) selectFolder(collectionId, folder.folder_id)
             }}
@@ -114,6 +118,6 @@ export function Breadcrumb({ collectionId }: { collectionId: string }) {
           </button>
         </div>
       ))}
-    </div>
+    </nav>
   )
 }

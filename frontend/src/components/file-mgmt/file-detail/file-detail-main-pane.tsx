@@ -145,7 +145,7 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                   <div className="pm-ws-main-head flex items-center justify-between gap-2 shrink-0">
                     <TabsList
                       className={cn(
-                        "pm-tabs !h-auto w-fit bg-transparent p-0 gap-1 border-0 rounded-none",
+                        "w-fit",
                         "relative shrink-0 items-center isolate"
                       )}
                     >

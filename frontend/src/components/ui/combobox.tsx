@@ -1,7 +1,7 @@
-import { useState, useRef, useEffect, useCallback } from "react"
+import { useState, useRef, useEffect, useCallback, useId } from "react"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
-import { Check } from "lucide-react"
+import { SoftMenu, MenuCheck } from "./menu"
 import { useT } from "@/i18n/use-t"
 
 interface ComboboxProps {
@@ -25,6 +25,8 @@ export function Combobox({
   className,
 }: ComboboxProps) {
   const t = useT()
+  const menuId = useId()
+  const inputRef = useRef<HTMLInputElement>(null)
   const [open, setOpen] = useState(false)
   const [highlightIdx, setHighlightIdx] = useState(-1)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -46,7 +48,8 @@ export function Combobox({
     const handler = (e: MouseEvent) => {
       if (
         containerRef.current &&
-        !containerRef.current.contains(e.target as Node)
+        !containerRef.current.contains(e.target as Node) &&
+        !(e.target instanceof Element && e.target.closest(`[data-combobox="${menuId}"]`))
       ) {
         setOpen(false)
         setHighlightIdx(-1)
@@ -54,9 +57,16 @@ export function Combobox({
     }
     document.addEventListener("mousedown", handler)
     return () => document.removeEventListener("mousedown", handler)
-  }, [])
+  }, [menuId])
+
+  useEffect(() => {
+    if (!open || highlightIdx < 0) return
+    const frame = requestAnimationFrame(() => document.getElementById(`${menuId}-${highlightIdx}`)?.scrollIntoView({ block: 'nearest' }))
+    return () => cancelAnimationFrame(frame)
+  }, [open, highlightIdx, menuId])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing) return
     if (!open) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         setOpen(true)
@@ -65,10 +75,13 @@ export function Combobox({
       return
     }
     if (e.key === "Escape") {
+      e.preventDefault()
+      e.stopPropagation()
       setOpen(false)
       setHighlightIdx(-1)
       return
     }
+    if (e.key === "Tab") { setOpen(false); setHighlightIdx(-1); return }
     if (e.key === "Enter") {
       e.preventDefault()
       if (highlightIdx >= 0 && highlightIdx < filtered.length) {
@@ -94,6 +107,9 @@ export function Combobox({
   return (
     <div ref={containerRef} className={cn("relative", className)}>
       <Input
+        ref={inputRef}
+        role="combobox" aria-expanded={open} aria-controls={`${menuId}-list`} aria-autocomplete="list"
+        aria-activedescendant={open && highlightIdx >= 0 ? `${menuId}-${highlightIdx}` : undefined}
         value={value}
         onChange={(e) => {
           onChange(e.target.value)
@@ -106,11 +122,8 @@ export function Combobox({
         disabled={disabled}
         autoComplete="off"
       />
-      {open && (
-        <div
-          role="listbox"
-          className="pm-menu absolute z-50 mt-1 w-full max-h-48 overflow-y-auto"
-        >
+      <SoftMenu open={open && !disabled} portal anchorRef={inputRef} matchAnchorWidth onClose={() => setOpen(false)}
+        data-combobox={menuId} role="listbox" id={`${menuId}-list`} className="sd-combobox-menu">
           {options.length === 0 ? (
             <div className="pm-menu-item is-empty pointer-events-none">
               {t("common.noOptions")}
@@ -125,30 +138,28 @@ export function Combobox({
               return (
                 <button
                   key={opt}
+                  id={`${menuId}-${i}`}
                   type="button"
                   role="option"
                   aria-selected={on}
                   className={cn(
                     "pm-menu-item",
                     on && "is-on",
-                    i === highlightIdx && !on && "bg-[var(--pm-green-wash)]"
+                    i === highlightIdx && "is-highlight"
                   )}
                   onMouseDown={(e) => {
                     e.preventDefault()
-                    select(opt)
                   }}
+                  onClick={() => select(opt)}
                   onMouseEnter={() => setHighlightIdx(i)}
                 >
                   <span className="flex-1 text-left truncate">{opt}</span>
-                  {on && (
-                    <Check className="h-3.5 w-3.5 shrink-0 text-[var(--pm-green)]" />
-                  )}
+                  <MenuCheck checked={on} />
                 </button>
               )
             })
           )}
-        </div>
-      )}
+      </SoftMenu>
     </div>
   )
 }

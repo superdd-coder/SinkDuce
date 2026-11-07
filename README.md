@@ -13,7 +13,7 @@ $$\text{\textbf{Spark. Sink. Educe.}}$$
 [![Docker](https://img.shields.io/badge/docker-ready-2496ed.svg?style=flat-square)](https://www.docker.com/)
 [![MCP](https://img.shields.io/badge/MCP-65_tools-6e47ff.svg?style=flat-square)](https://modelcontextprotocol.io/)
 
-[Quick start](#quick-start) · [Reports](#reports-and-review) · [Features](#features) · [MCP](#mcp) · [中文](README_CN.md)
+[Quick start](#quick-start) · [Project Q&A](#project-qa) · [Reports](#reports-and-review) · [Features](#features) · [MCP](#mcp) · [中文](README_CN.md)
 
 </div>
 
@@ -25,6 +25,8 @@ LLM, embedding, and speech can use cloud APIs or **local models** (Ollama, LM St
 
 **From sources to a finished document:** attach files in chat, generate a cited report, leave comments, and review changes where they belong. Meeting minutes support tables and SVG diagrams, with Word, PDF, and Markdown exports. The macOS app includes the PDF conversion runtime.
 
+The workspace uses a compact navigation rail, a shared menu and dialog style, and a glass surface for the chat sources panel.
+
 Source code is available under **AGPL-3.0-or-later**, including role and access management. See the [changelog](CHANGELOG.md) for release details.
 
 ---
@@ -33,7 +35,7 @@ Source code is available under **AGPL-3.0-or-later**, including role and access 
 
 ### macOS (Apple Silicon)
 
-1. Download **[SinkDuce v1.6.2 for Apple Silicon](https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/SinkDuce-macos-arm64-v1.6.2.dmg)** ([SHA-256](https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/SinkDuce-macos-arm64-v1.6.2.dmg.sha256)).
+1. Download **[SinkDuce v1.7.0 for Apple Silicon](https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/SinkDuce-macos-arm64-v1.7.0.dmg)** ([SHA-256](https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/SinkDuce-macos-arm64-v1.7.0.dmg.sha256)).
 2. Open the disk image and drag **SinkDuce** into Applications.
 3. The app is ad-hoc signed and is not notarized. If macOS blocks it, allow it in **System Settings → Privacy & Security → Open Anyway**, then confirm.
 4. After an update: **Cmd+Q** then reopen — the red window button only hides to the menu bar.
@@ -123,6 +125,15 @@ Mark **Definitive** sources for collection overviews and **conflict** compare (s
 
 ---
 
+## Project Q&A
+
+Open **Library → a Collection → Q&A** to manage a question list across rounds of review. Start with a blank list or import an Excel workbook (`.xlsx`).
+
+1. **Review the import.** Select a sheet, check the question and reply column mapping, and review the outline. When importing into an existing list, review how incoming questions and columns match the current list before applying the update.
+2. **Work through the questions.** Organize them by section, status, and type. Add reply columns for different contributors or review rounds, and consult earlier versions and reply history.
+3. **Draft with sources.** Add reference material to the list or select project files. Follow the AI assistant’s progress, then review the draft and its source references before applying it.
+4. **Share the next round.** Export the working list to Excel and reopen prior exports from its history. Reuse a template for the document title, logo, and columns.
+
 ## Reports and review
 
 Ask Chat or Quick Chat to create a report from your conversation, uploaded files, and retrieved sources. The report opens beside chat in a resizable workspace, with an **Output / Sources** card to keep generated files and evidence within reach.
@@ -141,8 +152,10 @@ Ask Chat or Quick Chat to create a report from your conversation, uploaded files
 | **Live meeting** | Realtime captions with **live summary** (points / decisions / actions) and **live translation** — bilingual captions, toggled or re-targeted mid-recording. |
 | **Notes** | WYSIWYG editor (Markdown, tables, images, tasks). Distill, propagate citations, ingest (OCR + vision on images). |
 | **Library** | Folders, versions, timeline (chains / nodes), messages, smart todos. Move / archive, list or grid view. Definitive flag, collection overview, conflict compare. |
+| **Workspace search** | Press **⌘K / Ctrl+K** to find project names, file names and parsed text, notes, meeting titles, and minutes content. Results are grouped by category and open the matching item. |
+| **Project Q&A** | Versioned question lists, reviewable Excel imports, reply columns and history, source-backed AI drafts, and configurable Excel exports. |
 | **Ingest** | Common office / web formats + OCR; optional MinerU. Images described for search. |
-| **Chat** | Multi-collection Q&A, conversation attachments, visible steps, source-file previews, in-chat model switch. Optional confirmed web search. Quick Chat + Recall, **meeting group chat** across follow-ups. |
+| **Chat** | Multi-collection Q&A, conversation attachments, follow-up message queue during generation, visible steps, source-file previews, in-chat model switch. Optional confirmed web search. Quick Chat + Recall, **meeting group chat** across follow-ups. |
 | **Reports** | Cited documents beside chat; anchored comments, linked revision discussions, per-change accept / reject, grouped review, history restoration, Word / PDF / HTML export. |
 | **Setup** | OneShot for DashScope / OpenRouter. Separate models for chat, vision, and meeting summary. Local ONNX ASR download in Settings. zh-CN / English UI. |
 | **MCP** | 65 tools on the same process (loopback only) — collections, files, search, meetings, notes, hot words, tasks, plus **Hub** tools to reach other boxes. |

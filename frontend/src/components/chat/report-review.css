@@ -1,8 +1,8 @@
-.pm-review-chip{display:inline-flex;align-items:center;gap:7px;max-width:100%;min-height:32px;padding:6px 11px;border:1px solid color-mix(in srgb,var(--pm-ink) 6%,transparent);border-radius:999px;background:color-mix(in srgb,var(--pm-ink) 2%,white);color:var(--pm-muted);font:400 12px/1.4 var(--type-font-ui);box-shadow:none;cursor:pointer;transition:background 180ms var(--pm-ease),border-color 180ms var(--pm-ease)}
-.pm-review-chip:hover{background:color-mix(in srgb,var(--pm-green) 3%,white);border-color:color-mix(in srgb,var(--pm-green) 15%,transparent);color:var(--pm-green-deep)}
+.pm-review-chip{display:inline-flex;align-items:center;gap:7px;max-width:100%;min-height:32px;padding:6px 11px;border:0;border-radius:999px;background:var(--sd-field);color:var(--pm-muted);font:400 12px/1.4 var(--type-font-ui);box-shadow:none;cursor:pointer;transition:background 180ms var(--pm-ease),border-color 180ms var(--pm-ease)}
+.pm-review-chip:hover{background:var(--sd-hover);color:var(--sd-ink)}
 .pm-review-chip:disabled{opacity:.55;cursor:default}
 .pm-review-chip.is-history{background:transparent;color:var(--pm-muted)}
-.pm-review-chip.is-history:hover{border-color:color-mix(in srgb,var(--pm-green) 20%,transparent);background:color-mix(in srgb,var(--pm-green) 3%,white);color:var(--pm-green-deep)}
+.pm-review-chip.is-history:hover{background:var(--sd-hover);color:var(--sd-ink)}
 .pm-review-chip-symbol{display:inline-grid;place-items:center;flex:0 0 14px;height:18px;color:inherit}
 .pm-review-chip-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pm-review-chip-count{font:400 10px/1 var(--type-font-ui);font-variant-numeric:tabular-nums;color:var(--pm-faint)}
@@ -81,13 +81,13 @@
 .pm-review-card-content[hidden] { display: none; }
 .pm-review-comment {
   padding: 16px;
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--pm-float) 65%, white);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pm-ink) 7%, transparent), 0 4px 16px #18291f04;
+  border-radius: var(--sd-radius-card);
+  background: var(--sd-surface-raised);
+  box-shadow: var(--sd-shadow-control);
 }
 .pm-review-comment.is-active, .pm-review-comment.is-draft {
-  background: color-mix(in srgb, var(--pm-float) 45%, white);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pm-green) 25%, transparent), 0 6px 20px #18291f08;
+  background: var(--sd-selected);
+  box-shadow: none;
 }
 .pm-review-comment.is-history { background: color-mix(in srgb, #a28c6c 2%, white); }
 .pm-review-draft-title {
@@ -133,9 +133,9 @@
   height: 44px;
   padding: 0 12px;
   border: 0;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--pm-float) 75%, white);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pm-ink) 6%, transparent);
+  border-radius: var(--sd-radius-pill);
+  background: var(--sd-surface-raised);
+  box-shadow: none;
   color: var(--pm-text);
   font: var(--type-meta);
   text-align: left;
@@ -143,7 +143,7 @@
   transition: background 160ms var(--pm-ease), box-shadow 160ms var(--pm-ease);
 }
 .pm-review-compact > span:nth-child(2) { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pm-review-compact:hover { background: var(--pm-green-wash); }
+.pm-review-compact:hover { background: var(--sd-hover); }
 .pm-review-compact.is-history { background: color-mix(in srgb, #a28c6c 7%, var(--pm-float)); }
 .pm-review-group-toggle {
   display: flex;
@@ -167,20 +167,18 @@
 .pm-review-compact:focus-visible, .pm-review-group-toggle:focus-visible { outline: 2px solid var(--pm-green); outline-offset: 3px; }
 .pm-review-rail .pm-review-empty { display: flex; align-items: center; gap: 9px; padding: 12px 2px; }
 .pm-review-empty p { margin: 0; }
-.pm-review-comment:not(.is-history) { background: color-mix(in srgb, var(--pm-green) 2%, var(--pm-float)); }
+.pm-review-comment:not(.is-history) { background: var(--sd-surface-raised); }
 .pm-review-comment.is-active, .pm-review-comment.is-history.is-active {
-  background: color-mix(in srgb, var(--pm-green) 4%, white);
-  box-shadow: inset 3px 0 0 var(--pm-green), inset 0 0 0 1.5px color-mix(in srgb, var(--pm-green) 55%, transparent), 0 8px 24px #18291f10;
+  background: var(--sd-selected);
+  box-shadow: none;
 }
-.pm-review-comment.is-active .pm-review-number { background: var(--pm-green); color: white; }
+.pm-review-comment.is-active .pm-review-number { background: var(--sd-surface-raised); color: var(--sd-brand); border-radius: 50%; }
 .pm-review-comment.is-history .pm-review-location { color: #796851; }
 .pm-review-compact.is-history .pm-review-number { color: #796851; background: #a28c6c18; }
 
 /* Sent review references grow from the original pill; the portal keeps replies still. */
 .pm-review-chip[data-surface-active] { visibility: hidden; }
-.pm-review-popover-positioner:has(.pm-review-history-popover) {
-  filter: drop-shadow(0 2px 4px #18291f0c) drop-shadow(0 12px 24px #18291f17);
-}
+
 .pm-review-history-popover {
   display: flex;
   flex-direction: column;

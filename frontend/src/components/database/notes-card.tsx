@@ -1,4 +1,4 @@
-import { ChevronRight, Loader2 } from "lucide-react"
+import { ChevronRight, Loader2, Plus, Upload } from "lucide-react"
 import { useShallow } from "zustand/react/shallow"
 import {
   useState,
@@ -328,18 +328,22 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
                 <Button
                   type="button"
                   variant="ghost"
-                  size="xs"
+                  size="icon-sm"
+                  aria-label={t("common.import")}
+                  title={t("common.import")}
                   onClick={openImport}
                 >
-                  {t("common.import")}
+                  <Upload />
                 </Button>
                 <Button
                   type="button"
                   variant="ghost"
-                  size="xs"
+                  size="icon-sm"
+                  aria-label={t("library.newNote")}
+                  title={t("library.newNote")}
                   onClick={() => void handleCreate()}
                 >
-                  {t("common.new")}
+                  <Plus />
                 </Button>
               </div>
             </div>

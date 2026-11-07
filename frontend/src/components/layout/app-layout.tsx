@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, memo, useRef, Profiler, type CSSProperties } from "react"
 import { useShallow } from "zustand/react/shallow"
 import { useAppStore, type SidebarView } from "@/stores/app-store"
-import { Header } from "./header"
 import { cn } from "@/lib/utils"
 import { Sidebar } from "./sidebar"
 import { LogViewer } from "./log-viewer"
@@ -238,17 +237,16 @@ export function AppLayout() {
   )
 
   return (
-    <div className="pm-shell-root h-screen flex flex-col">
-      <Header />
-      <div className="flex flex-1 overflow-hidden min-h-0">
+    <div className="pm-shell-root sd-shell h-screen">
+      <div className="pm-shell-body">
         <Sidebar />
         {developerMode && <PerfHud />}
         {/*
-          Sage canvas behind float cards; padding = soft-shadow bleed.
+          Workspace keeps the shared card shadow gutter.
         */}
         <main
           className={cn(
-            "pm-shell-main flex-1 min-w-0 flex flex-col overflow-hidden p-3 pt-1",
+            "pm-shell-main flex-1 min-w-0 min-h-0 flex flex-col",
             logPanelOpen && "has-backend-logs"
           )}
         >

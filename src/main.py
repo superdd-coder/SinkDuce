@@ -336,6 +336,7 @@ from src.speakers.routes import router as speakers_router
 from src.hot_words.routes import router as hot_words_router
 from src.pairing.routes import router as pairing_router
 from src.notes.routes import router as notes_router
+from src.qa.routes import router as qa_router
 from src.api.routes.sessions import router as sessions_router
 from src.api.routes.chat_attachments import router as chat_attachments_router
 from src.reports.routes import router as chat_reports_router
@@ -358,6 +359,8 @@ app.include_router(recall_router, prefix="/api")
 from src.api.routes.agent import agent_router, meeting_router as agent_meeting_router  # noqa: E402
 from src.api.routes.search import router as agent_search_router  # noqa: E402
 app.include_router(agent_search_router, prefix="/api")
+from src.search.routes import router as workspace_search_router  # noqa: E402
+app.include_router(workspace_search_router, prefix="/api")
 app.include_router(agent_router, prefix="/api")
 app.include_router(agent_meeting_router, prefix="/api")
 app.include_router(logs_router, prefix="/api")
@@ -366,6 +369,7 @@ app.include_router(info_router, prefix="/api")
 app.include_router(meeting_router, prefix="/api")
 app.include_router(speakers_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")
+app.include_router(qa_router, prefix="/api")
 app.include_router(hot_words_router)
 app.include_router(pairing_router)
 

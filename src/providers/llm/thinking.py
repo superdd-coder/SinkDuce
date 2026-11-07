@@ -7,18 +7,21 @@ Model families disagree on how "disable thinking" is expressed:
     reasoning_effort (low/high/max) instead (百炼第三方智谱, qwen3.8 …)
   - none    — the endpoint rejects the thinking parameters entirely
 
-`probe_thinking_mode` sends one minimal thinking-OFF request (max_tokens=1)
-to classify a model. It runs at provider save time so real tasks never pay
-the trial-and-error cost; `is_always_think_error` also powers a one-shot
+`probe_thinking_mode` sends a minimal thinking-OFF request with a one-token
+cap and the same parameter compatibility as other completions. It runs at
+provider save time; `is_always_think_error` also powers a one-shot
 runtime retry for models the probe could not classify (auth/network issues).
 """
 
 from __future__ import annotations
 
 import logging
+import re
 
 import httpx
 from openai import OpenAI
+
+from .parameters import create_chat_completion
 
 logger = logging.getLogger(__name__)
 
@@ -66,24 +69,30 @@ def is_always_think_error(err: BaseException) -> bool:
     return False
 
 
-_PARAM_REJECT_MARKERS = (
-    "unrecognized request argument",
-    "unknown parameter",
-    "unknown field",
-    "extra fields not permitted",
-    "unexpected keyword",
-    "not permitted",
-    "not allowed",
+_THINKING_PARAMS = ("enable_thinking", "thinking")
+_THINKING_PARAM_NAME = r"""[\\'"`]*(?:enable_thinking|thinking)(?![\w.-])"""
+_THINKING_PARAM_REJECTION = re.compile(
+    rf"\b(?:unsupported parameter|unknown (?:parameter|field)|"
+    rf"unrecognized request argument(?: supplied)?|unexpected keyword(?: argument)?)"
+    rf"(?:\s*:\s*|\s+){_THINKING_PARAM_NAME}(?!\s+(?:mode|model)\b)"
+    rf"""|(?:^|\n)\s*(?:(?:parameter|field)\s+)?{_THINKING_PARAM_NAME}[\\'"`]*"""
+    r"\s+(?:is\s+)?not (?:allowed|permitted|supported)\b",
+    re.IGNORECASE,
 )
 
 
 def is_thinking_param_unsupported(err: BaseException) -> bool:
     """True when the 400 rejects the thinking parameter name itself."""
-    msg = str(err)
-    low = msg.lower()
-    if "enable_thinking" not in low and "thinking" not in low:
+    body = getattr(err, "body", None)
+    detail = body.get("error", body) if isinstance(body, dict) else {}
+    detail = detail if isinstance(detail, dict) else {}
+    param = detail.get("param") or getattr(err, "param", None)
+    if param is not None and param not in _THINKING_PARAMS:
         return False
-    return any(marker in low for marker in _PARAM_REJECT_MARKERS)
+    code = detail.get("code") or getattr(err, "code", None)
+    if param in _THINKING_PARAMS and code == "unsupported_parameter":
+        return True
+    return bool(_THINKING_PARAM_REJECTION.search(str(detail.get("message") or err)))
 
 
 def probe_thinking_mode(
@@ -92,7 +101,7 @@ def probe_thinking_mode(
     model: str,
     is_dashscope: bool | None = None,
 ) -> str:
-    """Classify a model's thinking posture with one minimal request.
+    """Classify a model's thinking posture with a minimal request.
 
     Returns "toggle" | "always" | "none", or "" when the probe is
     inconclusive (auth/network/other errors) — callers keep the previous
@@ -107,11 +116,15 @@ def probe_thinking_mode(
         timeout=_PROBE_TIMEOUT,
     )
     try:
-        client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": "hi"}],
-            max_tokens=1,
-            extra_body=extra,
+        create_chat_completion(
+            client.chat.completions.create,
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 1,
+                "extra_body": extra,
+            },
+            base_url=base_url,
         )
         remember_thinking_mode(base_url, model, "toggle")
         return "toggle"

@@ -244,6 +244,8 @@ class QdrantManager:
         top_k: int = 10,
         filter_condition: Filter | None = None,
     ) -> list[dict[str, Any]]:
+        from src.rag.source_scope import source_filter
+        filter_condition = source_filter(filter_condition)
         results = self.client.query_points(
             collection_name=collection,
             query=query_vector,
@@ -293,7 +295,13 @@ class QdrantManager:
         scroll_filter: Filter | None = None,
         with_payload: list[str] | bool = True,
         with_vectors: bool = False,
+        include_qa_materials: bool = False,
     ) -> tuple[list[dict[str, Any]], Any]:
+        from src.rag.source_scope import source_filter
+        # Index maintenance must rebuild the entire vocabulary. Retrieval callers
+        # retain the scoped default and never expose this switch as user input.
+        if not include_qa_materials:
+            scroll_filter = source_filter(scroll_filter)
         points, next_offset = self.client.scroll(
             collection_name=collection,
             scroll_filter=scroll_filter,
@@ -353,6 +361,8 @@ class QdrantManager:
             logger.warning("[Qdrant] hybrid_search: sparse_vector is None, falling back to dense")
             return self.search(collection, query_vector, top_k, filter_condition=filter_condition)
 
+        from src.rag.source_scope import source_filter
+        filter_condition = source_filter(filter_condition)
         from qdrant_client.models import FusionQuery, Prefetch
 
         sparse = SparseVector(
@@ -387,15 +397,17 @@ class QdrantManager:
         self, collection: str, ids: list[str]
     ) -> list[dict[str, Any]]:
         """Retrieve points by their IDs."""
-        points = self.client.retrieve(
+        if not ids:
+            return []
+        from qdrant_client.models import HasIdCondition
+        from src.rag.source_scope import source_filter
+        points, _ = self.client.scroll(
             collection_name=collection,
-            ids=ids,
-            with_payload=True,
+            scroll_filter=source_filter(Filter(must=[HasIdCondition(has_id=ids)])),
+            limit=len(ids), with_payload=True,
         )
-        return [
-            {"id": str(p.id), "payload": p.payload or {}}
-            for p in points
-        ]
+        by_id = {str(p.id): {"id": str(p.id), "payload": p.payload or {}} for p in points}
+        return [by_id[str(pid)] for pid in ids if str(pid) in by_id]
 
     def update_collection_config(self, collection: str, updates: dict) -> dict:
         """Update collection config with partial updates. Returns error dict or merged config."""

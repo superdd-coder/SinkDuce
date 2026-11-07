@@ -5,6 +5,7 @@ import { useT } from "@/i18n/use-t"
 import { createSvgPreview, getSvgPreviewSize } from "@/lib/svg-preview"
 import { constrainSvgViewport, createSvgViewport, fitSvgSize, inlineSvgAspectRatio, zoomSvgAt } from "@/lib/svg-viewport"
 import type { Size, SvgViewport } from "@/lib/svg-viewport"
+import { Maximize, Minus, Plus } from "lucide-react"
 
 export function SvgPreviewCanvas({ source, inline = false, onPreviewError }: {
   source: string
@@ -75,7 +76,7 @@ export function SvgPreviewCanvas({ source, inline = false, onPreviewError }: {
   const attachImage = useCallback((node: HTMLImageElement | null) => {
     if (!node) return
     try {
-      const preview = createSvgPreview(source, true)
+      const preview = createSvgPreview(source, true, "porcelain")
       if (!preview) { failPreview(); return }
       node.src = preview.url
       return preview.dispose
@@ -129,10 +130,10 @@ export function SvgPreviewCanvas({ source, inline = false, onPreviewError }: {
   return (
     <>
       <div className="chat-svg-zoom-toolbar">
-        <button type="button" aria-label={t("chat.svgZoomOut")} title={t("chat.svgZoomOut")} disabled={failed || view.scale <= 0.25} onClick={() => zoom(0.8)}>−</button>
+        <button type="button" aria-label={t("chat.svgZoomOut")} title={t("chat.svgZoomOut")} disabled={failed || view.scale <= 0.25} onClick={() => zoom(0.8)}><Minus size={15} /></button>
         <output aria-live="polite" aria-label={t("chat.svgZoomLevel")} title={t("chat.svgZoomLevel")}>{Math.round(view.scale * 100)}%</output>
-        <button type="button" aria-label={t("chat.svgZoomIn")} title={t("chat.svgZoomIn")} disabled={failed || view.scale >= 8} onClick={() => zoom(1.25)}>+</button>
-        <button type="button" aria-label={t("chat.svgFit")} disabled={failed} onClick={fit}>{t("chat.svgFit")}</button>
+        <button type="button" aria-label={t("chat.svgZoomIn")} title={t("chat.svgZoomIn")} disabled={failed || view.scale >= 8} onClick={() => zoom(1.25)}><Plus size={15} /></button>
+        <button type="button" aria-label={t("chat.svgFit")} title={t("chat.svgFit")} disabled={failed} onClick={fit}><Maximize size={15} /></button>
       </div>
       <div
         ref={canvasRef}

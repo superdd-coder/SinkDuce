@@ -1,0 +1,111 @@
+/* Keep the working surface quiet: one summary, one action area, and details on demand. */
+.qa-dialog.qa-exchange-dialog {
+  --qa-exchange-line: color-mix(in srgb, var(--pm-ink) 9%, transparent);
+  gap: 14px;
+}
+.qa-dialog.qa-exchange-dialog.qa-exchange-compact { width: min(520px, calc(100vw - 32px)); max-width: none; }
+.qa-dialog.qa-exchange-dialog.qa-exchange-wide { width: min(1160px, calc(100vw - 32px)); }
+.qa-dialog.qa-exchange-dialog.qa-exchange-review { width: min(900px, calc(100vw - 32px)); max-width: none; }
+.qa-dialog.qa-exchange-dialog [data-slot="dialog-header"] { min-width: 0; padding-inline-end: 34px; }
+.qa-exchange-file, .qa-exchange-export-columns {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: var(--type-meta);
+  color: var(--pm-muted);
+}
+.qa-exchange-file { margin-top: 3px; }
+.qa-dialog.qa-exchange-dialog .qa-upload-target .qa-upload {
+  gap: 10px;
+  padding: 26px 18px;
+  border: 1px dashed color-mix(in srgb, var(--pm-green) 27%, transparent);
+  border-radius: var(--pm-r);
+  background: color-mix(in srgb, var(--pm-green-wash) 28%, white);
+  box-shadow: none;
+}
+.qa-dialog.qa-exchange-dialog .qa-upload-target .qa-upload:hover,
+.qa-dialog.qa-exchange-dialog .qa-upload-target.is-dragging .qa-upload {
+  border-color: var(--pm-green);
+  background: var(--pm-green-wash);
+}
+.qa-dialog.qa-exchange-dialog .qa-upload-icon, .qa-exchange-file-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: var(--pm-r-sm);
+  background: var(--pm-green-wash);
+  color: var(--pm-green);
+}
+.qa-dialog.qa-exchange-dialog .qa-upload-icon svg, .qa-exchange-file-icon svg { width: 19px; height: 19px; }
+.qa-dialog.qa-exchange-dialog .qa-upload-title { font: var(--type-label); color: var(--pm-green); }
+.qa-dialog.qa-exchange-dialog .qa-upload-hint { font: var(--type-meta); }
+
+.qa-exchange-export-summary { display: flex; align-items: flex-start; gap: 12px; min-width: 0; padding: 10px 0 12px; border-bottom: 1px solid var(--qa-exchange-line); }
+.qa-exchange-export-summary > div { min-width: 0; }
+.qa-exchange-export-summary h3 { font: var(--type-label); color: var(--pm-text); overflow-wrap: anywhere; margin-bottom: 3px; }
+.qa-exchange-export-columns { margin-top: 6px; }
+.qa-exchange-export-disclosures { display: grid; gap: 4px; }
+.qa-exchange-export-disclosures:empty { display: none; }
+.qa-dialog.qa-exchange-dialog .qa-exchange-export-disclosures > details > summary { color: var(--pm-green); }
+.qa-dialog.qa-exchange-dialog .qa-exchange-export-disclosures .qa-export-options { padding: 4px 0 10px; gap: 10px 16px; }
+.qa-exchange-export-disclosures .qa-version-row { padding-inline: 0; }
+.qa-exchange-export-footer { display: flex; justify-content: flex-end; border-top: 1px solid var(--qa-exchange-line); padding-top: 12px; }
+
+.qa-dialog.qa-exchange-dialog .qa-import-review { max-height: none; }
+.qa-dialog.qa-exchange-dialog .qa-review-heading { align-items: flex-start; }
+.qa-dialog.qa-exchange-dialog .qa-review-heading h2 { margin-top: 5px; }
+.qa-dialog.qa-exchange-dialog .qa-review-heading > button { margin-top: 3px; }
+.qa-dialog.qa-exchange-dialog .qa-review-totals { margin: 8px 0 12px; }
+.qa-recognized-column { margin-top: 3px; }
+.qa-dialog.qa-exchange-dialog .qa-import-outcomes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  padding: 9px 0;
+  margin: 0;
+  border-block: 1px solid var(--qa-exchange-line);
+  border-radius: 0;
+  background: none;
+}
+.qa-dialog.qa-exchange-dialog .qa-import-outcomes > div { flex-direction: row; align-items: baseline; gap: 5px; padding: 0; background: none; }
+.qa-dialog.qa-exchange-dialog .qa-import-outcomes dd { order: -1; font: var(--type-label); font-variant-numeric: tabular-nums; }
+.qa-dialog.qa-exchange-dialog .qa-decision-hint { margin-top: 7px; }
+.qa-dialog.qa-exchange-dialog .qa-merge-summary { margin: 10px 0 16px; padding: 0; background: none; font: var(--type-meta); }
+.qa-dialog.qa-exchange-dialog .qa-merge-summary > .qa-meta { margin-top: 2px; }
+.qa-dialog.qa-exchange-dialog .qa-import-decision, .qa-dialog.qa-exchange-dialog .qa-import-conflict {
+  margin: 12px 0;
+  padding: 14px;
+  border: 1px solid var(--qa-exchange-line);
+  border-radius: var(--pm-r);
+  background: white;
+}
+.qa-dialog.qa-exchange-dialog .qa-import-conflicts { margin: 16px 0; }
+.qa-dialog.qa-exchange-dialog .qa-reply-comparison { gap: 12px; padding: 12px 0; }
+.qa-dialog.qa-exchange-dialog .qa-merge-comparison { gap: 8px; margin-top: 10px; }
+.qa-dialog.qa-exchange-dialog .qa-merge-comparison > section { padding: 10px; background: color-mix(in srgb, var(--pm-canvas) 62%, white); }
+.qa-dialog.qa-exchange-dialog .qa-merge-comparison > section[data-selected] { background: var(--pm-green-wash); }
+.qa-dialog.qa-exchange-dialog .qa-merge-text { margin: 7px 0 12px; }
+.qa-dialog.qa-exchange-dialog [data-qa-import-decision]:focus-visible { outline: 2px solid var(--pm-green); outline-offset: -2px; }
+.qa-dialog.qa-exchange-dialog .qa-column-destinations { flex-direction: row; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+.qa-dialog.qa-exchange-dialog .qa-column-destinations > div { padding: 0; border: 0; }
+.qa-dialog.qa-exchange-dialog .qa-review-details { margin-top: 16px; padding-top: 7px; }
+.qa-dialog.qa-exchange-dialog .qa-review-details-body { padding-top: 10px; }
+.qa-dialog.qa-exchange-dialog .qa-review-detail-section + .qa-review-detail-section { margin-top: 18px; padding-top: 14px; }
+.qa-dialog.qa-exchange-dialog .qa-table-review { box-shadow: none; border: 1px solid var(--qa-exchange-line); }
+.qa-dialog.qa-exchange-dialog .qa-import-grid th, .qa-dialog.qa-exchange-dialog .qa-import-grid td { min-width: 190px; padding: 11px 13px; }
+.qa-dialog.qa-exchange-dialog .qa-import-grid .qa-source-row { min-width: 132px; width: 132px; max-width: 132px; }
+.qa-dialog.qa-exchange-dialog .qa-source-help { margin-bottom: 10px; }
+.qa-dialog.qa-exchange-dialog .qa-import-footer { border-top: 1px solid var(--qa-exchange-line); padding-top: 11px; gap: 9px 14px; overflow: visible; flex-wrap: wrap; }
+.qa-dialog.qa-exchange-dialog .qa-import-primary { margin-inline-start: auto; flex: 0 1 auto; flex-wrap: wrap; justify-content: flex-end; }
+.qa-dialog.qa-exchange-dialog .qa-import-submit { gap: 8px; min-width: 0; }
+.qa-dialog.qa-exchange-dialog .qa-import-submit > p { min-width: 0; overflow-wrap: anywhere; }
+
+@media (max-width: 620px) {
+  .qa-dialog.qa-exchange-dialog .qa-import-primary { flex-basis: 100%; }
+  .qa-dialog.qa-exchange-dialog .qa-import-footer { padding-top: 8px; }
+  .qa-dialog.qa-exchange-dialog .qa-review-heading { gap: 7px; }
+  .qa-dialog.qa-exchange-dialog .qa-review-heading > button { max-width: 42%; text-align: end; white-space: normal; }
+  .qa-dialog.qa-exchange-dialog .qa-region-settings > div { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

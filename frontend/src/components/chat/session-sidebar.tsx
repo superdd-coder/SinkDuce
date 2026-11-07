@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react"
 import { useShallow } from "zustand/react/shallow"
-import { useAppStore } from "@/stores/app-store"
+import { _abortStream, useAppStore } from "@/stores/app-store"
 import {
   deleteSession,
 } from "@/api/client"
@@ -13,7 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Trash2, MessageSquare } from "lucide-react"
+import { Trash2, MessageSquare, Plus } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
@@ -93,6 +93,8 @@ export function SessionSidebar({ collapsed = false }: { collapsed?: boolean }) {
   const handleDelete = async (id: string) => {
     try {
       await deleteSession(id)
+      useAppStore.getState().setChatQueue(id, () => undefined)
+      _abortStream(id)
       if (id === sessionId) {
         useAppStore.getState().setSessionId(null)
       }
@@ -141,8 +143,9 @@ export function SessionSidebar({ collapsed = false }: { collapsed?: boolean }) {
               className="pm-rail-new"
               onClick={handleNew}
               title={t("chat.newChat")}
+              aria-label={t("chat.newChat")}
             >
-              {t("common.new")}
+              <Plus size={16} aria-hidden="true" />
             </button>
           </div>
 

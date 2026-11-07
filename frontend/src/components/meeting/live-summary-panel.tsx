@@ -68,19 +68,23 @@ export function LiveSummaryPanel({
   error,
   paused,
   speakerNames,
+  mode = "live",
 }: {
   state: LiveSummaryState | null
   error: string | null
   paused: boolean
   speakerNames: Record<string, string>
+  /** Saved minutes retain the entries, without transient recording status. */
+  mode?: "live" | "saved"
 }) {
   const t = useT()
+  const isLive = mode === "live"
   const prevEntriesRef = useRef<LiveSummaryEntry[] | null>(null)
   const [diff, setDiff] = useState<{ added: Set<string>; amended: Set<string> }>({
     added: new Set(),
     amended: new Set(),
   })
-  const [, forceTick] = useState(0)
+  const [now, setNow] = useState(Date.now)
 
   const entries = state?.entries ?? []
   useEffect(() => {
@@ -94,17 +98,18 @@ export function LiveSummaryPanel({
 
   // Keep the "updated X ago" meta fresh without a snapshot
   useEffect(() => {
-    const id = setInterval(() => forceTick((n) => n + 1), 30_000)
+    if (!isLive) return
+    const id = setInterval(() => setNow(Date.now()), 30_000)
     return () => clearInterval(id)
-  }, [])
+  }, [isLive])
 
   const grouped = groupEntriesByKind(entries)
-  const age = relativeAge(state?.updated_at ?? "", Date.now())
-  const hasContent = entries.length > 0 || !!state?.topic
+  const age = isLive ? relativeAge(state?.updated_at ?? "", now) : null
+  const hasContent = entries.length > 0 || (isLive && !!state?.topic)
 
   return (
     <div className="pm-ls-panel">
-      {state?.topic ? (
+      {isLive && state?.topic ? (
         <div className={cn("pm-ls-topic", state.topic.closed && "is-closed")}>
           <span className="pm-ls-topic-label">{t("meeting.liveSummaryTopic")}</span>
           <span className="pm-ls-topic-text">{state.topic.text}</span>
@@ -144,10 +149,10 @@ export function LiveSummaryPanel({
           })}
         </div>
       ) : (
-        <p className="pm-ls-note">{t("meeting.liveSummaryEmpty")}</p>
+        <p className="pm-ls-note">{t(isLive ? "meeting.liveSummaryEmpty" : "meeting.liveSummarySavedEmpty")}</p>
       )}
 
-      {state && (state.round > 0 || state.updated_at) ? (
+      {age && state && (state.round > 0 || state.updated_at) ? (
         <p className="pm-ls-meta">
           ✦ {t(AGE_KEY_MAP[age.key], { n: age.n })}
         </p>
