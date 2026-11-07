@@ -9,7 +9,9 @@ from openai import OpenAI
 
 from src.config import LLMProviderConfig
 from src.providers.base import LLMProvider
+from src.providers.llm.parameters import create_chat_completion, prepare_chat_kwargs
 from src.providers.llm.thinking import is_always_think_error
+from src.providers.llm.thinking import is_thinking_param_unsupported
 from src.providers.llm.thinking import learned_thinking_mode
 from src.providers.llm.thinking import remember_thinking_mode
 from src.providers.registry import llm_registry
@@ -146,14 +148,36 @@ class OpenAICompatLLM(LLMProvider):
         kwargs.update(thinking_create_kwargs(self._is_dashscope, thinking, effort))
 
     def _create_with_thinking_fallback(self, kwargs: dict, thinking: bool | None, effort: str | None, send):
-        """send(kwargs) with a one-shot adaptation to always-thinking models.
+        """send(kwargs) with a one-shot adaptation to thinking capabilities.
 
         Primary classification happens at save time (thinking probe); this
         retry covers models the probe could not classify.
         """
+        def compatible_send(request):
+            return create_chat_completion(
+                lambda **kw: send(kw), request, base_url=self._base_url,
+            )
+
         try:
-            return send(kwargs)
+            return compatible_send(kwargs)
         except Exception as e:
+            if (
+                self._thinking_mode != "none"
+                and getattr(e, "status_code", None) == 400
+                and any(key in (kwargs.get("extra_body") or {}) for key in ("thinking", "enable_thinking"))
+                and not is_always_think_error(e)
+                and is_thinking_param_unsupported(e)
+            ):
+                self._thinking_mode = "none"
+                remember_thinking_mode(self._base_url, self._model, "none")
+                rebuilt = {k: v for k, v in kwargs.items() if k not in ("extra_body", "reasoning_effort")}
+                extra = {
+                    k: v for k, v in (kwargs.get("extra_body") or {}).items()
+                    if k not in ("thinking", "enable_thinking", "thinking_budget")
+                }
+                if extra:
+                    rebuilt["extra_body"] = extra
+                return compatible_send(rebuilt)
             if self._thinking_mode == "always" or not is_always_think_error(e):
                 raise
             self._thinking_mode = "always"
@@ -168,7 +192,7 @@ class OpenAICompatLLM(LLMProvider):
                 if k not in ("extra_body", "reasoning_effort")
             }
             self._apply_thinking_kwargs(rebuilt, thinking, effort)
-            return send(rebuilt)
+            return compatible_send(rebuilt)
 
     def _resolve_temperature(self, temperature: float | None) -> float:
         return temperature if temperature is not None else _DEFAULT_TEMPERATURE
@@ -478,7 +502,7 @@ class OpenAICompatLLM(LLMProvider):
             body = {
                 "model": self._model,
                 "messages": [],
-                "temperature": req.get("temperature") or _DEFAULT_TEMPERATURE,
+                "temperature": self._resolve_temperature(req.get("temperature")),
             }
             mt = req.get("max_tokens") or self._default_max_tokens
             if mt > 0:
@@ -486,6 +510,7 @@ class OpenAICompatLLM(LLMProvider):
             if req.get("system"):
                 body["messages"].append({"role": "system", "content": req["system"]})
             body["messages"].append({"role": "user", "content": req.get("prompt", "")})
+            body = prepare_chat_kwargs(body, base_url=self._base_url)
 
             lines.append(json.dumps({
                 "custom_id": str(i),

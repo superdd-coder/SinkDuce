@@ -148,6 +148,16 @@ def _thinking_on_for_tool_round(
     return True
 
 
+def _send_chat_completion(llm, send, kwargs: dict):
+    """Use provider parameter compatibility for Chat's raw tool/stream requests."""
+    from src.providers.llm.parameters import create_chat_completion
+
+    base_url = getattr(llm, "_base_url", "")
+    return create_chat_completion(
+        send, kwargs, base_url=base_url if isinstance(base_url, str) else ""
+    )
+
+
 def _retry_llm_kwargs_after_error(kwargs: dict, error: BaseException, llm=None) -> dict | None:
     """One compatible retry. Thinking + forced tool_choice is a 400 on Qwen;
     always-thinking models reject thinking-off entirely (百炼第三方智谱 etc.).
@@ -1719,7 +1729,9 @@ class ChatboxAgent:
                     pass
 
                 try:
-                    stream = client.chat.completions.create(**stream_kwargs)
+                    stream = _send_chat_completion(
+                        self._llm, client.chat.completions.create, stream_kwargs
+                    )
                 except Exception as e:
                     logger.warning("LLM streaming call failed: %s", e)
                     retry_kwargs = _retry_llm_kwargs_after_error(
@@ -1727,7 +1739,9 @@ class ChatboxAgent:
                     )
                     if retry_kwargs is not None:
                         try:
-                            stream = client.chat.completions.create(**retry_kwargs)
+                            stream = _send_chat_completion(
+                                self._llm, client.chat.completions.create, retry_kwargs
+                            )
                             logger.warning(
                                 "Retried stream after thinking/tool_choice error: %s", e
                             )
@@ -3393,12 +3407,12 @@ class ChatboxAgent:
             pass
 
         try:
-            resp = client.chat.completions.create(**kwargs)
+            resp = _send_chat_completion(self._llm, client.chat.completions.create, kwargs)
         except Exception as e:
-            retry_kwargs = _retry_llm_kwargs_after_error(kwargs, e)
+            retry_kwargs = _retry_llm_kwargs_after_error(kwargs, e, llm=self._llm)
             if retry_kwargs is not None:
                 try:
-                    resp = client.chat.completions.create(**retry_kwargs)
+                    resp = _send_chat_completion(self._llm, client.chat.completions.create, retry_kwargs)
                     logger.warning("Retried tool call after thinking/tool_choice error: %s", e)
                 except Exception as e2:
                     logger.exception("LLM tool call retry failed: %s", e2)
@@ -3550,8 +3564,11 @@ def _force_generate_answer(llm, messages: list[dict]) -> str:
         if client:
             kwargs = dict(model=model, messages=_msgs, temperature=0.1, max_tokens=4096)
             if "minimax" not in (model or "").lower():
-                kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-            resp = client.chat.completions.create(**kwargs)
+                if callable(getattr(type(llm), "_apply_thinking_kwargs", None)):
+                    llm._apply_thinking_kwargs(kwargs, False)
+                else:
+                    kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+            resp = _send_chat_completion(llm, client.chat.completions.create, kwargs)
             from src.providers.llm.openai_compat import _strip_think
 
             content = _strip_think(resp.choices[0].message.content or "")
@@ -3561,7 +3578,8 @@ def _force_generate_answer(llm, messages: list[dict]) -> str:
                 # trajectory. One retry with the model's default thinking
                 # beats ending the turn with nothing.
                 kwargs.pop("extra_body", None)
-                resp = client.chat.completions.create(**kwargs)
+                kwargs.pop("reasoning_effort", None)
+                resp = _send_chat_completion(llm, client.chat.completions.create, kwargs)
                 content = _strip_think(resp.choices[0].message.content or "")
             return content
         else:
