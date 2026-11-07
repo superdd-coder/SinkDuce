@@ -3,7 +3,8 @@
  *
  * 背景（2026-09-16）：用户把免费档活跃钥匙上限从 2 提到 5。此前前端把 "2"
  * 写死在配对卡片里（`limit: "2"`），后端改了它就会显示「N / 2」——UI 说谎。
- * 现在 `/pairing/tokens` 一并返回 `limit`，前端照着显示。
+ * `/pairing/tokens` 保留 limit 契约。当前社区版卡片只展示活跃 Key 数量，
+ * 不再展示 N / limit；测试不能强制恢复已经移除的额度 UI。
  *
  * 跑法：node --test frontend/tests/
  */
@@ -35,11 +36,11 @@ test("配对卡片不再硬编码配额为 2", () => {
   )
 })
 
-test("配对卡片把后端返回的 limit 传进文案", () => {
-  // 文案应使用从响应里取到的值（形如 limit: String(quotaLimit)）
+test("配对卡片展示当前活跃 Key 数量，不再渲染旧的额度比例", () => {
   assert.match(
     CARD,
-    /limit:\s*String\([A-Za-z_$][\w$]*\)/,
-    "limit 应来自状态变量，而不是字面量",
+    /t\("settings\.pairing\.activeKeys",\s*\{\s*used:\s*String\(activeKeys\.length\)/,
+    "活跃 Key 数量应来自过滤撤销、过期后的列表",
   )
+  assert.doesNotMatch(CARD, /t\("settings\.pairing\.quota"/)
 })

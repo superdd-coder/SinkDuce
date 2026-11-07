@@ -12,10 +12,10 @@ import { cn } from "@/lib/utils"
  */
 const buttonVariants = cva(
   [
-    "group/button inline-flex shrink-0 items-center justify-center gap-1.5",
+    "sd-button group/button inline-flex shrink-0 items-center justify-center gap-1.5",
     "whitespace-nowrap select-none outline-none",
-    "font-[family-name:var(--type-font-ui)] text-[length:var(--type-size-label)] font-medium leading-[var(--type-leading-label)] tracking-[0.04em]",
-    "rounded-[var(--pm-r-sm)] border border-transparent",
+    "font-[family-name:var(--type-font-ui)] text-[length:var(--type-size-label)] font-medium leading-[var(--type-leading-label)] tracking-normal",
+    "rounded-full border border-transparent",
     "transition-[background-color,color,box-shadow,transform,opacity]",
     "duration-150 ease-[cubic-bezier(0.22,1,0.36,1)]",
     "disabled:pointer-events-none disabled:opacity-50",
@@ -32,22 +32,22 @@ const buttonVariants = cva(
         default: [
           "bg-[var(--pm-green)] text-[var(--pm-on)] border-transparent",
           "shadow-none",
-          "hover:bg-[var(--pm-green-deep)]",
+          "hover:bg-[var(--sd-brand-hover)]",
         ].join(" "),
         ghost: [
-          "bg-[color-mix(in_srgb,var(--pm-ink)_5%,transparent)] text-[var(--pm-text)]",
+          "bg-transparent text-[var(--sd-muted)]",
           "shadow-none",
-          "hover:bg-[color-mix(in_srgb,var(--pm-ink)_8%,transparent)] hover:text-[var(--pm-ink)]",
+          "hover:bg-[var(--sd-hover)] hover:text-[var(--sd-ink)]",
         ].join(" "),
         outline: [
-          "border-[color-mix(in_srgb,var(--pm-ink)_10%,transparent)] bg-white text-[var(--pm-text)]",
+          "border-transparent bg-[var(--sd-surface-raised)] text-[var(--pm-text)]",
           "shadow-none",
-          "hover:bg-[var(--pm-green-wash)] hover:text-[var(--pm-green)]",
+          "hover:bg-[var(--sd-hover)] hover:text-[var(--sd-ink)]",
         ].join(" "),
         secondary: [
-          "bg-[var(--pm-green-wash)] text-[var(--pm-green)]",
+          "bg-[var(--sd-field)] text-[var(--sd-text)]",
           "shadow-none",
-          "hover:bg-[var(--pm-green-soft)]",
+          "hover:bg-[var(--sd-hover)] hover:text-[var(--sd-ink)]",
         ].join(" "),
         destructive: [
           "bg-[color-mix(in_srgb,var(--pm-danger)_10%,transparent)] text-[var(--pm-danger)]",

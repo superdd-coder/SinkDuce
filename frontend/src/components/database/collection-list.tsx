@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { Archive, ArchiveRestore, ChevronRight, Pencil, Trash2 } from "lucide-react"
+import { Archive, ArchiveRestore, ChevronRight, FolderClosed, MoreHorizontal, Pencil, Plus, Search, Trash2, X } from "lucide-react"
+import { Popover } from "@/components/ui/popover"
 import { cn } from "@/lib/utils"
 import { useT } from "@/i18n/use-t"
 import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
@@ -74,15 +75,19 @@ export function CollectionList({
   const hardPlaceRef = useRef(true)
   const visibleRef = useRef(false)
   const [archiveOpen, setArchiveOpen] = useState(false)
+  const [query, setQuery] = useState("")
+  const [openProjectActions, setOpenProjectActions] = useState<string | null>(null)
+  const archiveExpanded = archiveOpen || !!query.trim()
 
   const { activeCols, archivedCols } = useMemo(() => {
     const active: CollectionItem[] = []
     const archived: CollectionItem[] = []
     for (const col of collections) {
+      if (!col.name.normalize("NFKC").toLocaleLowerCase().includes(query.normalize("NFKC").trim().toLocaleLowerCase())) continue
       ;(col.archived ? archived : active).push(col)
     }
     return { activeCols: active, archivedCols: archived }
-  }, [collections])
+  }, [collections, query])
 
   const measureIndicator = useCallback(
     (opts?: { hard?: boolean }) => {
@@ -127,7 +132,7 @@ export function CollectionList({
 
   useLayoutEffect(() => {
     measureIndicator()
-  }, [measureIndicator, collections])
+  }, [measureIndicator, activeCols, archivedCols])
 
   useLayoutEffect(() => {
     const list = listRef.current
@@ -185,23 +190,29 @@ export function CollectionList({
         className={cn("pm-shell-col-row group", isActive && "is-active", isArchived && "is-archived")}
         onClick={() => onSelect(col.id)}
         onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault()
             onSelect(col.id)
           }
         }}
       >
+        <FolderClosed className="sd-project-folder" size={17} strokeWidth={1.6} aria-hidden="true" />
         <CollectionRowName name={col.name} archived={isArchived} />
         {isArchived && (
           <span className="pm-shell-col-archived-tag">{t("library.archivedTag")}</span>
         )}
 
-        <div className="pm-shell-col-actions">
+        <Popover.Root open={openProjectActions === col.id} onOpenChange={open => setOpenProjectActions(open ? col.id : null)}>
+          <Popover.Trigger className="sd-project-more" aria-label={t("fileBrowser.projectActions", { name: col.name })} onClick={e => e.stopPropagation()}><MoreHorizontal size={16} /></Popover.Trigger>
+          <Popover.Portal><Popover.Positioner side="right" align="start" sideOffset={12} className="sd-folder-positioner">
+          <Popover.Popup className="sd-project-menu" aria-label={t("fileBrowser.projectActions", { name: col.name })}>
           <button
             type="button"
             className="pm-shell-col-action"
             onClick={(e) => {
               e.stopPropagation()
+              setOpenProjectActions(null)
               onArchive(col.id, !isArchived)
             }}
             title={isArchived ? t("library.unarchiveCollection") : t("library.archiveCollection")}
@@ -209,50 +220,62 @@ export function CollectionList({
             {isArchived
               ? <ArchiveRestore className="size-3" />
               : <Archive className="size-3" />}
+            <span>{isArchived ? t("library.unarchiveCollection") : t("library.archiveCollection")}</span>
           </button>
           <button
             type="button"
             className="pm-shell-col-action"
             onClick={(e) => {
               e.stopPropagation()
+              setOpenProjectActions(null)
               onRename(col.id)
             }}
             title={t("common.rename")}
           >
             <Pencil className="size-3" />
+            <span>{t("common.rename")}</span>
           </button>
           <button
             type="button"
             className="pm-shell-col-action pm-shell-col-action--danger"
             onClick={(e) => {
               e.stopPropagation()
+              setOpenProjectActions(null)
               onDelete(col.id)
             }}
             title={t("common.delete")}
           >
             <Trash2 className="size-3" />
+            <span>{t("common.delete")}</span>
           </button>
-        </div>
+          </Popover.Popup></Popover.Positioner></Popover.Portal>
+        </Popover.Root>
       </div>
     )
   }
 
   return (
-    <aside className="pm-shell-collections" aria-label={t("library.collections")}>
+    <aside className="pm-shell-collections sd-project-rail" aria-label={t("library.collections")}>
       <ViewRailResizeHandle />
       <div className="pm-shell-collections-surface">
         <div className="pm-shell-collections-head pm-rail-head">
-          <h2 className="pm-shell-collections-title pm-rail-title">{t("library.collections")}</h2>
+          <h2 className="pm-shell-collections-title pm-rail-title">{t("library.collections")} <span className="sd-project-count">{collections.length}</span></h2>
           {canCreate && (
             <button
               type="button"
               onClick={onCreate}
               className="pm-shell-collections-new pm-rail-new"
               title={t("library.newCollection")}
+              aria-label={t("library.newCollection")}
             >
-              {t("common.new")}
+              <Plus size={17} aria-hidden="true" />
             </button>
           )}
+        </div>
+        <div className="sd-library-search sd-project-search">
+          <Search size={14} aria-hidden="true" />
+          <input value={query} onChange={e => setQuery(e.target.value)} placeholder={t("fileBrowser.searchProjects")} aria-label={t("fileBrowser.searchProjects")} />
+          {query && <button className="sd-search-clear" onClick={() => setQuery("")} aria-label={t("fileBrowser.clearSearch")}><X size={14} /></button>}
         </div>
 
         {/* Native scroll + edge fades — same path as Chat Sessions / Meeting */}
@@ -273,13 +296,14 @@ export function CollectionList({
             )}
 
             {activeCols.map((col) => renderRow(col))}
+            {activeCols.length === 0 && archivedCols.length === 0 && <p className="sd-project-empty">{t(query.trim() ? "fileBrowser.noProjects" : "library.selectOrCreate")}</p>}
 
             {archivedCols.length > 0 && (
               <div className="pm-rail-archive">
                 <div
                   role="button"
                   tabIndex={0}
-                  aria-expanded={archiveOpen}
+                  aria-expanded={archiveExpanded}
                   className="pm-rail-archive-head"
                   onClick={() => setArchiveOpen((v) => !v)}
                   onKeyDown={(e) => {
@@ -290,13 +314,13 @@ export function CollectionList({
                   }}
                 >
                   <ChevronRight
-                    className={cn("pm-rail-archive-chevron", archiveOpen && "is-open")}
+                    className={cn("pm-rail-archive-chevron", archiveExpanded && "is-open")}
                     aria-hidden
                   />
                   <span>{t("library.archivedSection")}</span>
                   <span className="pm-rail-archive-count">{archivedCols.length}</span>
                 </div>
-                {archiveOpen && archivedCols.map((col) => renderRow(col))}
+                {archiveExpanded && archivedCols.map((col) => renderRow(col))}
               </div>
             )}
           </div>

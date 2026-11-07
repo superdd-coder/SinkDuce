@@ -39,7 +39,10 @@ test("the expanded diagram retains the passive image boundary", async () => {
   const source = '<svg xmlns="http://www.w3.org/2000/svg" onload="evil()"><script>evil()</script><text>Private label</text></svg>'
   const html = renderToStaticMarkup(createElement(SvgPreviewCanvas, { source }))
   assert.match(html, /<img\b/)
-  assert.doesNotMatch(html, /<(?:svg|script|iframe|object)\b|\bonload=/)
+  const canvas = html.match(/<div class="chat-svg-canvas"[\s\S]*?<\/div>/)?.[0]
+  assert.ok(canvas)
+  assert.doesNotMatch(canvas, /<(?:svg|script|iframe|object)\b|\bonload=/)
+  assert.doesNotMatch(html, /<(?:script|iframe|object)\b|\bonload=/)
   assert.doesNotMatch(html, /Private label/)
 })
 

@@ -6,7 +6,6 @@ import {
   useCallback,
   type ReactNode,
 } from "react"
-import { createPortal } from "react-dom"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkBreaks from "remark-breaks"
@@ -22,6 +21,7 @@ import {
   TabsContent,
 } from "@/components/ui/tabs"
 import { DropdownSelect } from "@/components/ui/dropdown-select"
+import { MultiSelectMenu } from "@/components/ui/multi-select-menu"
 import { FieldLabel } from "@/components/ui/field-label"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
 import {
@@ -148,13 +148,13 @@ function SearchTab() {
   const t = useT()
   const {
     recallCollections,
-    toggleRecallCollection,
+    setRecallCollections,
     collections,
     fetchCollections,
   } = useAppStore(
     useShallow((s) => ({
       recallCollections: s.recallCollections,
-      toggleRecallCollection: s.toggleRecallCollection,
+      setRecallCollections: s.setRecallCollections,
       collections: s.collections,
       fetchCollections: s.fetchCollections,
     }))
@@ -176,12 +176,9 @@ function SearchTab() {
   /** True after a completed search — distinguishes idle from “0 results”. */
   const [hasSearched, setHasSearched] = useState(false)
   const [showCollections, setShowCollections] = useState(false)
-  /** Tick forces re-read of button rect when opening the chat-style pop */
-  const [colMenuTick, setColMenuTick] = useState(0)
   const [filesMap, setFilesMap] = useState<Record<string, string>>({})
   const collectionAnchorRef = useRef<HTMLDivElement>(null)
   const collectionBtnRef = useRef<HTMLButtonElement>(null)
-  const collectionPopRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     fetchCollections()
@@ -237,36 +234,12 @@ function SearchTab() {
     }
   }, [recallCollections.join(","), collections.map((c) => c.id).join(",")])
 
-  useEffect(() => {
-    if (!showCollections) return
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node
-      if (collectionAnchorRef.current?.contains(t)) return
-      if (collectionPopRef.current?.contains(t)) return
-      setShowCollections(false)
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setShowCollections(false)
-    }
-    document.addEventListener("mousedown", onDown)
-    document.addEventListener("keydown", onKey)
-    return () => {
-      document.removeEventListener("mousedown", onDown)
-      document.removeEventListener("keydown", onKey)
-    }
-  }, [showCollections])
-
   const collectionLabel =
     recallCollections.length === 0
       ? t("chat.allCollections")
       : recallCollections.length === 1
         ? t("chat.nCollection", { n: 1 })
         : t("chat.nCollections", { n: recallCollections.length })
-
-  // Chat-style pop: open below the chip (Search toolbar is near top, not bottom)
-  const colBtnRect = collectionBtnRef.current?.getBoundingClientRect()
-  const colHostRect = collectionAnchorRef.current?.getBoundingClientRect()
-  void colMenuTick
 
   const handleSearch = async () => {
     if (!query.trim()) return
@@ -357,64 +330,18 @@ function SearchTab() {
               )}
               onClick={() => {
                 setShowCollections((v) => !v)
-                setColMenuTick((t) => t + 1)
               }}
               aria-expanded={showCollections}
-              aria-haspopup="listbox"
+              aria-haspopup="dialog"
             >
               <span className="pm-chat-tool-chip-label whitespace-nowrap text-center">
                 {collectionLabel}
               </span>
               <span className="pm-chat-tool-chip-wipe" aria-hidden />
             </button>
-            {createPortal(
-              <div
-                ref={collectionPopRef}
-                className={cn(
-                  "pm-chat-pop pm-chat-pop--collections pm-recall-col-pop",
-                  showCollections && "is-open",
-                )}
-                style={{
-                  width: colBtnRect ? Math.max(colBtnRect.width, 180) : 180,
-                  minWidth: 155,
-                  top: colHostRect
-                    ? colHostRect.bottom + 6
-                    : 0,
-                  left: colHostRect ? colHostRect.left : 0,
-                }}
-                role="listbox"
-                aria-label={t("common.collections")}
-              >
-                {collections.length === 0 ? (
-                  <div className="pm-chat-pop-empty">{t("chat.noCollections")}</div>
-                ) : (
-                  <div className="pm-chat-pop-scroll">
-                    {collections.map((col) => (
-                      <label
-                        key={col.id}
-                        onClick={() => toggleRecallCollection(col.id)}
-                        className="pm-chat-pop-item group"
-                      >
-                        <span className="pm-chat-pop-item-label is-wrap">
-                          <span
-                            className={cn(
-                              "sk-diamond",
-                              recallCollections.includes(col.id) && "on",
-                            )}
-                            aria-hidden
-                          />
-                          <span className="pm-chat-pop-item-name">
-                            {col.name}
-                          </span>
-                        </span>
-                        <span className="pm-chat-pop-item-wipe" aria-hidden />
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </div>,
-              document.body,
-            )}
+            <MultiSelectMenu open={showCollections} onClose={() => setShowCollections(false)} anchorRef={collectionBtnRef}
+              value={recallCollections} onChange={setRecallCollections} label={t("common.collections")}
+              options={collections.map(col => ({ value: col.id, label: col.name, description: col.archived ? t("library.archivedTag") : undefined }))} />
           </div>
 
           <span className="pm-recall-toolbar-sep" aria-hidden />

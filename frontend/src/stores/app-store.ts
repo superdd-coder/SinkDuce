@@ -25,6 +25,8 @@ import { DEFAULT_REPORT_SPLIT, normalizeReportSplit } from "@/lib/report-split"
 import { mergeNoteChanges, type NoteChange } from "@/lib/note-changes"
 import type { ChatAttachment } from "@/api/client"
 import type { ChatAttachmentDraft } from "@/lib/chat-attachments"
+import type { ChatQueue } from "@/lib/chat-queue"
+import type { WorkspaceSearchHit } from "@/api/workspace-search"
 
 function loadPersisted<T>(key: string, fallback: T): T {
   try {
@@ -180,6 +182,8 @@ interface AppState {
   setChatAttachmentDrafts: (sid: string, update: (drafts: ChatAttachmentDraft[]) => ChatAttachmentDraft[]) => void
   consumeChatAttachments: (sid: string, ids: string[]) => void
   clearChatAttachmentDrafts: (sid: string) => void
+  chatQueues: Record<string, ChatQueue>
+  setChatQueue: (sid: string, update: (queue: ChatQueue | undefined) => ChatQueue | undefined) => void
   viewRailWidth: number
   setViewRailWidth: (width: number) => void
   reportChatRatio: number
@@ -198,6 +202,7 @@ interface AppState {
   pendingCreateCollection: boolean
   setPendingCreateCollection: (v: boolean) => void
   pendingOpenFile: string | null
+  pendingWorkspaceSearch?: WorkspaceSearchHit
   setPendingOpenFile: (source: string | null) => void
   pendingOpenNote: string | null
   setPendingOpenNote: (noteId: string | null) => void
@@ -424,6 +429,16 @@ export const useAppStore = create<AppState>((set) => ({
     chatAttachmentDrafts: { ...s.chatAttachmentDrafts, [sid]: [] },
     consumedChatAttachments: { ...s.consumedChatAttachments, [sid]: [] },
   })),
+  chatQueues: {},
+  setChatQueue: (sid, update) => set((state) => {
+    const current = state.chatQueues[sid]
+    const next = update(current)
+    if (next === current) return state
+    const chatQueues = { ...state.chatQueues }
+    if (next && (next.running || next.pending.length)) chatQueues[sid] = next
+    else delete chatQueues[sid]
+    return { chatQueues }
+  }),
   // Shared reading rails follow this browser, independently of the backend source.
   reportChatRatio: normalizeReportSplit(loadPersisted<unknown>("reportChatRatio", DEFAULT_REPORT_SPLIT)),
   setReportChatRatio: (ratio) => {
@@ -954,8 +969,8 @@ export const useAppStore = create<AppState>((set) => ({
     }
   },
   invalidateSessionCache: (sessionId) => {
-    // Never drop the session on screen: its in-flight stream owns `messages`.
-    if (sessionId === useAppStore.getState().sessionId) return
+    // An in-flight turn still owns the cached history when its session is in the background.
+    if (sessionId === useAppStore.getState().sessionId || _streamAborts.has(sessionId)) return
     _invalidateSessionCache(sessionId)
   },
   initSession: async (collections) => {
@@ -1099,6 +1114,7 @@ export const useAppStore = create<AppState>((set) => ({
     }
     await state.loadSessionMessages(state.sessionId)
     const after = useAppStore.getState()
+    if (after.sessionId && after.sessionId !== state.sessionId) return null
     // load failed → session cleared; start a fresh one for this message
     if (!after.sessionId || after.sessionHydratedId !== after.sessionId) {
       return after.initSession()
@@ -1112,6 +1128,7 @@ export const useAppStore = create<AppState>((set) => ({
     _sessionCache.delete(sessionId)
     forgetSessionConfig(sessionId)
     await deleteSession(sessionId)
+    useAppStore.getState().setChatQueue(sessionId, () => undefined)
     useAppStore.getState().clearReportReviewSession(sessionId)
     useAppStore.getState().clearChatAttachmentDrafts(sessionId)
     set({

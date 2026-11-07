@@ -1,3 +1,5 @@
+import { themeSvgForPreview } from "./svg-theme.ts"
+
 export const MAX_SVG_PREVIEW_BYTES = 256 * 1024
 
 export type SvgPreviewStatus = "pending" | "too-large" | "not-svg" | "ready" | "recovered"
@@ -56,13 +58,14 @@ export function getSvgPreviewSize(source: string, naturalSize: { width: number; 
 }
 
 /** Own one passive SVG image URL; call dispose when its image is detached. */
-export function createSvgPreview(source: string, complete: boolean): {
+export function createSvgPreview(source: string, complete: boolean, palette?: "porcelain"): {
   url: string
   dispose: () => void
 } | null {
   const { imageSource } = inspectSvgPreview(source, complete)
   if (imageSource === undefined) return null
-  const blob = new Blob([imageSource], { type: "image/svg+xml;charset=utf-8" })
+  const displayedSource = palette === "porcelain" ? themeSvgForPreview(imageSource) : imageSource
+  const blob = new Blob([displayedSource], { type: "image/svg+xml;charset=utf-8" })
   const url = URL.createObjectURL(blob)
   let disposed = false
   return {

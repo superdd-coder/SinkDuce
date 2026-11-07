@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useShallow } from "zustand/react/shallow"
-import { PanelRight } from "lucide-react"
+import { ChevronLeft, ChevronRight, PanelRight, Search, X } from "lucide-react"
 import { useFileMgmtStore } from "@/stores/file-mgmt-store"
 import { Breadcrumb } from "./breadcrumb"
 import { IconGrid } from "./icon-grid"
@@ -11,6 +11,10 @@ import { Toolbar } from "./toolbar"
 import { FileMgmtDetailDialog } from "@/components/file-mgmt/file-detail"
 import { cn } from "@/lib/utils"
 import { useT } from "@/i18n/use-t"
+import { DropdownSelect } from "@/components/ui/dropdown-select"
+import { systemFolderDisplayName } from "@/i18n/system-folder"
+import { FolderNavigator } from "./folder-navigator"
+import { browserPage, currentFolderItems, filterBrowserItems, type BrowserFilter } from "./browser-items"
 
 /**
  * Files surface — dual column when Messages open (Overview geometry).
@@ -29,6 +33,28 @@ export function FolderView({
   railCovered?: boolean
 }) {
   const t = useT()
+  const browse = useFileMgmtStore(useShallow(s => ({
+    currentFolderId: s.currentFolderId, folderTree: s.folderTree, currentFolderFiles: s.currentFolderFiles,
+    folderFileSort: s.folderFileSort, folderFileView: s.folderFileView, filesLoading: s.filesLoading,
+    selectedFileIds: s.selectedFileIds, selectedFolderIds: s.selectedFolderIds,
+  })))
+  const scope = `${collectionId}:${browse.currentFolderId || "root"}`
+  const [search, setSearch] = useState({ scope, query: "", filter: "all" as BrowserFilter })
+  const query = search.scope === scope ? search.query : ""
+  const filter = search.scope === scope ? search.filter : "all"
+  const allItems = useMemo(() => currentFolderItems(browse.folderTree, browse.currentFolderId, browse.currentFolderFiles, browse.folderFileSort), [browse.folderTree, browse.currentFolderId, browse.currentFolderFiles, browse.folderFileSort])
+  const filteredItems = useMemo(() => filterBrowserItems(allItems, query, filter, name => systemFolderDisplayName(name, t)), [allItems, query, filter, t])
+  const paginationKey = `${scope}:${query}:${filter}:${browse.folderFileView}:${browse.folderFileSort}`
+  const [pagination, setPagination] = useState({ key: paginationKey, page: 0 })
+  const page = browserPage(filteredItems, pagination.key === paginationKey ? pagination.page : 0, browse.folderFileView === "list" ? 50 : 24)
+  const selectableFileIds = useMemo(() => filteredItems.flatMap(item => item.kind === "file" ? [item.file.file_id] : []), [filteredItems])
+  const selectionCount = browse.selectedFileIds.size + browse.selectedFolderIds.size
+  const updateSearch = (nextQuery: string, nextFilter: BrowserFilter) => {
+    setSearch({ scope, query: nextQuery, filter: nextFilter })
+    const store = useFileMgmtStore.getState()
+    store.clearSelection()
+    store.clearFolderSelection()
+  }
   const {
     fetchFolderTree,
     navigateToRoot,
@@ -105,19 +131,36 @@ export function FolderView({
 
   return (
     <div
-      className={cn("pm-files", msgCollapsed && "is-msg-collapsed")}
+      className={cn("pm-files sd-files", msgCollapsed && "is-msg-collapsed")}
     >
       {/* LEFT — one paper card: toolbar + icon field + breadcrumb */}
       <div className="pm-files-left">
         <div className="pm-files-browser">
+          <div className="sd-files-location">
+            <FolderNavigator collectionId={collectionId} />
+            <Breadcrumb collectionId={collectionId} />
+          </div>
+          <div className="sd-files-search-row">
+            <div className="sd-library-search">
+              <Search size={15} aria-hidden="true" />
+              <input value={query} onChange={e => updateSearch(e.target.value, filter)} placeholder={t("fileBrowser.searchFolder")} aria-label={t("fileBrowser.searchFolder")} />
+              {query && <button className="sd-search-clear" onClick={() => updateSearch("", filter)} aria-label={t("fileBrowser.clearSearch")}><X size={14} /></button>}
+            </div>
+            <DropdownSelect className="sd-files-filter" size="tag" chevron value={filter} aria-label={t("fileBrowser.filterItems")} onChange={value => updateSearch(query, value as BrowserFilter)} options={[
+              { value: "all", label: t("fileBrowser.allItems") }, { value: "folder", label: t("fileBrowser.foldersOnly") }, { value: "file", label: t("fileBrowser.filesOnly") },
+            ]} />
+          </div>
           <div className="pm-files-browser-toolbar relative z-20 shrink-0">
             <Toolbar
               collectionId={collectionId}
+              selectableFileIds={selectableFileIds}
+              selectionFiltered={!!query.trim() || filter !== "all"}
               trailing={
                 <button
                   type="button"
                   onClick={toggleMessageSidebar}
                   title={t("fileMgmt.showMessages")}
+                  aria-label={t("fileMgmt.showMessages")}
                   className="pm-files-msg-reopen"
                   tabIndex={msgCollapsed ? 0 : -1}
                   aria-hidden={!msgCollapsed}
@@ -134,11 +177,18 @@ export function FolderView({
           <div className="pm-files-browser-body flex-1 min-h-0 overflow-hidden">
             <IconGrid
               collectionId={collectionId}
+              items={page.items}
+              pageKey={`${paginationKey}:${page.page}`}
+              filtered={!!query.trim() || filter !== "all"}
               onOpenFile={(fileId) => setDetailFileId(fileId)}
             />
           </div>
-          <div className="pm-files-browser-foot shrink-0">
-            <Breadcrumb collectionId={collectionId} />
+          <div className="sd-files-pagination">
+            <span aria-live="polite">{browse.filesLoading ? t("common.loading") : t("fileBrowser.itemRange", { start: page.start, end: page.end, total: filteredItems.length })}</span>
+            <span className="sd-files-selection-count">{selectionCount > 0 && <>{t("fileMgmt.nSelected", { n: selectionCount })}<button className="sd-search-clear" aria-label={t("fileBrowser.clearSelection")} title={t("fileBrowser.clearSelection")} onClick={() => useFileMgmtStore.getState().exitMultiSelectMode()}><X size={13} /></button></>}</span>
+            <button className="sd-files-icon" disabled={page.page === 0} aria-label={t("fileBrowser.previousPage")} onClick={() => setPagination({ key: paginationKey, page: page.page - 1 })}><ChevronLeft size={16} /></button>
+            <span>{page.page + 1} / {page.pages}</span>
+            <button className="sd-files-icon" disabled={page.page + 1 >= page.pages} aria-label={t("fileBrowser.nextPage")} onClick={() => setPagination({ key: paginationKey, page: page.page + 1 })}><ChevronRight size={16} /></button>
           </div>
         </div>
       </div>

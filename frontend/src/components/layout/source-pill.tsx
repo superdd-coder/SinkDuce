@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react"
 import { ChevronDown, HardDrive, Monitor } from "lucide-react"
 
 import {
@@ -18,18 +18,19 @@ import { writeSourceScopedFor } from "@/api/source-scope"
 import { useAppStore, type SourceHealthState } from "@/stores/app-store"
 import { cn } from "@/lib/utils"
 import { useT } from "@/i18n/use-t"
-import { MenuItemDescription, MenuItemTitle, MenuSeparator, SoftMenu } from "@/components/ui/menu"
+import { MenuItemDescription, MenuItemTitle, MenuSeparator, SoftMenu, MenuCheck } from "@/components/ui/menu"
 
 /**
- * 右上角「来源控制台」：盒子切换菜单 × 在线/离线指示合并体（HUB-7）。
+ * 导航栏底部「来源控制台」：盒子切换菜单 × 在线/离线指示合并体（HUB-7）。
  *
- * 收起态 = 状态圆点 + 当前来源名 + 箭头；点开 = 两行富条目菜单（名字/状态 +
+ * 收起态 = 设备图标与状态圆点；展开导航栏显示来源名。点开 = 两行富条目菜单（名字/状态 +
  * 地址副行）。状态来自 source-health.ts 的统一探测循环（store 的 sourceHealth），
  * trigger 和菜单读同一份真实探测结果。
  */
 export function SourcePill() {
   const t = useT()
   const [open, setOpen] = useState(false)
+  const menuId = useId()
   // activeId 只随整页刷新变化（切换即 reload），挂载时读一次即稳。
   const [activeId] = useState(getActiveSourceId())
   // 连接清单每次打开菜单重读：新配对的盒子立即可见（修旧切换器首帧冻结）。
@@ -55,7 +56,7 @@ export function SourcePill() {
   const remoteShellMode = useAppStore((s) => s.remoteShellMode)
   const setSidebarView = useAppStore((s) => s.setSidebarView)
 
-  // 探测循环与壳同寿（Header 常驻本组件）。
+  // 探测循环与壳同寿（Sidebar 常驻本组件）。
   useEffect(() => {
     startSourceHealthLoop()
     return () => stopSourceHealthLoop()
@@ -83,7 +84,7 @@ export function SourcePill() {
     // 切换遮罩：reload 本身不可避（API_BASE 是模块常量），但「点下去没反应
     // 然后闪白」是双重误点（点离线盒子 → 请求全炸 → 自动弹回本机再刷一次）
     // 的温床。遮罩把一次切换明确框定为一个动作。
-    document.documentElement.dataset.switching = "1"
+    document.documentElement.setAttribute("data-switching", "1")
     setActiveSourceId(id)
     window.location.reload() // 整页刷新：所有数据/连接干净地指向新来源
   }
@@ -137,7 +138,8 @@ export function SourcePill() {
       <button
         key={id}
         type="button"
-        role="menuitem"
+        role="menuitemradio"
+        aria-checked={active}
         disabled={blocked}
         title={blocked ? t("shell.switcher.blockedOffline") : undefined}
         onClick={() => pick(id)}
@@ -160,12 +162,13 @@ export function SourcePill() {
             </span>
           )}
         </span>
+        <MenuCheck checked={active} />
       </button>
     )
   }
 
   return (
-    <div className="relative shrink-0">
+    <div className="sd-nav-source relative shrink-0" data-source-menu-open={open ? "true" : undefined}>
       <button
         type="button"
         ref={anchorRef}
@@ -174,21 +177,31 @@ export function SourcePill() {
           if (!open) openMenu()
           setOpen((v) => !v)
         }}
-        className={cn("pm-source-pill", open && "is-open")}
+        className={cn("pm-source-pill sd-nav-item", open && "is-open")}
         title={currentWord ? `${currentName} · ${currentWord}` : currentName}
+        aria-label={currentWord ? `${currentName} · ${currentWord}` : currentName}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
       >
-        <span className={cn("pm-source-dot", `is-${currentState}`)} aria-hidden />
-        <span className="pm-source-pill-name">{currentName}</span>
-        <ChevronDown className="pm-source-pill-chevron" strokeWidth={2} />
+        <span className="sd-source-icon" aria-hidden="true">
+          {activeId === LOCAL_SOURCE
+            ? <Monitor size={18} strokeWidth={1.65} />
+            : <HardDrive size={18} strokeWidth={1.65} />}
+          <span className={cn("pm-source-dot", `is-${currentState}`)} />
+        </span>
+        <span className="pm-source-pill-name sd-nav-label">{currentName}</span>
+        <ChevronDown className="pm-source-pill-chevron sd-nav-label" strokeWidth={2} aria-hidden="true" />
       </button>
 
       <SoftMenu
         open={open}
         portal
-        align="end"
+        placement="right"
         anchorRef={anchorRef}
         className="pm-source-menu"
         data-source-menu="true"
+        id={menuId}
       >
         <div className="pm-source-kicker">{t("shell.switcher.title")}</div>
         {/* 远程模式没有「本机」可去（瘦壳不是内容盒子）：只列远端盒子。 */}

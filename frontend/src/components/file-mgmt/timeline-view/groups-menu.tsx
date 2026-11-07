@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useMemo, useState, useRef } from "react"
 import { ChevronDown, Pencil, Plus } from "lucide-react"
 import type { Node, NodeGroup } from "@/types/file-mgmt"
 import { cn } from "@/lib/utils"
@@ -8,6 +8,7 @@ import {
   isSystemGroup,
 } from "./group-icons"
 import { GroupFormDialog } from "./group-form-dialog"
+import { SoftMenu, MenuCheck } from "@/components/ui/menu"
 import { useT } from "@/i18n/use-t"
 import { systemFolderDisplayName } from "@/i18n/system-folder"
 
@@ -32,6 +33,7 @@ export function GroupsMenu({
 }: GroupsMenuProps) {
   const t = useT()
   const [open, setOpen] = useState(false)
+  const anchorRef = useRef<HTMLButtonElement>(null)
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<NodeGroup | null>(null)
 
@@ -71,6 +73,8 @@ export function GroupsMenu({
   return (
     <div className="relative">
       <button
+        ref={anchorRef}
+        aria-haspopup="menu" aria-expanded={open}
         type="button"
         className={cn("pm-timeline-tb-btn", focusGroupId && "is-on")}
         onClick={() => setOpen((v) => !v)}
@@ -79,14 +83,8 @@ export function GroupsMenu({
         <ChevronDown className="h-3 w-3 opacity-60" />
       </button>
 
-      {open && (
-        <>
-          <div
-            className="pm-timeline-menu-scrim"
-            onClick={() => setOpen(false)}
-            aria-hidden
-          />
-          <div className="pm-timeline-menu" role="menu">
+      <SoftMenu open={open} portal anchorRef={anchorRef} onClose={() => setOpen(false)} autoFocus
+        className="pm-timeline-menu" aria-label={t("fileMgmt.groups")}>
             {systemGroups.map((g) => (
               <GroupRow
                 key={g.group_id}
@@ -112,6 +110,7 @@ export function GroupsMenu({
                 "pm-timeline-menu-item",
                 focusGroupId === UNCATEGORIZED_ID && "is-active"
               )}
+              role="menuitemradio" aria-checked={focusGroupId === UNCATEGORIZED_ID}
               onClick={() => handleSelect(UNCATEGORIZED_ID)}
             >
               <GroupIconView source={{ name: "Uncategorized" }} />
@@ -123,10 +122,12 @@ export function GroupsMenu({
                   {uncategorizedCount}
                 </span>
               </span>
+              <MenuCheck checked={focusGroupId === UNCATEGORIZED_ID} />
             </button>
             <button
               type="button"
-              className="pm-timeline-menu-item text-[var(--pm-green)]"
+              role="menuitem"
+              className="pm-timeline-menu-item"
               onClick={() => {
                 setEditing(null)
                 setFormOpen(true)
@@ -136,9 +137,7 @@ export function GroupsMenu({
               <Plus className="h-3.5 w-3.5 shrink-0" />
               <span className="pm-timeline-menu-name">{t("fileMgmt.createGroup")}</span>
             </button>
-          </div>
-        </>
-      )}
+      </SoftMenu>
 
       <GroupFormDialog
         collectionId={collectionId}
@@ -193,7 +192,8 @@ function GroupRow({
     >
       <button
         type="button"
-        role="menuitem"
+        role="menuitemradio"
+        aria-checked={active}
         className={cn("pm-timeline-menu-item", active && "is-active")}
         onClick={onSelect}
         title={systemFolderDisplayName(group.name, t)}
@@ -203,6 +203,7 @@ function GroupRow({
         <span className="pm-timeline-menu-trail">
           <span className="pm-timeline-menu-count">{count}</span>
         </span>
+        <MenuCheck checked={active} />
       </button>
       {editable && (
         <button

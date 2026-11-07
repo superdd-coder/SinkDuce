@@ -284,6 +284,7 @@ export function PeoplePicker({
         open={open}
         portal
         anchorRef={anchorRef}
+        onClose={() => setOpen(false)}
         align="start"
         data-people-picker-menu=""
         className="pm-people-picker-menu"
@@ -299,10 +300,10 @@ export function PeoplePicker({
                 if (!e.target.value.trim()) setDisambiguator("")
               }}
               onKeyDown={(e) => {
-                e.stopPropagation()
-                if (e.key === "Escape") setOpen(false)
+                if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setOpen(false); anchorRef.current?.focus() }
                 if (e.key === "Enter") {
                   e.preventDefault()
+                  e.stopPropagation()
                   void handleTag()
                 }
               }}

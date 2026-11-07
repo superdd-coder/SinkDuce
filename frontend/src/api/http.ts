@@ -272,7 +272,9 @@ export function getNameConflict(err: unknown): NameConflictDetail | null {
  * to fire the same /api/meetings/{id} five times from independent components
  * (tabs effects, quick chat, editor) — N networks, N parses, N re-render
  * cascades. Joiners receive their own structuredClone so shared-object
- * mutation can't leak between callers.
+ * mutation can't leak between callers. Requests with a caller-owned signal
+ * stay independent: effect cleanup must not cancel another caller or let a
+ * remount join a request that has already been aborted.
  */
 const inFlightGets = new Map<string, Promise<unknown>>()
 
@@ -297,7 +299,7 @@ export async function request<T>(
     finalInit = { ...init, headers }
   }
   const method = (init.method ?? "GET").toUpperCase()
-  if (method === "GET") {
+  if (method === "GET" && !init.signal) {
     const url = `${base}${path}`
     const key = `${url}|${init.body ?? ""}`
     const pending = inFlightGets.get(key)

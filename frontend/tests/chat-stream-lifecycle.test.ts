@@ -82,17 +82,19 @@ function fixtureStream() {
 function installResponses(streams: ReturnType<typeof fixtureStream>[]) {
   let postCount = 0
   const signals: AbortSignal[] = []
+  const requests: { url: string; body: Record<string, unknown> }[] = []
   globalThis.fetch = async (input, init) => {
     const url = String(input)
     if (init?.method === "POST" && url.endsWith("/messages")) {
       const fixture = streams[postCount++]
       assert.ok(fixture, "every generation is backed by a local stream fixture")
+      requests.push({ url, body: JSON.parse(String(init.body)) })
       if (init?.signal) signals.push(init.signal)
       return new Response(fixture.stream, { status: 200 })
     }
     return new Response(JSON.stringify(url.endsWith("/sessions") ? [] : {}), { status: 200 })
   }
-  return Object.assign(() => postCount, { signals })
+  return Object.assign(() => postCount, { signals, requests })
 }
 
 async function until(predicate: () => boolean) {
@@ -185,13 +187,20 @@ test("Stop immediately releases the composer even when the transport read has no
   }
 })
 
-test("a delayed old stream cannot finish or append into a replacement generation", async () => {
+test("Stop pauses queued messages and a delayed old stream cannot affect the resumed turn", async () => {
   const old = fixtureStream()
   const replacement = fixtureStream()
   const count = installResponses([old, replacement])
   const sendingOld = chat.sendMessage("First")
   await until(() => count() === 1)
-  const sendingReplacement = chat.sendMessage("Second")
+  await chat.sendMessage("Second")
+  assert.equal(count(), 1)
+  chat.stopGeneration()
+  assert.equal(store.getState().isStreaming, false)
+  assert.equal(store.getState().chatQueues[ids[0]].paused, true)
+  assert.deepEqual(store.getState().chatQueues[ids[0]].pending.map(turn => turn.content), ["Second"])
+  assert.equal(count(), 1)
+  const sendingReplacement = chat.resumeQueue(ids[0])
   await until(() => count() === 2)
   try {
     old.event("token", { content: "Stale answer" })
@@ -207,6 +216,68 @@ test("a delayed old stream cannot finish or append into a replacement generation
     replacement.close()
     await sendingReplacement
   }
+})
+
+test("queued turns run in order in their own session with the settings chosen when sent", async () => {
+  const first = fixtureStream()
+  const second = fixtureStream()
+  const third = fixtureStream()
+  const count = installResponses([first, second, third])
+  const sending = chat.sendMessage("First")
+  await until(() => count() === 1)
+  store.setState({ selectedCollections: ["research"], thinking: false, activeProvider: "provider-a", activeModel: "model-a" })
+  await chat.sendMessage("Second")
+  store.setState({ selectedCollections: ["meetings"], thinking: true, webSearch: true })
+  await chat.sendMessage("Third")
+  assert.equal(count(), 1)
+  assert.equal(count.signals[0].aborted, false)
+  assert.deepEqual(store.getState().chatQueues[ids[0]].pending.map(turn => turn.content), ["Second", "Third"])
+  module._setCachedMessages(ids[1], settled)
+  await store.getState().loadSessionMessages(ids[1])
+  const otherConversation = store.getState().messages
+
+  first.event("done", {})
+  first.close()
+  await until(() => count() === 2)
+  assert.ok(count.requests[1].url.endsWith(`/sessions/${ids[0]}/messages`))
+  assert.deepEqual(count.requests[1].body, {
+    content: "Second", attachment_ids: [], thinking: false,
+    collections: ["research"], provider_id: "provider-a", model: "model-a", web_search_enabled: false,
+  })
+  assert.equal(store.getState().messages, otherConversation)
+  second.event("done", {})
+  second.close()
+  await until(() => count() === 3)
+  assert.equal(count.requests[2].body.content, "Third")
+  assert.deepEqual(count.requests[2].body.collections, ["meetings"])
+  assert.equal(count.requests[2].body.web_search_enabled, true)
+  third.event("token", { content: "Third answer" })
+  third.event("done", {})
+  third.close()
+  await sending
+  await until(() => !store.getState().chatQueues[ids[0]])
+  await store.getState().loadSessionMessages(ids[0])
+  assert.deepEqual(store.getState().messages.filter(message => message.role === "user").map(message => message.content), ["First", "Second", "Third"])
+  assert.equal(store.getState().messages.at(-1)?.content, "Third answer")
+  assert.equal(store.getState().isStreaming, false)
+})
+
+test("a failed response leaves later queued messages paused and removable", async () => {
+  const failed = fixtureStream()
+  const count = installResponses([failed])
+  const sending = chat.sendMessage("First")
+  await until(() => count() === 1)
+  await chat.sendMessage("Keep this draft")
+  failed.event("error", { content: "Unavailable" })
+  failed.close()
+  await sending
+  const queue = store.getState().chatQueues[ids[0]]
+  assert.equal(queue.paused, true)
+  assert.equal(queue.running, null)
+  assert.deepEqual(queue.pending.map(turn => turn.content), ["Keep this draft"])
+  assert.equal(count(), 1)
+  store.getState().setChatQueue(ids[0], current => current && { ...current, pending: [] })
+  assert.equal(store.getState().chatQueues[ids[0]], undefined)
 })
 
 test("a failing message cleanup cannot strand the global busy flag or controller", async () => {
@@ -291,7 +362,7 @@ test("sending attachments uses IDs and retains them in the optimistic user messa
     if (String(input).endsWith("/messages")) bodies.push(JSON.parse(init?.body as string))
     return new Response('event: done\ndata: {}\n\n', { status: 200 })
   }
-  await chat.sendMessage("Read this", false, false, [attachment])
+  await chat.sendMessage("Read this", [attachment])
   assert.deepEqual(bodies[0].attachment_ids, [attachment.id])
   assert.deepEqual(store.getState().messages[0].attachments, [attachment])
   assert.equal(store.getState().chatAttachmentDrafts[ids[0]].length, 0)
@@ -300,7 +371,7 @@ test("sending attachments uses IDs and retains them in the optimistic user messa
 test("failed send preserves attachment drafts for retry", async () => {
   store.getState().setChatAttachmentDrafts(ids[0], () => [{ key: attachment.id, filename: attachment.filename, status: "ready", attachment }])
   globalThis.fetch = async () => new Response("temporary failure", { status: 503 })
-  await chat.sendMessage("Read this", false, false, [attachment])
+  await chat.sendMessage("Read this", [attachment])
   assert.equal(store.getState().chatAttachmentDrafts[ids[0]][0].attachment?.id, attachment.id)
 })
 

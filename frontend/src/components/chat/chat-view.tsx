@@ -44,6 +44,7 @@ export function ChatView() {
   )
   const bottomRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const composerDockRef = useRef<HTMLDivElement>(null)
   /** Stick to bottom while streaming until user intentionally scrolls. */
   const stickToBottom = useRef(true)
   /** Ignore scroll events caused by our own programmatic scroll. */
@@ -61,7 +62,6 @@ export function ChatView() {
    */
   const [threadVisible, setThreadVisible] = useState(true)
   const [displayMessages, setDisplayMessages] = useState(messages)
-  const [displayEmpty, setDisplayEmpty] = useState(messages.length === 0)
   /** Session whose content is currently painted (undefined = never committed). */
   const paintedSessionRef = useRef<string | null | undefined>(undefined)
   const fadeTimerRef = useRef(0)
@@ -251,9 +251,7 @@ export function ChatView() {
 
     const commit = () => {
       paintedSessionRef.current = sessionId
-      const msgs = useAppStore.getState().messages
-      setDisplayMessages(msgs)
-      setDisplayEmpty(msgs.length === 0)
+      setDisplayMessages(useAppStore.getState().messages)
       stickToBottom.current = true
       setShowScrollBtn(false)
       requestAnimationFrame(() => {
@@ -293,7 +291,6 @@ export function ChatView() {
     if (sessionLoading) return
     if (sessionId && sessionHydratedId !== sessionId) return
     setDisplayMessages(messages)
-    setDisplayEmpty(messages.length === 0)
   }, [messages, sessionId, sessionLoading, sessionHydratedId])
 
   // Keep edge fades in sync when content height changes
@@ -307,8 +304,24 @@ export function ChatView() {
     return () => ro.disconnect()
   }, [displayMessages, sessionId, updateEdgeFade])
 
+  useEffect(() => {
+    const dock = composerDockRef.current
+    const stage = dock?.parentElement
+    if (!dock || !stage || typeof ResizeObserver === "undefined") return
+    const observer = new ResizeObserver(() => {
+      if (stage.hasAttribute("data-starter")) return
+      stage.style.setProperty("--pm-chat-dock-height", `${dock.offsetHeight}px`)
+      pinToBottom()
+    })
+    observer.observe(dock)
+    return () => observer.disconnect()
+  }, [pinToBottom])
+
   const currentSession = sessions.find((s) => s.id === sessionId)
-  const sessionTitle = currentSession?.title || "New Chat"
+  const sessionTitle = currentSession?.title || t("chat.newChatTitle")
+  // History can be temporarily empty while a saved conversation is loading.
+  const showStarter = !sessionLoading && (!sessionId || sessionHydratedId === sessionId)
+    && messages.length === 0 && !isStreaming && !selectedReport
 
   return (
     <div className="pm-chat-report-layout" style={{ "--pm-report-left-w": `${reportRatio * 100}%` } as CSSProperties}>
@@ -319,19 +332,23 @@ export function ChatView() {
         <div
           className="pm-chat-stage"
         >
-          <div className="pm-chat-stage-surface">
-            <div className="pm-chat-stage-head">
-              <h1 className="pm-chat-stage-title" title={sessionTitle}>
-                {sessionTitle}
-              </h1>
-              <ConversationAssets key={sessionId} messages={sessionHydratedId === sessionId ? messages : []} sessionId={sessionId} refreshKey={`${messages.length}:${isStreaming}`} onOpenReport={setSelectedReport} />
-            </div>
+          <div className="pm-chat-stage-surface" data-starter={showStarter || undefined}>
+            {!showStarter && (
+              <div className="pm-chat-stage-head">
+                <h1 className="pm-chat-stage-title" title={sessionTitle}>
+                  {sessionTitle}
+                </h1>
+                <ConversationAssets key={sessionId} messages={sessionHydratedId === sessionId ? messages : []} sessionId={sessionId} refreshKey={`${messages.length}:${isStreaming}`} onOpenReport={setSelectedReport} />
+              </div>
+            )}
 
             <div className="pm-chat-thread-shell">
               <div
                 ref={scrollRef}
                 onScroll={onScroll}
                 className="pm-chat-thread"
+                data-fade-top={edgeFade.top || undefined}
+                data-fade-bottom={edgeFade.bottom || undefined}
               >
                 <div
                   className={cn(
@@ -339,16 +356,7 @@ export function ChatView() {
                     threadVisible ? "is-in" : "is-out"
                   )}
                 >
-                  {displayEmpty ? (
-                    <div className="pm-chat-empty">
-                      <p className="pm-chat-empty-title">
-                        {t("chat.emptyTitle")}
-                      </p>
-                      <p className="pm-chat-empty-sub">
-                        {t("chat.emptyHint")}
-                      </p>
-                    </div>
-                  ) : (
+                  {displayMessages.length > 0 && (
                     <div className="pm-chat-thread-inner">
                       {displayMessages.map((msg) => (
                         <MessageBubble
@@ -380,7 +388,7 @@ export function ChatView() {
               )}
             />
 
-            {showScrollBtn && (
+            {!showStarter && showScrollBtn && (
               <button
                 type="button"
                 onClick={scrollToBottom}
@@ -391,7 +399,8 @@ export function ChatView() {
               </button>
             )}
 
-            <div className="pm-chat-composer-dock">
+            <div className="pm-chat-composer-dock" ref={composerDockRef}>
+              {showStarter && <h1 className="pm-chat-starter-title">{t("chat.emptyTitle")}</h1>}
               <ChatInput />
             </div>
           </div>

@@ -359,6 +359,8 @@ app.include_router(recall_router, prefix="/api")
 from src.api.routes.agent import agent_router, meeting_router as agent_meeting_router  # noqa: E402
 from src.api.routes.search import router as agent_search_router  # noqa: E402
 app.include_router(agent_search_router, prefix="/api")
+from src.search.routes import router as workspace_search_router  # noqa: E402
+app.include_router(workspace_search_router, prefix="/api")
 app.include_router(agent_router, prefix="/api")
 app.include_router(agent_meeting_router, prefix="/api")
 app.include_router(logs_router, prefix="/api")

@@ -2,11 +2,14 @@ import * as React from "react"
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { cn } from "@/lib/utils"
+import { Check } from "lucide-react"
+import { placeConnectedMenu, placeFloatingMenu } from "@/lib/menu-position"
+import { MENU_DURATION, useMenuPresence } from "@/hooks/use-menu-presence"
 
 /** Open/close duration — keep in sync with CSS `--pm-menu-ms` */
-export const MENU_MS = 180
+export const MENU_MS = MENU_DURATION
 /** Silk exit (export menus etc.) — keep in sync with `.pm-meeting-export-menu` */
-export const MENU_SILK_MS = 280
+export const MENU_SILK_MS = MENU_DURATION
 
 const Menu = React.forwardRef<
   HTMLDivElement,
@@ -61,6 +64,15 @@ function SoftMenu({
   /** Unmount delay after close — match CSS transition (default MENU_MS). */
   exitMs = MENU_MS,
   style,
+  connected = false,
+  connectedPanel,
+  connectedPanelKey,
+  rootWidth = 220,
+  childWidth = 260,
+  onClose,
+  onSubmenuBack,
+  autoFocus = false,
+  onKeyDown,
   ...props
 }: Omit<React.ComponentProps<"div">, "children"> & {
   open: boolean
@@ -75,45 +87,46 @@ function SoftMenu({
   fixedCoords?: { top: number; left: number } | null
   matchAnchorWidth?: boolean
   exitMs?: number
+  /** Keep the root's layout stable even when the current row has no child. */
+  connected?: boolean
+  connectedPanel?: React.ReactNode
+  /** Stable category identity; only a category change replays the child reveal. */
+  connectedPanelKey?: string | null
+  rootWidth?: number
+  childWidth?: number
+  onClose?: () => void
+  onSubmenuBack?: () => void
+  autoFocus?: boolean
 }) {
-  const [mounted, setMounted] = useState(false)
-  const [shown, setShown] = useState(false)
+  const { mounted, shown } = useMenuPresence(open, exitMs)
+  const childPresence = useMenuPresence(open && Boolean(connectedPanel), exitMs)
+  const [lastPanel, setLastPanel] = useState({ content: connectedPanel, key: connectedPanelKey })
+  // Retain the last child while it fades out; its closing surface is inert.
+  if (open && connectedPanel && (lastPanel.content !== connectedPanel || lastPanel.key !== connectedPanelKey)) {
+    setLastPanel({ content: connectedPanel, key: connectedPanelKey })
+  }
+  const visiblePanel = connectedPanel || (childPresence.mounted ? lastPanel.content : null)
   const menuRef = useRef<HTMLDivElement>(null)
+  const rootContentRef = useRef<HTMLDivElement>(null)
+  const childContentRef = useRef<HTMLDivElement>(null)
+  const pendingChildFocus = useRef(false)
   const [coords, setCoords] = useState<{
     top: number
     left: number
     maxHeight?: number
     flip?: "up" | "down"
+    side?: "left" | "right"
+    maxWidth?: number
+    width?: number
+    height?: number
+    root?: ReturnType<typeof placeConnectedMenu>["root"]
+    child?: ReturnType<typeof placeConnectedMenu>["child"]
   } | null>(null)
   const [anchorWidth, setAnchorWidth] = useState<number | null>(null)
-
-  useEffect(() => {
-    let exitTimer: ReturnType<typeof setTimeout> | null = null
-    let raf1 = 0
-    let raf2 = 0
-
-    if (open) {
-      setMounted(true)
-      // Double rAF: mount at closed style, then paint, then open (symmetric silk)
-      raf1 = requestAnimationFrame(() => {
-        raf2 = requestAnimationFrame(() => {
-          setShown(true)
-        })
-      })
-    } else {
-      // Keep mounted + last coords so CSS can play close transition
-      setShown(false)
-      exitTimer = setTimeout(() => {
-        setMounted(false)
-      }, exitMs)
-    }
-
-    return () => {
-      if (exitTimer) clearTimeout(exitTimer)
-      if (raf1) cancelAnimationFrame(raf1)
-      if (raf2) cancelAnimationFrame(raf2)
-    }
-  }, [open, exitMs])
+  const hasConnectedPanel = Boolean(visiblePanel)
+  const isConnectedMenu = connected || connectedPanelKey !== undefined || hasConnectedPanel
+  const explicitTop = fixedCoords?.top
+  const explicitLeft = fixedCoords?.left
 
   useLayoutEffect(() => {
     // While closing (open=false), keep last top/left/width so the exit animation
@@ -122,8 +135,8 @@ function SoftMenu({
       return
     }
     // Explicit coords win (submenu measured by caller)
-    if (fixedCoords) {
-      setCoords(fixedCoords)
+    if (explicitTop != null && explicitLeft != null) {
+      setCoords({ top: explicitTop, left: explicitLeft })
       setAnchorWidth(null)
       return
     }
@@ -134,98 +147,21 @@ function SoftMenu({
       const el = anchorRef.current
       if (!el) return
       const r = el.getBoundingClientRect()
-      const gap = 6
-      const commit = (
-        next: { top: number; left: number; maxHeight?: number; flip?: "up" | "down" },
-        width: number | null,
-      ) => {
-        // Same numbers → keep previous object so we do not re-render forever.
-        setCoords((prev) => {
-          if (
-            prev &&
-            prev.top === next.top &&
-            prev.left === next.left &&
-            prev.maxHeight === next.maxHeight &&
-            prev.flip === next.flip
-          ) {
-            return prev
-          }
-          return next
-        })
-        setAnchorWidth((prev) => (prev === width ? prev : width))
-      }
-      if (placement === "right") {
-        // Prefer the parent SoftMenu's right edge (full column), not just the row.
-        const parentMenu = el.closest(
-          '[data-slot="menu"]',
-        ) as HTMLElement | null
-        const pr = parentMenu?.getBoundingClientRect() ?? r
-        const fly = menuRef.current
-        const mw = fly?.offsetWidth || 200
-        const mh = fly?.offsetHeight || 200
-
-        let left = pr.right + gap
-        // Align top with hovered row; keep inside viewport
-        let top = r.top
-        if (left + mw > window.innerWidth - 8) {
-          // Flip to left of parent menu
-          left = Math.max(8, pr.left - mw - gap)
-        }
-        if (top + mh > window.innerHeight - 8) {
-          top = Math.max(8, window.innerHeight - mh - 8)
-        }
-        if (top < 8) top = 8
-        commit({ top, left }, null)
-        return
-      }
-      // Match pill width + left-align under trigger (no translateX(-100%))
-      if (matchAnchorWidth) {
-        let top = r.bottom + gap
-        const mh = menuRef.current?.offsetHeight || 320
-        if (top + mh > window.innerHeight - 8) {
-          // Prefer drop-up if not enough room below
-          const up = r.top - gap - mh
-          if (up >= 8) top = up
-          else top = Math.max(8, window.innerHeight - mh - 8)
-        }
-        commit({ top, left: r.left }, Math.round(r.width))
-        return
-      }
       const fly = menuRef.current
-      const pad = 8
-      const vw = window.innerWidth
-      const vh = window.innerHeight
-      const mw = fly?.offsetWidth || 288
-      const mh = fly?.offsetHeight || 320
-      let left = r.left
-      if (align === "center") left = r.left + r.width / 2
-      else if (align === "end") left = r.right
-      else {
-        left = Math.min(Math.max(pad, left), Math.max(pad, vw - pad - mw))
-      }
-
-      const spaceBelow = vh - pad - (r.bottom + gap)
-      const spaceAbove = r.top - gap - pad
-      const flip: "up" | "down" =
-        mh > spaceBelow && spaceAbove > spaceBelow ? "up" : "down"
-      const side = flip === "up" ? spaceAbove : spaceBelow
-      const maxBox = Math.max(
-        160,
-        Math.min(vh - pad * 2, side > 0 ? side : vh - pad * 2),
-      )
-      const used = Math.min(mh, maxBox)
-      let top = flip === "up" ? r.top - gap - used : r.bottom + gap
-      if (top < pad) top = pad
-      if (top + used > vh - pad) top = Math.max(pad, vh - pad - used)
-      commit(
-        {
-          top,
-          left,
-          maxHeight: Math.max(160, Math.min(maxBox, vh - pad - top)),
-          flip,
-        },
-        null,
-      )
+      const width = matchAnchorWidth ? Math.max(220, r.width) : fly?.offsetWidth || 260
+      const next = isConnectedMenu ? placeConnectedMenu({
+        anchor: r, rootWidth: matchAnchorWidth ? Math.max(rootWidth, r.width - 20) : rootWidth,
+        rootHeight: (rootContentRef.current?.offsetHeight || 28) + 10,
+        childWidth, childHeight: hasConnectedPanel ? (childContentRef.current?.offsetHeight || 28) + 10 : null,
+        viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, align,
+      }) : placeFloatingMenu({
+        anchor: r, width, height: Math.max(fly?.offsetHeight || 0, fly?.scrollHeight || 0, 48),
+        viewportWidth: window.innerWidth, viewportHeight: window.innerHeight,
+        align, placement,
+      })
+      setCoords(prev => JSON.stringify(prev) === JSON.stringify(next) ? prev : next)
+      const w = matchAnchorWidth ? Math.min(width, next.maxWidth) : null
+      setAnchorWidth(prev => prev === w ? prev : w)
     }
     place()
     // Second pass after paint — flyout has real width/height for flip/clamp
@@ -236,6 +172,10 @@ function SoftMenu({
         ? new ResizeObserver(() => place())
         : null
     if (menuEl && ro) ro.observe(menuEl)
+    if (rootContentRef.current && ro) ro.observe(rootContentRef.current)
+    if (childContentRef.current && ro) ro.observe(childContentRef.current)
+    // Sidebar anchors resize while the icon rail expands; keep its flyout attached.
+    if (anchorRef.current && ro) ro.observe(anchorRef.current)
     window.addEventListener("scroll", place, true)
     window.addEventListener("resize", place)
     return () => {
@@ -252,14 +192,97 @@ function SoftMenu({
     placement,
     mounted,
     repositionKey,
-    fixedCoords?.top,
-    fixedCoords?.left,
+    explicitTop,
+    explicitLeft,
     matchAnchorWidth,
+    isConnectedMenu,
+    hasConnectedPanel,
+    connectedPanelKey,
+    rootWidth,
+    childWidth,
   ])
+
+  useEffect(() => {
+    if (!open || !onClose) return
+    const outside = (event: PointerEvent) => {
+      const target = event.target as Node
+      if (!menuRef.current?.contains(target) && !anchorRef?.current?.contains(target)) onClose()
+    }
+    document.addEventListener("pointerdown", outside)
+    return () => document.removeEventListener("pointerdown", outside)
+  }, [open, onClose, anchorRef])
+
+  useEffect(() => {
+    if (!open || !mounted || !autoFocus) return
+    const frame = requestAnimationFrame(() => {
+      const menu = menuRef.current
+      const first = menu?.querySelector<HTMLElement>('input:not(:disabled)')
+        || menu?.querySelector<HTMLElement>('[aria-selected="true"]:not(:disabled), [aria-checked="true"]:not(:disabled)')
+        || menu?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled), [role="option"]:not(:disabled), [role="menuitemradio"]:not(:disabled), [role="menuitemcheckbox"]:not(:disabled)')
+      first?.focus({ preventScroll: true })
+      first?.scrollIntoView({ block: 'nearest' })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [open, mounted, autoFocus])
+
+  useEffect(() => {
+    if (!open) { pendingChildFocus.current = false; return }
+    if (!connectedPanel || !pendingChildFocus.current) return
+    const first = menuRef.current?.querySelector<HTMLElement>('.sd-menu-child [role="menuitemradio"]:not(:disabled), .sd-menu-child [role="menuitem"]:not(:disabled)')
+    if (first) { first.focus({ preventScroll: true }); pendingChildFocus.current = false }
+  }, [open, connectedPanel])
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    onKeyDown?.(event)
+    if (event.defaultPrevented || event.nativeEvent.isComposing) return
+    const target = event.target as HTMLElement
+    if (event.key === "Escape" && onClose) {
+      event.preventDefault(); event.stopPropagation()
+      if (connectedPanel && onSubmenuBack) {
+        menuRef.current?.querySelector<HTMLElement>('[data-submenu-trigger][aria-expanded="true"]')?.focus()
+        onSubmenuBack()
+      } else {
+        onClose()
+        anchorRef?.current?.focus({ preventScroll: true })
+      }
+      return
+    }
+    const child = target.closest('.sd-menu-child')
+    const openKey = coords?.side === "left" ? "ArrowLeft" : "ArrowRight"
+    const backKey = openKey === "ArrowLeft" ? "ArrowRight" : "ArrowLeft"
+    if (event.key === backKey && child) {
+      event.preventDefault()
+      menuRef.current?.querySelector<HTMLElement>('[data-submenu-trigger][aria-expanded="true"]')?.focus()
+      return
+    }
+    if (event.key === openKey && target.closest('[data-submenu-trigger]')) {
+      event.preventDefault()
+      pendingChildFocus.current = true
+      if (target.getAttribute('aria-expanded') !== 'true') target.click()
+      requestAnimationFrame(() => {
+        const first = menuRef.current?.querySelector<HTMLElement>('.sd-menu-child [role="menuitemradio"]:not(:disabled), .sd-menu-child [role="menuitem"]:not(:disabled)')
+        if (first) { first.focus({ preventScroll: true }); pendingChildFocus.current = false }
+      })
+      return
+    }
+    if (event.key === "Tab" && onClose && event.currentTarget.getAttribute("role") === "menu") { onClose(); return }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+    if (target.matches('input, textarea, [contenteditable="true"]') && ['Home', 'End'].includes(event.key)) return
+    const scope = target.closest('[data-menu-list]') || menuRef.current
+    const items = Array.from(scope?.querySelectorAll<HTMLElement>('[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"]') || [])
+      .filter(item => !item.matches(':disabled, [aria-disabled="true"], [data-disabled]') && !item.closest('[inert]') && item.getClientRects().length)
+    if (!items.length) return
+    event.preventDefault()
+    const current = items.indexOf(target)
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+      : current === -1 ? (event.key === 'ArrowUp' ? items.length - 1 : 0)
+      : (current + (event.key === 'ArrowUp' ? -1 : 1) + items.length) % items.length
+    items[next].focus({ preventScroll: true }); items[next].scrollIntoView({ block: 'nearest' })
+  }
 
   if (!mounted) return null
 
-  const resolved = fixedCoords ?? coords
+  const resolved: typeof coords = fixedCoords ?? coords
   // CSS `.pm-menu--portal` is position:fixed. Without top/left/width a
   // block-level fixed node fills the viewport (white screen) until measured.
   const portalStyle: React.CSSProperties | undefined = portal
@@ -270,6 +293,8 @@ function SoftMenu({
           left: resolved.left,
           zIndex: placement === "right" ? 420 : 400,
           margin: 0,
+          maxWidth: resolved.maxWidth != null ? resolved.maxWidth : "calc(100vw - 24px)",
+          maxHeight: resolved.maxHeight != null ? resolved.maxHeight : "calc(100dvh - 24px)",
           ...("maxHeight" in resolved && resolved.maxHeight
             ? {
                 ["--pm-menu-viewport-max" as string]: `${resolved.maxHeight}px`,
@@ -283,6 +308,10 @@ function SoftMenu({
                 boxSizing: "border-box" as const,
               }
             : null),
+          ...(resolved.root ? {
+            width: resolved.width, minWidth: resolved.width, maxWidth: resolved.width,
+            height: resolved.height,
+          } : null),
         }
       : {
           position: "fixed",
@@ -297,6 +326,10 @@ function SoftMenu({
   const menu = (
     <Menu
       ref={menuRef}
+      inert={!open || undefined}
+      aria-hidden={!open || undefined}
+      onKeyDown={handleKeyDown}
+      data-menu-side={coords?.side}
       data-menu-portal={portal ? "true" : undefined}
       data-menu-align={
         portal ? (matchAnchorWidth ? "start" : align) : undefined
@@ -316,18 +349,10 @@ function SoftMenu({
         "pm-menu--soft",
         shown && "is-open",
         portal && "pm-menu--portal",
-        portal &&
-          placement === "bottom" &&
-          !matchAnchorWidth &&
-          align === "center" &&
-          "is-align-center",
-        portal &&
-          placement === "bottom" &&
-          !matchAnchorWidth &&
-          align === "end" &&
-          "is-align-end",
         portal && matchAnchorWidth && "is-match-width",
         portal && placement === "right" && "is-placement-right",
+        isConnectedMenu && "sd-menu-connected",
+        hasConnectedPanel && "has-child",
         className
       )}
       style={{
@@ -335,12 +360,23 @@ function SoftMenu({
         // Keep CSS transition duration in lockstep with unmount delay
         ...( {
           ["--pm-menu-ms" as string]: `${exitMs}ms`,
+          ["--sd-menu-root-width" as string]: `${rootWidth}px`,
+          ["--sd-menu-child-width" as string]: `${childWidth}px`,
         } as React.CSSProperties),
         ...(style as React.CSSProperties | undefined),
       }}
       {...props}
     >
-      {children}
+      {isConnectedMenu ? <>
+        <div className="sd-menu-root" data-menu-list style={coords?.root}>
+          <div ref={rootContentRef}>{children}</div>
+        </div>
+        {hasConnectedPanel && <div className={cn("sd-menu-child", childPresence.shown && "is-open")} data-menu-list
+          style={coords?.child ?? undefined}
+          inert={!open || !connectedPanel || undefined} aria-hidden={!open || !connectedPanel || undefined}>
+          <div ref={childContentRef} key={connectedPanel ? connectedPanelKey : lastPanel.key} className="sd-menu-child-content">{visiblePanel}</div>
+        </div>}
+      </> : children}
     </Menu>
   )
 
@@ -404,6 +440,10 @@ function MenuItemDescription({
   )
 }
 
+function MenuCheck({ checked = true }: { checked?: boolean }) {
+  return <span className="sd-menu-check" data-checked={checked || undefined} aria-hidden="true">{checked && <Check size={13} strokeWidth={2.2} />}</span>
+}
+
 function MenuSeparator({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -425,4 +465,5 @@ export {
   MenuItemTitle,
   MenuItemDescription,
   MenuSeparator,
+  MenuCheck,
 }

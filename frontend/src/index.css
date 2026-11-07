@@ -1645,23 +1645,6 @@ li.pm-toast[data-sonner-toast] {
   animation: sk-btn-ring 2.4s cubic-bezier(0.25, 1, 0.5, 1) infinite;
 }
 
-/* ── AI-COMP-121 · streaming cursor ── */
-@keyframes sk-cursor-blink {
-  0%, 45%   { opacity: 1; transform: scaleY(1); }
-  50%, 95%  { opacity: 0.25; transform: scaleY(0.85); }
-  100%      { opacity: 1; transform: scaleY(1); }
-}
-.sk-stream-cursor {
-  display: inline-block;
-  width: 2px;
-  height: 1em;
-  background: var(--ze-green);
-  vertical-align: text-bottom;
-  margin-left: 2px;
-  border-radius: 1px;
-  animation: sk-cursor-blink 0.9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-}
-
 /* ── AI-COMP-010 · checkbox-diamond (rounded diamond) ── */
 .sk-diamond {
   width: 6px;
@@ -5849,8 +5832,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   color: var(--pm-muted) !important;
   height: auto !important;
   min-height: 0 !important;
-  /* Tab hover = text color only (no wash / lift) */
-  transition: color 180ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) !important;
+  transition: color 180ms var(--pm-ease), background-color 180ms var(--pm-ease) !important;
 }
 .pm-tabs [role="tab"]::after,
 .pm-tabs [role="tab"][data-active]::after,
@@ -5872,11 +5854,11 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 .pm-tabs [role="tab"]:not([aria-selected="true"]):not([data-active]):not([data-state="active"]) {
   color: var(--pm-muted) !important;
 }
-/* Hover: text green only — no background wash */
+/* Hover is neutral; emerald consistently means selected. */
 .pm-tabs [role="tab"]:not([aria-selected="true"]):not([data-active]):not([data-state="active"]):hover,
-.pm-vtab:not(.is-on):hover {
-  color: var(--pm-green) !important;
-  background: transparent !important;
+.pm-vtab:not(.is-on):not([data-active]):not([aria-selected="true"]):hover {
+  color: var(--sd-ink) !important;
+  background: var(--sd-hover) !important;
 }
 /* Sliding pill indicator (Base UI sets --active-tab-*) */
 .pm-tabs [data-slot="tabs-indicator"],
@@ -8162,14 +8144,12 @@ button.pm-rail-new:hover:not(:disabled) {
   right: 12px;
   top: 0;
   z-index: 0;
-  border-radius: 10px;
+  border-radius: 17px;
   pointer-events: none;
   /* Soft mint wash on float surface */
-  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 9%, #fdfbf7);
-  /* Deep green left edge (mock) */
-  box-shadow:
-    inset 2.5px 0 0 0 var(--pm-green, #1a5e3d),
-    inset 0 0 0 1px color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, transparent);
+  background: var(--sd-selected);
+  /* Selection uses only a soft fill; focus outlines remain keyboard-only. */
+  box-shadow: none;
   will-change: transform, height;
   transition: none;
 }
@@ -8209,8 +8189,8 @@ button.pm-rail-new:hover:not(:disabled) {
   --col-row-surface: color-mix(in srgb, var(--pm-ink, #121410) 3.5%, var(--pm-float, #fdfbf7));
 }
 .pm-shell-col-row.is-active {
-  background: transparent; /* mint + green bar from sliding indicator */
-  --col-row-surface: color-mix(in srgb, var(--pm-green, #1a5e3d) 9%, #fdfbf7);
+  background: transparent; /* fill comes from the sliding indicator */
+  --col-row-surface: var(--sd-selected);
   color: var(--pm-ink, #121410);
 }
 /* Archived rows stay fully usable — greyed name + tag, same interactions */
@@ -10278,22 +10258,31 @@ body.pm-dnd-active .pm-shell-header::after {
     background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
     color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
-.pm-menu-item:hover:not(:disabled) {
-  background: var(--pm-green-wash);
-  color: var(--pm-ink);
+.pm-menu-item:where(:hover, [data-highlighted]):not(:disabled):not([data-disabled]) {
+  background: var(--sd-hover);
+  color: var(--sd-ink);
+  outline: none;
 }
-.pm-menu-item:disabled {
+.pm-menu-item:disabled, .pm-menu-item[data-disabled] {
   opacity: 0.45;
   cursor: not-allowed;
 }
-.pm-menu-item.is-on {
-  background: var(--pm-green-soft);
-  color: var(--pm-green);
+.pm-menu-item.is-on, .pm-menu-item[aria-checked="true"] {
+  background: var(--sd-selected);
+  color: var(--sd-selected-ink);
+}
+.pm-menu-item:is(.is-on, [aria-checked="true"]):is(:hover, [data-highlighted]):not(:disabled) {
+  background: var(--sd-selected-hover);
+  color: var(--sd-selected-ink);
+}
+.pm-menu-item:focus-visible {
+  outline: 2px solid var(--sd-focus);
+  outline-offset: -2px;
 }
 .pm-menu-item.is-danger {
   color: var(--pm-danger);
 }
-.pm-menu-item.is-danger:hover:not(:disabled) {
+.pm-menu-item.is-danger:is(:hover, [data-highlighted]):not(:disabled) {
   background: color-mix(in srgb, var(--pm-danger) 8%, transparent);
   color: var(--pm-danger);
 }
@@ -12188,8 +12177,8 @@ html:lang(zh) .pm-settings-card-desc {
 }
 .pm-settings-hw-main {
   flex: 1 1 auto;
-  /* Soft canvas well so nested cards float */
-  background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 72%, #ffffff);
+  background: transparent;
+  box-shadow: none;
 }
 .pm-settings-hw-rail-head {
   position: relative;
@@ -12317,12 +12306,10 @@ html:lang(zh) .pm-settings-card-desc {
   right: 8px;
   top: 0;
   z-index: 0;
-  border-radius: 10px;
+  border-radius: 17px;
   pointer-events: none;
-  background: var(--pm-green-wash);
-  box-shadow:
-    inset 2.5px 0 0 0 var(--pm-green, #1a5e3d),
-    inset 0 0 0 1px color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, transparent);
+  background: var(--sd-selected);
+  box-shadow: none;
   will-change: transform, height;
   transition: none;
 }
@@ -12393,11 +12380,9 @@ html:lang(zh) .pm-settings-card-desc {
   flex-direction: column;
   gap: 10px;
   padding: 12px var(--pm-hw-inset, 14px);
-  border-radius: 16px;
-  background: #ffffff;
-  box-shadow:
-    0 1px 2px color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent),
-    0 0 0 1px color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent);
+  border-radius: var(--sd-radius-card);
+  background: var(--sd-surface-raised);
+  box-shadow: var(--sd-shadow-control);
 }
 .pm-settings-hw-meta-top {
   display: flex;
@@ -12427,11 +12412,11 @@ html:lang(zh) .pm-settings-card-desc {
   padding-bottom: 0;
 }
 .pm-settings-hw-action-btn {
-  height: 30px !important;
-  min-height: 30px !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  width: 32px;
   border-radius: 999px !important;
-  padding-left: 12px !important;
-  padding-right: 12px !important;
+  padding: 0 !important;
   gap: 5px !important;
   font: var(--type-label) !important;
   letter-spacing: 0.02em !important;
@@ -12505,11 +12490,9 @@ html:lang(zh) .pm-settings-card-desc {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border-radius: 16px;
-  background: #ffffff;
-  box-shadow:
-    0 1px 2px color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent),
-    0 0 0 1px color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent);
+  border-radius: var(--sd-radius-card);
+  background: var(--sd-surface-raised);
+  box-shadow: var(--sd-shadow-control);
   overflow: hidden;
 }
 .pm-settings-hw-words-head {
@@ -12564,10 +12547,10 @@ html:lang(zh) .pm-settings-card-desc {
 }
 .pm-settings-hw-add {
   border-radius: 999px !important;
-  height: 24px !important;
-  min-height: 24px !important;
-  padding-left: 10px !important;
-  padding-right: 10px !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  width: 32px;
+  padding: 0 !important;
   gap: 4px !important;
   color: var(--pm-green, #1a5e3d) !important;
   background: var(--pm-green-wash) !important;
@@ -12600,37 +12583,38 @@ html:lang(zh) .pm-settings-card-desc {
 .pm-settings-hw-word-slot.is-leaving {
   pointer-events: none;
 }
-/* Dense soft capsule row */
+/* Quiet editable rows: only the current interaction needs a filled surface. */
 .pm-settings-hw-word-row {
   display: flex;
   align-items: center;
-  gap: 5px;
-  min-height: 30px;
-  padding: 2px 4px 2px 6px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 72%, #ffffff);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent);
+  gap: 8px;
+  min-height: 44px;
+  padding: 6px;
+  border-radius: 18px;
+  background: transparent;
+  box-shadow: none;
   transition:
     background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
     box-shadow 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
+.pm-settings-hw-word-row:hover {
+  background: var(--sd-field);
+}
 .pm-settings-hw-word-row:focus-within {
-  background: #ffffff;
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--pm-green, #1a5e3d) 20%, transparent),
-    0 0 0 2px var(--pm-green-wash);
+  background: var(--sd-selected);
+  box-shadow: none;
 }
 .pm-settings-hw-word-text[data-slot="input"],
 .pm-settings-hw-main .pm-settings-hw-word-text {
   flex: 1 1 auto;
   min-width: 0;
-  height: 26px !important;
-  min-height: 26px !important;
+  height: 32px !important;
+  min-height: 32px !important;
   border-radius: 999px !important;
   border-color: transparent !important;
   background: transparent !important;
   box-shadow: none !important;
-  padding-left: 8px !important;
+  padding-left: 12px !important;
   padding-right: 4px !important;
   padding-top: 0 !important;
   padding-bottom: 0 !important;
@@ -12648,11 +12632,11 @@ html:lang(zh) .pm-settings-card-desc {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  height: 24px;
+  height: 30px;
   padding: 0 2px 0 7px;
   border-radius: 999px;
-  background: #ffffff;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pm-ink, #121410) 7%, transparent);
+  background: var(--sd-field);
+  box-shadow: none;
 }
 .pm-settings-hw-weight-label {
   font: var(--type-meta);
@@ -12663,8 +12647,8 @@ html:lang(zh) .pm-settings-card-desc {
 .pm-settings-hw-weight-input[data-slot="input"],
 .pm-settings-hw-main .pm-settings-hw-weight-input {
   width: 1.75rem !important;
-  height: 22px !important;
-  min-height: 22px !important;
+  height: 28px !important;
+  min-height: 28px !important;
   padding: 0 2px !important;
   text-align: center !important;
   border: none !important;
@@ -12687,13 +12671,20 @@ html:lang(zh) .pm-settings-card-desc {
 }
 /* Dense lang select inside word row */
 .pm-settings-hw-word-row .pm-select-trigger--sm {
-  min-height: 28px !important;
-  height: 28px !important;
+  min-height: 32px !important;
+  height: 32px !important;
   padding: 0 8px 0 10px !important;
   font: var(--type-ui) !important;
   letter-spacing: 0.01em;
-  background: #ffffff !important;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pm-ink, #121410) 7%, transparent) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.pm-settings-hw-word-row .pm-select-trigger--sm:hover:not(.is-disabled) {
+  background: var(--sd-hover) !important;
+}
+.pm-settings-hw-word-row .pm-select-trigger--sm.is-open {
+  background: var(--sd-selected) !important;
+  color: var(--sd-selected-ink);
 }
 .pm-settings-hw-word-row .pm-select-chev {
   width: 12px !important;
@@ -12704,13 +12695,13 @@ html:lang(zh) .pm-settings-card-desc {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 32px;
+  height: 32px;
   margin: 0;
   padding: 0;
   border: none;
   border-radius: 999px;
-  color: var(--pm-faint, #969c96);
+  color: var(--sd-muted);
   background: transparent;
   cursor: pointer;
   transition:
@@ -12720,6 +12711,10 @@ html:lang(zh) .pm-settings-card-desc {
 .pm-settings-hw-word-del:hover {
   color: var(--pm-danger, #c43c3c);
   background: color-mix(in srgb, var(--pm-danger, #c43c3c) 10%, transparent);
+}
+.pm-settings-hw-word-del:focus-visible {
+  outline: 2px solid var(--sd-focus);
+  outline-offset: -2px;
 }
 .pm-settings-hw-words-empty {
   display: flex;
@@ -13425,12 +13420,12 @@ html:lang(zh) .pm-settings-card-desc {
   box-sizing: border-box;
   font: var(--type-ui);
   color: var(--pm-text);
-  background: #ffffff;
+  background: var(--sd-field);
   border: none;
   border-radius: 999px;
   outline: none;
   cursor: pointer;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-ink) 7%, transparent);
+  box-shadow: none;
   transition:
     color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
     box-shadow 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
@@ -13462,29 +13457,19 @@ html:lang(zh) .pm-settings-card-desc {
   height: auto;
   padding: 2px 8px;
   font: var(--type-ui);
-  color: var(--pm-green, #1a5e3d);
-  background: var(--pm-green-wash, rgba(26, 94, 61, 0.06));
+  color: var(--sd-text);
+  background: var(--sd-field);
   box-shadow: none;
   max-width: 100%;
 }
-.pm-select-trigger:hover:not(.is-disabled):not(.pm-select-trigger--tag) {
-  background: color-mix(in srgb, var(--pm-ink) 2%, #ffffff);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-ink) 11%, transparent);
+.pm-select-trigger:hover:not(.is-disabled),
+.pm-select-trigger.is-open {
+  background: var(--sd-hover);
+  color: var(--sd-ink);
 }
-.pm-select-trigger--tag:hover:not(.is-disabled) {
-  background: color-mix(in srgb, var(--pm-green) 11%, #ffffff);
-}
-.pm-select-trigger.is-open,
 .pm-select-trigger:focus-visible {
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--pm-green) 35%, transparent),
-    0 0 0 3px var(--pm-green-wash);
-}
-.pm-select-trigger--tag.is-open,
-.pm-select-trigger--tag:focus-visible {
-  background: color-mix(in srgb, var(--pm-green) 12%, #ffffff);
-  /* Keep pill quiet — same language as static tag, soft wash only */
-  box-shadow: none;
+  outline: 2px solid var(--sd-focus);
+  outline-offset: 2px;
 }
 .pm-select-trigger.is-disabled {
   opacity: 0.55;
@@ -13545,13 +13530,14 @@ html:lang(zh) .pm-settings-card-desc {
   width: 100%;
   align-items: center;
   gap: 8px;
-  padding: 7px 10px;
+  min-height: 34px;
+  padding: 8px 11px;
   text-align: left;
   font: var(--type-ui);
   color: var(--pm-text);
   background: transparent;
   border: none;
-  border-radius: 999px;
+  border-radius: 12px;
   cursor: pointer;
   transition:
     background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
@@ -13582,16 +13568,16 @@ html:lang(zh) .pm-settings-card-desc {
 }
 .pm-select-opt:hover,
 .pm-select-opt.is-highlight {
-  background: var(--pm-green-wash);
-  color: var(--pm-ink);
+  background: var(--sd-hover);
+  color: var(--sd-ink);
 }
 .pm-select-opt.is-on {
-  background: color-mix(in srgb, var(--pm-green) 12%, #ffffff);
-  color: var(--pm-green);
+  background: var(--sd-selected);
+  color: var(--sd-selected-ink);
   font-weight: var(--type-weight-medium);
 }
-.pm-select-opt.is-on.is-highlight {
-  background: color-mix(in srgb, var(--pm-green) 18%, #ffffff);
+.pm-select-opt.is-on:is(.is-highlight, :hover) {
+  background: var(--sd-selected-hover);
 }
 .pm-select-opt.is-empty {
   cursor: default;
@@ -13601,20 +13587,14 @@ html:lang(zh) .pm-settings-card-desc {
 .pm-select-opt.is-empty:hover {
   background: transparent;
 }
-.pm-select-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  border: none;
-  background: color-mix(in srgb, var(--pm-ink) 12%, transparent);
-  transform: none;
-  transition: background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+.pm-select-check {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--sd-selected-ink);
+  opacity: 0;
 }
-.pm-select-dot.is-on {
-  background: var(--pm-green);
-  border-color: var(--pm-green);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pm-green) 14%, transparent);
-}
+.pm-select-check.is-on { opacity: 1; }
 
 /*
  * Premium DatePicker — compact soft float calendar (replaces native type=date).
@@ -14017,7 +13997,7 @@ html:lang(zh) .pm-settings-card-desc {
   width: 28px !important;
   padding: 0 !important;
   border: none !important;
-  border-radius: var(--pm-r-sm) !important;
+  border-radius: 999px !important;
   color: var(--pm-muted) !important;
   background: transparent !important;
   cursor: pointer;
@@ -14026,7 +14006,7 @@ html:lang(zh) .pm-settings-card-desc {
     color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
 .pm-ws-icon-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--pm-ink) 6%, transparent) !important;
+  background: var(--sd-hover) !important;
   color: var(--pm-ink) !important;
 }
 .pm-ws-icon-btn.is-danger:hover:not(:disabled) {
@@ -14512,7 +14492,7 @@ html:lang(zh) .pm-settings-card-desc {
   transition: color 180ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
 .pm-ws-seg-btn:hover {
-  color: var(--pm-muted);
+  color: var(--sd-ink);
 }
 .pm-ws-seg-btn.is-on {
   color: var(--pm-green);
@@ -14740,7 +14720,7 @@ html:lang(zh) .pm-settings-card-desc {
   color: var(--pm-muted) !important;
   background: transparent !important;
   border: none !important;
-  border-radius: var(--pm-r-sm) !important;
+  border-radius: 999px !important;
   cursor: pointer;
   flex-shrink: 0;
   transition:
@@ -14748,11 +14728,11 @@ html:lang(zh) .pm-settings-card-desc {
     color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
 .pm-ws-action:hover:not(:disabled) {
-  background: rgba(18, 20, 16, 0.05) !important;
-  color: var(--pm-green) !important;
+  background: var(--sd-hover) !important;
+  color: var(--sd-ink) !important;
 }
 .pm-ws-action.is-on {
-  background: var(--pm-green-wash) !important;
+  background: var(--sd-selected) !important;
   color: var(--pm-green) !important;
 }
 .pm-ws-action.is-danger:hover:not(:disabled) {
@@ -14764,7 +14744,7 @@ html:lang(zh) .pm-settings-card-desc {
   cursor: not-allowed;
 }
 .pm-ws-icon-btn.is-on {
-  background: var(--pm-green-wash) !important;
+  background: var(--sd-selected) !important;
   color: var(--pm-green) !important;
 }
 .pm-ws-status {
@@ -16061,27 +16041,27 @@ html:lang(zh) .pm-settings-card-desc {
   opacity: 0.5;
   cursor: not-allowed;
 }
-/* Update — soft primary (green wash) */
+/* Update uses the same solid primary as other main actions. */
 .pm-ws-foot-btn--pri {
-  color: var(--pm-green) !important;
-  background: var(--pm-green-soft, rgba(26, 94, 61, 0.1)) !important;
+  color: var(--pm-on) !important;
+  background: var(--sd-brand) !important;
 }
 .pm-ws-foot-btn--pri:hover:not(:disabled) {
-  color: var(--pm-green-deep, #0f4a2d) !important;
-  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 16%, transparent) !important;
+  color: var(--pm-on) !important;
+  background: var(--sd-brand-hover) !important;
 }
 /* Archive — quiet ghost wash */
 .pm-ws-foot-btn--ghost {
   color: var(--pm-muted) !important;
-  background: rgba(18, 20, 16, 0.05) !important;
+  background: var(--sd-field) !important;
 }
 .pm-ws-foot-btn--ghost:hover:not(:disabled) {
   color: var(--pm-ink) !important;
-  background: rgba(18, 20, 16, 0.09) !important;
+  background: var(--sd-hover) !important;
 }
 .pm-ws-foot-btn--ghost.is-on {
-  color: var(--pm-green) !important;
-  background: var(--pm-green-wash) !important;
+  color: var(--sd-ink) !important;
+  background: var(--sd-hover) !important;
 }
 /* Delete — danger wash */
 .pm-ws-foot-btn--danger {
@@ -16519,7 +16499,7 @@ html:lang(zh) .pm-settings-card-desc {
   transition: background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
 .pm-ws-menu-item:hover {
-  background: var(--pm-green-wash);
+  background: var(--sd-hover);
 }
 .pm-ws-menu-item.is-danger:hover {
   background: color-mix(in srgb, var(--pm-danger) 8%, transparent);
@@ -16624,8 +16604,8 @@ button.pm-ws-path-row {
   transition: color 200ms var(--pm-ws-scope-ease);
 }
 .pm-ws-scope-btn:hover:not(.is-on) {
-  color: var(--pm-muted);
-  background: transparent !important;
+  color: var(--sd-ink);
+  background: var(--sd-hover) !important;
 }
 .pm-ws-scope-btn.is-on {
   color: var(--pm-green);
@@ -17102,12 +17082,12 @@ button.pm-ws-path-row {
     background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
     padding 220ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
-.pm-files-tb-act:hover:not(:disabled) {
-  color: var(--pm-ink) !important;
-  background: color-mix(in srgb, var(--pm-ink) 4.5%, transparent) !important;
-}
-.pm-files-tb-act.is-on,
+.pm-files-tb-act:hover:not(:disabled),
 .pm-files-tb-act[data-state="open"] {
+  color: var(--pm-ink) !important;
+  background: var(--sd-hover) !important;
+}
+.pm-files-tb-act.is-on {
   color: var(--pm-green) !important;
   background: var(--pm-green-soft) !important;
 }
@@ -17171,12 +17151,12 @@ button.pm-ws-path-row {
     color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
     background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
-.pm-files-tb-btn:hover:not(:disabled) {
-  color: var(--pm-ink) !important;
-  background: color-mix(in srgb, var(--pm-ink) 4.5%, transparent) !important;
-}
-.pm-files-tb-btn.is-on,
+.pm-files-tb-btn:hover:not(:disabled),
 .pm-files-tb-btn[data-state="open"] {
+  color: var(--pm-ink) !important;
+  background: var(--sd-hover) !important;
+}
+.pm-files-tb-btn.is-on {
   color: var(--pm-green) !important;
   background: var(--pm-green-soft) !important;
 }
@@ -17218,14 +17198,14 @@ button.pm-ws-path-row {
 }
 .pm-files-tb-icon:hover:not(:disabled) {
   color: var(--pm-ink) !important;
-  background: color-mix(in srgb, var(--pm-ink) 5%, transparent) !important;
+  background: var(--sd-hover) !important;
 }
 .pm-files-tb-icon.is-on {
   color: var(--pm-green) !important;
   background: var(--pm-green-soft) !important;
 }
 .pm-files-tb-nav .pm-files-tb-icon:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--pm-ink) 5%, transparent) !important;
+  background: var(--sd-hover) !important;
 }
 .pm-files-tb-icon:disabled {
   opacity: 0.32;
@@ -17318,7 +17298,7 @@ button.pm-ws-path-row {
     color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
 .pm-files-menu-item:hover {
-  background: var(--pm-green-wash);
+  background: var(--sd-hover);
   color: var(--pm-ink);
 }
 .pm-files-menu-item.is-danger:hover {
@@ -17371,7 +17351,7 @@ button.pm-ws-path-row {
     color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
 .pm-files-menu-opt:hover {
-  background: var(--pm-green-wash);
+  background: var(--sd-hover);
 }
 .pm-files-menu-opt.is-on {
   background: var(--pm-green-soft);
@@ -18439,11 +18419,11 @@ button.pm-files-row-edit {
 }
 .pm-files-scope-btn:hover {
   color: var(--pm-ink);
-  background: color-mix(in srgb, var(--pm-ink) 3.5%, transparent);
+  background: var(--sd-hover);
 }
 .pm-files-scope-btn.is-on {
   color: var(--pm-green);
-  background: var(--pm-green-wash);
+  background: var(--sd-selected);
 }
 .pm-files-scope-hint {
   padding: 0 10px 8px;
@@ -20731,12 +20711,10 @@ button.pm-files-row-edit {
   right: 12px;
   top: 0;
   z-index: 0;
-  border-radius: 10px;
+  border-radius: 17px;
   pointer-events: none;
-  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 9%, #fdfbf7);
-  box-shadow:
-    inset 2.5px 0 0 0 var(--pm-green, #1a5e3d),
-    inset 0 0 0 1px color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, transparent);
+  background: var(--sd-selected);
+  box-shadow: none;
   will-change: transform, height;
   transition: none;
 }
@@ -21167,7 +21145,7 @@ button.pm-files-row-edit {
   overflow-y: auto;
   overscroll-behavior: contain;
   /* room for floating composer + scroll-to-bottom chip */
-  --pm-chat-composer-reserve: 9.5rem;
+  --pm-chat-composer-reserve: max(9.5rem, calc(var(--pm-chat-dock-height, 0px) + 36px));
   padding-bottom: var(--pm-chat-composer-reserve);
 }
 /* Session switch: opacity only — frozen content keeps height (no stage jitter) */
@@ -21234,36 +21212,10 @@ button.pm-files-row-edit {
   padding: 18px 32px 28px;
   box-sizing: border-box;
 }
-.pm-chat-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  /* Parent (.pm-chat-thread-fade) is height:auto — % height would collapse.
-     100% alone resolves against the thread's *padded* content box (composer
-     reserve carved out of the bottom), which centers the text too high.
-     Re-claim the reserve so the block spans the FULL thread height, and
-     cancel it with a negative bottom margin so no scroll range appears. */
-  min-height: calc(100% + var(--pm-chat-composer-reserve, 9.5rem));
-  margin-bottom: calc(-1 * var(--pm-chat-composer-reserve, 9.5rem));
-  padding: 48px 24px;
-  text-align: center;
-}
-.pm-chat-empty-title {
-  margin: 0;
-  font: var(--pm-t-body);
-  color: var(--pm-muted, #6a706a);
-}
-.pm-chat-empty-sub {
-  margin: 0;
-  font: var(--pm-t-body);
-  color: var(--pm-muted, #6a706a);
-}
 .pm-chat-scroll-btn {
-  /* Sit above the floating composer (tools + field ~92–110px + dock pad) */
+  /* Stay above the composer as its draft and queue grow. */
   position: absolute;
-  bottom: calc(7.75rem + env(safe-area-inset-bottom, 0px));
+  bottom: calc(var(--pm-chat-dock-height, 7.25rem) + 8px);
   left: 50%;
   transform: translateX(-50%);
   z-index: 16; /* above composer dock (15) so it is never buried */
@@ -21326,6 +21278,28 @@ button.pm-files-row-edit {
 .pm-chat-composer-dock > * {
   pointer-events: auto;
 }
+.pm-chat-stage-surface[data-starter] > :is(.pm-chat-thread-shell, .pm-chat-edge-fade) {
+  display: none;
+}
+.pm-chat-stage-surface[data-starter] > .pm-chat-composer-dock {
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: safe center;
+  gap: 18px;
+  padding-block: 24px clamp(24px, 10dvh, 120px);
+  background: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.pm-chat-starter-title {
+  margin: 0;
+  color: var(--pm-ink-display);
+  font: 500 clamp(22px, 2.4vw, 30px)/1.25 var(--type-font-ui);
+  letter-spacing: -0.025em;
+  text-align: center;
+  text-wrap: balance;
+}
 
 /*
  * ── Composer: simple frosted glass
@@ -21370,6 +21344,54 @@ button.pm-files-row-edit {
     0 2px 6px rgba(18, 20, 16, 0.06),
     0 12px 28px -10px rgba(18, 20, 16, 0.14),
     0 28px 64px -18px color-mix(in srgb, var(--pm-green, #1a5e3d) 48%, transparent);
+}
+
+.pm-chat-queue {
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: var(--sd-radius-field);
+  background: var(--sd-field);
+}
+.pm-chat-queue-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 26px;
+  padding-inline: 6px;
+  color: var(--pm-muted);
+  font: var(--type-meta);
+}
+.pm-chat-queue-head > button { margin-inline-start: auto; }
+.pm-chat-queue-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 96px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.pm-chat-queue-list > li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding-inline: 6px 2px;
+}
+.pm-chat-queue-number {
+  flex: 0 0 1em;
+  font: var(--type-meta);
+  color: var(--pm-faint);
+  font-variant-numeric: tabular-nums;
+}
+.pm-chat-queue-message {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--type-ui);
+  color: var(--pm-text);
 }
 
 .pm-chat-composer-tools {
@@ -21861,9 +21883,6 @@ button.pm-files-row-edit {
 .pm-chat-composer-textarea::placeholder {
   color: var(--pm-faint, #969c96);
 }
-.pm-chat-composer-textarea:disabled {
-  opacity: 0.55;
-}
 .pm-chat-composer-send {
   width: 34px;
   height: 34px;
@@ -21881,10 +21900,6 @@ button.pm-files-row-edit {
   background: color-mix(in srgb, var(--pm-ink, #121410) 7%, #ffffff);
   color: color-mix(in srgb, var(--pm-ink, #121410) 32%, #ffffff);
   opacity: 1;
-}
-.pm-chat-composer-cancel {
-  height: 30px;
-  border-radius: 999px;
 }
 /*
  * Composer-scoped quiet tools — ghost pills (thin hairline, normal case),
@@ -25410,10 +25425,8 @@ button.pm-files-row-edit {
   z-index: 0;
   border-radius: 12px;
   pointer-events: none;
-  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 10%, #fff);
-  box-shadow:
-    inset 2.5px 0 0 0 var(--pm-green, #1a5e3d),
-    inset 0 0 0 1px color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, transparent);
+  background: var(--sd-selected);
+  box-shadow: none;
   will-change: transform, height;
   transition: none;
 }
@@ -26849,9 +26862,9 @@ button.pm-files-row-edit {
   -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* line-height 1.35 on .pm-chat-sess-name → two fixed lines */
-  min-height: calc(1.35em * 2);
-  height: calc(1.35em * 2);
+  /* Follow the computed line-height, including the active row's font token. */
+  min-height: 2lh;
+  height: 2lh;
 }
 
 .pm-meeting-title {

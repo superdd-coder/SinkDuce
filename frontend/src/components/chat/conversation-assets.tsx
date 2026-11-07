@@ -15,6 +15,7 @@ import { documentLabel, documentDate } from '@/lib/chat-document-display'
 import "./conversation-assets.css"
 
 const EMPTY_DRAFTS: ChatAttachmentDraft[] = []
+const ASSETS_INSET = 8
 
 /** One session's outputs and sources, available even without generated output. */
 export function ConversationAssets({ sessionId, refreshKey, messages, onOpenReport }: {
@@ -23,15 +24,12 @@ export function ConversationAssets({ sessionId, refreshKey, messages, onOpenRepo
 }) {
   const t = useT()
   const labelId = useId()
+  const anchor = useRef<HTMLDivElement>(null)
   const trigger = useRef<HTMLButtonElement | null>(null)
-  const openingPreview = useRef(false)
-  const restoreFocus = useRef(false)
   const drafts = useAppStore((state) => sessionId ? state.chatAttachmentDrafts[sessionId] ?? EMPTY_DRAFTS : EMPTY_DRAFTS)
   const historyEpoch = useAppStore(state=>state.reportHistoryEpoch)
   const [listing, setListing] = useState<{ sid: string; reports: ReportReference[]; files: ChatAttachment[]; failed: boolean } | null>(null)
   const [openSession, setOpenSession] = useState<string | null>(null)
-  const [surfaceSession, setSurfaceSession] = useState<string | null>(null)
-  const [origin, setOrigin] = useState({ width: 178, height: 28 })
   const [retrievedSession, setRetrievedSession] = useState<string | null>(null)
   const [selected, setSelected] = useState<ChatAttachment | null>(null)
   const [attempt, setAttempt] = useState(0)
@@ -63,52 +61,49 @@ export function ConversationAssets({ sessionId, refreshKey, messages, onOpenRepo
   }, [sessionId])
 
   if (!sessionId) return null
-  const closeForPreview = () => { openingPreview.current = true; setOpenSession(null); trigger.current?.focus({ preventScroll: true }) }
-  const summary = <>
-    <span className="pm-assets-counts">
-      <span data-output-count={outputs.length}><span>Output</span><b>{outputs.length}</b></span>
-      <span data-source-count={uploads.length + retrieved.length}><span>Sources</span><b>{uploads.length + retrieved.length}</b></span>
-    </span>
-    <ChevronDown className="pm-assets-trigger-chevron size-3" aria-hidden="true" />
-  </>
+  const closeForPreview = () => {
+    setOpenSession(null)
+    trigger.current?.focus({ preventScroll: true })
+  }
+  const sourceCount = uploads.length + retrieved.length
   return <CitationScope key={sessionId} sessionId={sessionId} citations={retrieved.map((row) => row.evidence)}>
-    <Popover.Root open={open} onOpenChange={(value, details) => {
-      if (value) {
-        const bounds = trigger.current?.getBoundingClientRect()
-        if (bounds) setOrigin({ width: bounds.width, height: bounds.height })
-        setSurfaceSession(sessionId)
-        openingPreview.current = false
-      } else restoreFocus.current = ["escape-key", "close-press", "trigger-press"].includes(details.reason)
-      setOpenSession(value ? sessionId : null)
-    }} onOpenChangeComplete={(value) => {
-      if (value) return
-      setSurfaceSession(null)
-      const focus = restoreFocus.current && !openingPreview.current
-      openingPreview.current = false
-      restoreFocus.current = false
-      if (focus) requestAnimationFrame(() => trigger.current?.focus({ preventScroll: true }))
-    }}>
-      <Popover.Trigger ref={trigger} className="pm-assets-trigger" aria-label={`${t("chat.assets.title")} · Output ${outputs.length} · Sources ${uploads.length + retrieved.length}`} aria-expanded={open} data-surface-active={surfaceSession === sessionId || undefined}>
-        {summary}
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Positioner side="bottom" align="end" sideOffset={-origin.height} className="pm-assets-positioner">
-          <Popover.Popup className="pm-assets-card" aria-labelledby={labelId} style={{ maxHeight,
-            "--pm-assets-origin-w": `${origin.width}px`, "--pm-assets-origin-h": `${origin.height}px` } as CSSProperties} finalFocus={false}>
-            <Popover.Title id={labelId} className="sr-only">{t("chat.assets.title")}</Popover.Title>
-            <Popover.Close className="pm-assets-collapse" aria-label={t("common.close")}>{summary}</Popover.Close>
-            <div className="pm-assets-body">
-            <ConversationAssetsPanel outputs={outputs} uploads={uploads} retrieved={retrieved}
-              retrievedOpen={retrievedSession === sessionId} onToggleRetrieved={() => setRetrievedSession((value) => value === sessionId ? null : sessionId)}
-              onOutput={(report) => { closeForPreview(); onOpenReport(report) }}
-              onUpload={(file) => { closeForPreview(); setSelected(file) }} onSource={closeForPreview} />
-            {!current && <div className="pm-assets-status" role="status"><Loader2 className="size-3.5 animate-spin" /></div>}
-            {current?.failed && <button type="button" className="pm-assets-retry" onClick={() => setAttempt((value) => value + 1)}>{t("chat.assets.retry")}</button>}
-            </div>
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
+    <div ref={anchor} className="pm-assets-anchor" style={{ "--pm-assets-inset": `${ASSETS_INSET}px` } as CSSProperties}>
+      <Popover.Root open={open} onOpenChange={(value, details) => {
+        setOpenSession(value ? sessionId : null)
+        if (!value && details.reason === "escape-key") trigger.current?.focus({ preventScroll: true })
+      }}>
+        <Popover.Trigger ref={trigger} className="pm-assets-trigger"
+          aria-label={`${t("chat.assets.title")} · Output ${outputs.length} · Sources ${sourceCount}`} aria-expanded={open}>
+          <span className="pm-assets-counts">
+            <span data-output-count={outputs.length}><span>Output</span><b>{outputs.length}</b></span>
+            <span data-source-count={sourceCount}><span>Sources</span><b>{sourceCount}</b></span>
+          </span>
+          <ChevronDown className="pm-assets-trigger-chevron size-3" aria-hidden="true" />
+        </Popover.Trigger>
+        <Popover.Portal container={anchor} className="pm-assets-portal">
+          <Popover.Positioner side="bottom" align="end" alignOffset={-ASSETS_INSET}
+            sideOffset={({ anchor }) => -anchor.height - ASSETS_INSET}
+            collisionAvoidance={{ side: "none", align: "none", fallbackAxisSide: "none" }} className="pm-assets-positioner">
+            <Popover.Popup className="pm-assets-card" aria-labelledby={labelId} inert={!open}
+              style={{
+                "--pm-assets-stage-max": maxHeight == null ? undefined : `${maxHeight}px`,
+              } as CSSProperties} initialFocus={false} finalFocus={false}>
+              <Popover.Title id={labelId} className="sr-only">{t("chat.assets.title")}</Popover.Title>
+              <div className="pm-assets-content">
+                <div className="pm-assets-body">
+                  <ConversationAssetsPanel outputs={outputs} uploads={uploads} retrieved={retrieved}
+                    retrievedOpen={retrievedSession === sessionId} onToggleRetrieved={() => setRetrievedSession((value) => value === sessionId ? null : sessionId)}
+                    onOutput={(report) => { closeForPreview(); onOpenReport(report) }}
+                    onUpload={(file) => { closeForPreview(); setSelected(file) }} onSource={closeForPreview} />
+                  {!current && <div className="pm-assets-status" role="status"><Loader2 className="size-3.5 animate-spin" /></div>}
+                  {current?.failed && <button type="button" className="pm-assets-retry" onClick={() => setAttempt((value) => value + 1)}>{t("chat.assets.retry")}</button>}
+                </div>
+              </div>
+            </Popover.Popup>
+          </Popover.Positioner>
+        </Popover.Portal>
+      </Popover.Root>
+    </div>
     {selected?.session_id === sessionId && <ChatAttachmentPreview key={selected.id} attachment={selected} triggerRef={trigger} onClose={() => setSelected(null)} />}
   </CitationScope>
 }

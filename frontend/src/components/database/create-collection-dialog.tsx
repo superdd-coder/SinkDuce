@@ -1,5 +1,5 @@
-import { useState } from "react"
-import { Dialog, DialogContent, DialogHeader, DialogKicker, DialogTitle } from "@/components/ui/dialog"
+import { useId, useState } from "react"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogKicker, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { DropdownSelect } from "@/components/ui/dropdown-select"
@@ -27,6 +27,7 @@ const FILE_TYPES = [
 
 export function CreateCollectionDialog({ open, onOpenChange, onCreated }: CreateCollectionDialogProps) {
   const t = useT()
+  const id = useId()
   const [name, setName] = useState("")
   const [dimensions, setDimensions] = useState("1536")
   const [chunkMode, setChunkMode] = useState("normal")
@@ -75,7 +76,7 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="pm-dialog max-w-md">
+      <DialogContent className="pm-dialog max-w-md max-h-[calc(100dvh-48px)] overflow-y-auto">
         <DialogHeader>
           <DialogKicker>{t("nav.library")}</DialogKicker>
           <DialogTitle>{t("library.createCollection")}</DialogTitle>
@@ -83,8 +84,9 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
 
         <div className="space-y-4 py-1">
           <div>
-            <label className="pm-field-label">{t("common.name")}</label>
+            <label className="pm-field-label" htmlFor={`${id}-name`}>{t("common.name")}</label>
             <Input
+              id={`${id}-name`}
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder={t("library.namePh")}
@@ -92,9 +94,12 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
             />
           </div>
 
-          <button
+          <Button
             type="button"
-            className="pm-meta flex items-center gap-2 hover:text-[var(--pm-ink)] transition-colors"
+            variant="secondary"
+            size="sm"
+            aria-expanded={advancedOpen}
+            aria-controls={`${id}-advanced`}
             onClick={() => setAdvancedOpen(!advancedOpen)}
           >
             <ChevronDown
@@ -103,9 +108,12 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
               }`}
             />
             {t("settings.advanced")}
-          </button>
+          </Button>
 
           <div
+            id={`${id}-advanced`}
+            inert={!advancedOpen}
+            aria-hidden={!advancedOpen}
             className={`grid transition-all duration-300 ease-[cubic-bezier(0.45,0.05,0.55,0.95)] ${
               advancedOpen
                 ? "grid-rows-[1fr] opacity-100"
@@ -252,9 +260,9 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
           </div>
         </div>
 
-        <div className="flex justify-end gap-2 pt-1">
+        <DialogFooter>
           <Button
-            variant="ghost"
+            variant="secondary"
             onClick={() => onOpenChange(false)}
           >
             {t("common.cancel")}
@@ -265,7 +273,7 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
           >
             {saving ? t("common.loading") : t("common.create")}
           </Button>
-        </div>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )

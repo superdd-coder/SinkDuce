@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from "react"
-import { ChevronRight, Loader2, RefreshCw, Star } from "lucide-react"
+import { ChevronRight, Loader2, Plus, RefreshCw, Star, Upload } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { TiptapEditor } from "@/components/ui/tiptap-editor"
@@ -717,24 +717,28 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
                 <Button
                   type="button"
                   variant="ghost"
-                  size="xs"
+                  size="icon-sm"
+                  aria-label={t("common.import")}
+                  title={t("common.import")}
                   onClick={() => {
                     ensureNotesOpen()
                     requestAnimationFrame(() => notesCardRef.current?.openImport())
                   }}
                 >
-                  {t("common.import")}
+                  <Upload />
                 </Button>
                 <Button
                   type="button"
                   variant="ghost"
-                  size="xs"
+                  size="icon-sm"
+                  aria-label={t("library.newNote")}
+                  title={t("library.newNote")}
                   onClick={() => {
                     ensureNotesOpen()
                     requestAnimationFrame(() => notesCardRef.current?.create())
                   }}
                 >
-                  {t("common.new")}
+                  <Plus />
                 </Button>
               </div>
             </div>

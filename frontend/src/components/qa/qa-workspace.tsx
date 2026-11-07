@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { ArrowLeft, ChevronDown, ChevronRight, Download, FileQuestion, FolderOpen, List, Plus, Upload, Pencil, CircleMinus, RotateCcw, Settings2, History, Archive, Trash2, LoaderCircle } from "lucide-react"
+import { ArrowLeft, ChevronDown, ChevronRight, Download, FileInput, FileQuestion, FolderOpen, List, Plus, Pencil, CircleMinus, RotateCcw, Settings2, History, Archive, Trash2, LoaderCircle } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -108,11 +108,20 @@ function QaWorkspaceContent({ collectionId, railCovered }: { collectionId: strin
   useEffect(() => {
     mounted.current = true
     const controller = new AbortController()
-    if (writable) getQaPendingImports(collectionId).then(setPendingImports).catch(() => {})
-    getQaLists(collectionId, controller.signal).then(setLists).catch(e => {
+    getQaLists(collectionId, controller.signal).then(rows => {
+      if (!controller.signal.aborted) { setLists(rows); setError("") }
+    }).catch(e => {
       if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "error")
     }).finally(() => { if (!controller.signal.aborted) setLoading(false) })
     return () => { mounted.current = false; controller.abort() }
+  }, [collectionId])
+
+  useEffect(() => {
+    let active = true
+    if (writable) void getQaPendingImports(collectionId).then(rows => {
+      if (active) setPendingImports(rows)
+    }).catch(() => {})
+    return () => { active = false }
   }, [collectionId, writable])
 
   useEffect(() => { if (data) writer.remember(data) }, [data, writer])
@@ -161,7 +170,7 @@ function QaWorkspaceContent({ collectionId, railCovered }: { collectionId: strin
 
   async function showAll() {
     const current = ++generation.current
-    setLoading(true)
+    setLoading(true); setError("")
     try {
       const questions = await getQaProjectQuestions(collectionId, true)
       if (current === generation.current && mounted.current) { setAllQuestions(questions); setData(null); setQuery(""); clearFilters(); setOmitted(false) }
@@ -227,14 +236,14 @@ function QaWorkspaceContent({ collectionId, railCovered }: { collectionId: strin
           {data && <Button variant="secondary" size="sm" className="qa-version" onClick={() => setHistoryOpen(true)} disabled={busy} title={t("qa.history")}>V{data.version.number}{!data.can_edit && <span> · {t("qa.readOnly")}</span>}</Button>}
         </div>
       </div>}
-      {!data && !allQuestions && <div className="qa-tools qa-list-tools"><Button variant="secondary" size="sm" onClick={showAll}><List />{t("qa.allQuestions")}<ChevronRight className="size-3" /></Button><QaToggle checked={archived} onChange={setArchived} label={t("qa.showArchived")} /></div>}
+      {!data && !allQuestions && <div className="qa-tools qa-list-tools"><Button variant="ghost" size="icon" onClick={showAll} disabled={loading} aria-label={t("qa.allQuestions")} title={t("qa.allQuestions")}><List /></Button><QaToggle checked={archived} onChange={setArchived} label={t("qa.showArchived")} /></div>}
       <div className="qa-actions">
-        {data?.can_edit && <Button size="sm" onClick={() => action("question")} disabled={busy} aria-label={t("qa.addQuestion")}><Plus />{t("qa.addQuestion")}</Button>}
-        {data && <Button variant="ghost" size="sm" className="qa-toolbar-action" disabled={busy} onClick={() => setExchange("export")} title={t("qa.export")}><Download />{t("qa.exportShort")}</Button>}
-        {data?.can_edit && <Button variant="ghost" size="sm" className="qa-toolbar-action" disabled={busy} onClick={() => { setResume(undefined); setExchange("import") }} title={t("qa.import")}><Upload />{t("qa.importShort")}</Button>}
-        {data && <Button ref={fileSpaceTrigger} variant="ghost" size="sm" className="qa-toolbar-action" disabled={loading} aria-haspopup="dialog" onClick={() => setFileSpaceListId(data.id)}><FolderOpen />{t("qa.materials")}</Button>}
-        {!data && writable && <Button variant="ghost" size="sm" className="qa-toolbar-action" onClick={() => { setResume(undefined); setExchange("import") }}><Upload />{t("qa.createFromExcel")}</Button>}
-        {!data && writable && <Button size="sm" onClick={() => action("list")} disabled={busy}><Plus />{t("qa.createList")}</Button>}
+        {data?.can_edit && <Button size="icon" onClick={() => action("question")} disabled={busy} aria-label={t("qa.addQuestion")} title={t("qa.addQuestion")}><Plus /></Button>}
+        {data?.can_edit && <Button variant="secondary" size="icon" className="qa-import-action" disabled={busy} onClick={() => { setResume(undefined); setExchange("import") }} aria-label={t("qa.import")} title={t("qa.import")}><FileInput aria-hidden /></Button>}
+        {data && <Button variant="ghost" size="icon" className="qa-toolbar-action" disabled={busy} onClick={() => setExchange("export")} aria-label={t("qa.export")} title={t("qa.export")}><Download aria-hidden /></Button>}
+        {data && <Button ref={fileSpaceTrigger} variant="ghost" size="icon" className="qa-toolbar-action" disabled={loading} aria-haspopup="dialog" aria-label={t("qa.materials")} title={t("qa.materials")} onClick={() => setFileSpaceListId(data.id)}><FolderOpen /></Button>}
+        {!data && writable && <Button variant="secondary" size="icon" className="qa-import-action" aria-label={t("qa.createFromExcel")} title={t("qa.createFromExcel")} onClick={() => { setResume(undefined); setExchange("import") }}><FileInput aria-hidden /></Button>}
+        {!data && writable && <Button size="icon" onClick={() => action("list")} disabled={busy} aria-label={t("qa.createList")} title={t("qa.createList")}><Plus /></Button>}
         {data && <QaActionMenu label={t("qa.more")}>
           {data.can_edit && <QaMenuItem disabled={busy} onClick={() => setOptionsOpen(true)}><Settings2 />{t("qa.manageOptions")}</QaMenuItem>}
           <QaMenuItem disabled={busy} onClick={() => setHistoryOpen(true)}><History />{t("qa.history")}</QaMenuItem>

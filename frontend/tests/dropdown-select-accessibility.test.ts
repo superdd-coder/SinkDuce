@@ -11,7 +11,7 @@ before(async () => {
   server = await createServer({
     root, configFile: false,
     server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-    resolve: { alias: { "@": root + "src" } },
+    resolve: { alias: { "@": root + "src", "#edition": root + "src/edition" } },
     optimizeDeps: { noDiscovery: true },
   })
 })

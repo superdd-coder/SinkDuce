@@ -942,12 +942,14 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                         <Button
                           type="button"
                           variant="ghost"
-                          size="sm"
+                          size="icon-sm"
                           className={cn(
                             "pm-settings-hw-action-btn",
                             pinnedIds.includes(selectedId ?? "") && "is-default",
                           )}
                           disabled={settingPin || !selectedId}
+                          aria-pressed={pinnedIds.includes(selectedId ?? "")}
+                          aria-label={pinnedIds.includes(selectedId ?? "") ? t("settings.unpinNewMeetings") : t("settings.pinNewMeetings")}
                           title={
                             pinnedIds.includes(selectedId ?? "")
                               ? t("settings.unpinNewMeetings")
@@ -960,19 +962,18 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                             strokeWidth={1.75}
                             fill={pinnedIds.includes(selectedId ?? "") ? "currentColor" : "none"}
                           />
-                          {pinnedIds.includes(selectedId ?? "") ? t("common.pinned") : t("common.pin")}
                         </Button>
                         <Button
                           type="button"
                           variant="ghost"
-                          size="sm"
+                          size="icon-sm"
                           className="pm-settings-hw-action-btn"
                           disabled={!selectedId}
                           title={t("settings.exportExcel")}
+                          aria-label={t("settings.exportExcel")}
                           onClick={handleExport}
                         >
                           <FileUp className="h-3.5 w-3.5" strokeWidth={2} />
-                          {t("common.export")}
                         </Button>
                       </div>
                     </div>
@@ -1015,13 +1016,14 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                       {!selectedLib.is_system && (
                         <Button
                           type="button"
-                          variant="ghost"
-                          size="xs"
+                          variant="default"
+                          size="icon-sm"
                           className="pm-settings-hw-add"
                           onClick={addWord}
+                          title={t("common.add")}
+                          aria-label={t("common.add")}
                         >
                           <Plus className="h-3 w-3" strokeWidth={1.75} />
-                          {t("common.add")}
                         </Button>
                       )}
                     </div>
@@ -1041,7 +1043,8 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                                 value={word.text}
                                 onChange={(e) => updateWord(word.uid, "text", e.target.value)}
                                 placeholder={t("settings.hotWord")}
-                                className="pm-settings-hw-word-text"
+                                className="pm-settings-hw-word-text sd-input--inline"
+                                aria-label={t("settings.hotWord")}
                                 readOnly={!!selectedLib.is_system}
                                 disabled={!!selectedLib.is_system}
                               />
@@ -1066,11 +1069,13 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                                   onBlur={() => {
                                     if (isNaN(word.weight)) updateWord(word.uid, "weight", 4)
                                   }}
-                                  className="pm-settings-hw-weight-input"
+                                  className="pm-settings-hw-weight-input sd-input--inline"
+                                  aria-label={t("settings.weightRange")}
                                 />
                               </div>
                               <DropdownSelect
                                 size="sm"
+                                aria-label={t("common.lang")}
                                 value={word.lang || ""}
                                 onChange={(v) => updateWord(word.uid, "lang", v)}
                                 options={
