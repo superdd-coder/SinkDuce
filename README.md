@@ -152,7 +152,7 @@ Ask Chat or Quick Chat to create a report from your conversation, uploaded files
 | **Live meeting** | Realtime captions with **live summary** (points / decisions / actions) and **live translation** — bilingual captions, toggled or re-targeted mid-recording. |
 | **Notes** | WYSIWYG editor (Markdown, tables, images, tasks). Distill, propagate citations, ingest (OCR + vision on images). |
 | **Library** | Folders, versions, timeline (chains / nodes), messages, smart todos. Move / archive, list or grid view. Definitive flag, collection overview, conflict compare. |
-| **Workspace search** | Press **⌘K / Ctrl+K** to find projects, file names and paths, notes, meeting titles, and minutes content. Results are grouped by category and open the matching item. |
+| **Workspace search** | Press **⌘K / Ctrl+K** to find project names, file names and parsed text, notes, meeting titles, and minutes content. Results are grouped by category and open the matching item. |
 | **Project Q&A** | Versioned question lists, reviewable Excel imports, reply columns and history, source-backed AI drafts, and configurable Excel exports. |
 | **Ingest** | Common office / web formats + OCR; optional MinerU. Images described for search. |
 | **Chat** | Multi-collection Q&A, conversation attachments, follow-up message queue during generation, visible steps, source-file previews, in-chat model switch. Optional confirmed web search. Quick Chat + Recall, **meeting group chat** across follow-ups. |
