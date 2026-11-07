@@ -70,13 +70,31 @@ def test_original_layout_emphasis_new_column_and_reimport(qa):
 
 
 def test_reply_format_preserves_literals_newlines_and_nests_marks():
-    from src.qa.reply_format import reply_runs, rich_reply
+    from src.qa.reply_format import ReplyRun, reply_runs, rich_reply
 
     value = rich_reply("=literal **bold**\n\n# No heading\n<script>x</script> a_b_c \\*literal\\*")
     assert str(value) == "=literal bold\n\n# No heading\n<script>x</script> a_b_c *literal*"
     assert_emphasis(rich_reply(BODY))
+    assert reply_runs("__bold__ and _italic_") == [
+        ReplyRun("bold", bold=True), ReplyRun(" and "), ReplyRun("italic", italic=True)
+    ]
     assert reply_runs("**line one\nline two**")[0].text == "line one\nline two"
     assert str(rich_reply("# **label** &amp; \\*literal\\*")) == "# label & *literal*"
+
+
+def test_reply_format_without_legacy_emphasis_processors(monkeypatch):
+    from src.qa import reply_format
+
+    markdown_class = reply_format.markdown.Markdown
+
+    def markdown_without_legacy_pattern():
+        parser = markdown_class()
+        parser.inlinePatterns.deregister("not_strong", strict=False)
+        parser.inlinePatterns.deregister("em_strong2", strict=False)
+        return parser
+
+    monkeypatch.setattr(reply_format.markdown, "Markdown", markdown_without_legacy_pattern)
+    assert_emphasis(reply_format.rich_reply(BODY))
 
 
 def test_unchanged_imported_markdown_is_formatted_only_in_reply_cells(qa):

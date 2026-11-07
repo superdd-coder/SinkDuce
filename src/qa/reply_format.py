@@ -23,13 +23,12 @@ def reply_runs(body: str) -> list[ReplyRun]:
     # headings, links, HTML, tables and code from becoming active content.
     md = markdown.Markdown()
     patterns = Registry()
-    for name, priority in [
-        ("escape", 180),
-        ("not_strong", 70),
-        ("em_strong", 60),
-        ("em_strong2", 50),
-    ]:
-        patterns.register(md.inlinePatterns[name], name, priority)
+    patterns.register(md.inlinePatterns["escape"], "escape", 180)
+    patterns.register(md.inlinePatterns["em_strong"], "em_strong", 60)
+    # Markdown 3.11 handles literal markers and underscores in the shared delimiter processor.
+    for name, priority in (("not_strong", 70), ("em_strong2", 50)):
+        if name in md.inlinePatterns:
+            patterns.register(md.inlinePatterns[name], name, priority)
     md.inlinePatterns = patterns
     md.treeprocessors["inline"].inlinePatterns = patterns
     root = ET.Element("div")
