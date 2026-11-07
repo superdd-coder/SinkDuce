@@ -4,6 +4,22 @@ Kept newest-first. CI extracts the section matching the release tag into
 `latest.json → notes` (shown in the desktop update dialog), so headings must
 stay in the exact `## vX.Y.Z` form.
 
+## v1.7.0
+
+- 新增项目 Q&A 工作台，支持问题清单和版本、Excel 导入映射与匹配审阅、多轮回复、资料引用、AI 起草进度和模板导出
+- 更新 Chat、知识库、会议和设置的界面，统一弹窗、单选、多选与二级菜单，并保留品牌菱形标志
+- 新增 ⌘K / Ctrl+K 全局搜索，按项目、文件、笔记、会议和纪要分组
+- 聊天生成期间可继续输入并排队发送。新会话使用居中的输入框，Output / Sources 从固定胶囊展开和收起
+- 统一报告、会议纪要与回答中的 SVG 配色，修复重生成会议摘要时闪回旧内容的问题
+- 改善 OpenAI 兼容模型不接受部分聊天和思考参数时的处理
+
+- Add Project Q&A with versioned question lists, reviewable Excel imports and matching, multiple reply columns, source-backed drafts with live progress, and export templates
+- Refresh Chat, Library, Meetings, and Settings with shared dialogs and coordinated single-select, multi-select, and nested menus
+- Add workspace search with ⌘K / Ctrl+K and grouped results for projects, files, notes, meetings, and minutes
+- Queue follow-up messages while Chat is generating, center the composer for new chats, and expand Output / Sources from its anchored pill
+- Adapt SVG colors across answers, reports, and meeting minutes, and keep regenerated summaries visible while they stream
+- Improve handling of unsupported chat and reasoning parameters with OpenAI-compatible providers
+
 ## v1.6.2
 
 - 从独立公开源码仓库发布，全功能社区版继续统一采用 AGPL-3.0-or-later
