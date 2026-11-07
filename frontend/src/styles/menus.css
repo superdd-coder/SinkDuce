@@ -1,0 +1,271 @@
+/* Menu family 02 — soft glass, shared by form selects and every workspace.
+   Selection is a pale capsule; the only solid mark is a white circular check.
+   Keep destructive/status colors semantic, and put glass on the outer surface only. */
+:root {
+  --sd-menu-surface: linear-gradient(140deg, #ffffffd9, #ffffffe8 42%, #f6f9f6be);
+  --sd-menu-rail: #c8d1ca1a;
+  --sd-menu-ink: #34473b;
+  --sd-menu-muted: #78877e;
+  --sd-menu-hover: #e1eae3b8;
+  --sd-menu-selected: linear-gradient(115deg, #dce9e0ee, #eaf2ecd9);
+  --sd-menu-selected-hover: linear-gradient(115deg, #d5e4dadf, #e2eee6eb);
+  --sd-menu-parent: #e1e7e3b3;
+  --sd-menu-mark: #ffffffdf;
+  --sd-menu-shadow: 0 24px 44px -24px #213d2b38, 0 6px 15px -9px #20392a24;
+  --sd-menu-ms: 220ms;
+  --sd-menu-ease: cubic-bezier(.2, .8, .2, 1);
+  --pm-menu-ease: var(--sd-menu-ease);
+}
+.dark {
+  --sd-menu-surface: linear-gradient(140deg, #303a34f2, #26322be8);
+  --sd-menu-rail: #131e1740;
+  --sd-menu-ink: #e1eae4;
+  --sd-menu-muted: #a1b3a7;
+  --sd-menu-hover: #a3c6af24;
+  --sd-menu-selected: linear-gradient(115deg, #365946eb, #2e4a3dd9);
+  --sd-menu-selected-hover: linear-gradient(115deg, #406750eb, #375846e8);
+  --sd-menu-parent: #ffffff0e;
+  --sd-menu-mark: #dcece5;
+  --sd-menu-shadow: 0 24px 44px -20px #0008, 0 5px 15px #0003;
+}
+:is(.pm-menu, .pm-select-menu, .pm-date-panel, .pm-timeline-menu, .pm-ws-menu,
+    .pm-files-menu, .pm-slash-menu, .pm-assets-card, .pm-report-history-menu,
+    .pm-review-popover, .pm-lt-menu, .pm-chat-pop, .sd-project-menu, .sd-folder-popover,
+    .sd-menu-surface) {
+  border: 0 !important;
+  border-radius: 28px !important;
+  background: var(--sd-menu-surface) !important;
+  color: var(--sd-menu-ink);
+  box-shadow: var(--sd-menu-shadow) !important;
+  backdrop-filter: blur(32px) saturate(1.08);
+  -webkit-backdrop-filter: blur(32px) saturate(1.08);
+  outline: none;
+}
+:is(.pm-menu, .pm-select-menu, .pm-timeline-menu, .pm-ws-menu, .pm-files-menu,
+    .pm-lt-menu, .sd-project-menu, .sd-menu-surface) { padding: 10px !important; }
+.pm-menu.pm-menu--portal { overflow-y: auto; overscroll-behavior: contain; }
+:is(.pm-menu-item, .pm-select-opt, .pm-ws-menu-item, .pm-files-menu-item, .pm-files-menu-opt,
+    .pm-timeline-menu-item, .pm-slash-menu__item, .pm-people-picker-row,
+    .pm-meeting-ingest-menu-item, .pm-lt-item, .pm-chat-pop-item,
+    .sd-project-menu .pm-shell-col-action, .pm-report-history-entry) {
+  border: 0 !important;
+  border-radius: 28px !important;
+  min-height: 40px;
+  padding: 9px 16px !important;
+  gap: 9px;
+  background: transparent;
+  color: var(--sd-menu-ink);
+  box-shadow: none !important;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: left;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+:is(.pm-menu-item, .pm-select-opt, .pm-ws-menu-item, .pm-files-menu-item,
+    .pm-files-menu-opt, .pm-timeline-menu-item, .pm-slash-menu__item,
+    .pm-people-picker-row, .pm-meeting-ingest-menu-item, .pm-lt-item,
+    .pm-chat-pop-item, .sd-project-menu .pm-shell-col-action, .pm-report-history-entry):is(:hover, [data-highlighted], .is-highlight):not(:disabled):not([data-disabled]):not(.is-danger):not(.pm-shell-col-action--danger) {
+  background: var(--sd-menu-hover) !important;
+  color: var(--sd-menu-ink) !important;
+}
+:is(.pm-menu-item, .pm-select-opt, .pm-ws-menu-item, .pm-files-menu-opt,
+    .pm-timeline-menu-item, .pm-slash-menu__item, .pm-people-picker-row,
+    .pm-meeting-ingest-menu-item, .pm-lt-item, .pm-chat-pop-item, .pm-report-history-entry):is(.is-on, .is-active, .is-picked, .is-selected, [aria-selected="true"], [aria-checked="true"]) {
+  background: var(--sd-menu-selected) !important;
+  color: var(--sd-menu-ink) !important;
+  box-shadow: none !important;
+}
+:is(.pm-menu-item, .pm-select-opt, .pm-ws-menu-item, .pm-files-menu-opt,
+    .pm-timeline-menu-item, .pm-slash-menu__item, .pm-people-picker-row,
+    .pm-meeting-ingest-menu-item, .pm-lt-item, .pm-chat-pop-item, .pm-report-history-entry):is(.is-on, .is-active, .is-picked, .is-selected, [aria-selected="true"], [aria-checked="true"]):is(:hover, [data-highlighted], .is-highlight):not(:disabled) { background: var(--sd-menu-selected-hover) !important; }
+:is(.pm-menu-item, .pm-select-opt, .pm-lt-item, .pm-chat-pop-item, .pm-files-menu-opt):focus-visible {
+  outline: 2px solid var(--sd-focus); outline-offset: -3px;
+}
+:is(.pm-menu, .pm-select-menu, .sd-menu-surface) button:disabled { cursor: not-allowed; }
+:is(.pm-menu-item, .pm-files-menu-item, .pm-ws-menu-item):has([data-slot="menu-item-description"], .pm-files-menu-item-desc, .pm-ws-menu-item-desc) { min-height: 56px; }
+:is([data-slot="menu-item-description"], .pm-files-menu-item-desc, .pm-ws-menu-item-desc, .sd-menu-description) {
+  display: block; margin-top: 2px; color: var(--sd-menu-muted) !important; font-size: 11px !important; line-height: 1.5;
+}
+:is(.sd-menu-icon, .pm-menu-item > svg:first-child:not(.lucide-check):not(.lucide-chevron-right):not(.lucide-loader-circle),
+    .pm-slash-menu__icon, .pm-settings-hw-import-icon) {
+  flex: 0 0 auto; width: 28px; height: 28px; padding: 5px; border-radius: 50%;
+  color: #6f8477; background: var(--sd-menu-mark); opacity: 1;
+}
+.sd-menu-check, .pm-select-check, .pm-lt-check, .qa-filter-check {
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 21px;
+  width: 21px; height: 21px; min-width: 21px; padding: 0; margin-left: auto;
+  border-radius: 50%; color: #256447 !important;
+}
+.sd-menu-check[data-checked], .pm-select-check.is-on, .pm-lt-check, .qa-filter-check {
+  background: var(--sd-menu-mark); box-shadow: 0 2px 4px #21432e0b;
+}
+.sd-menu-check > svg, .qa-filter-check > svg { width: 13px !important; height: 13px !important; opacity: 1 !important; color: inherit !important; }
+.pm-select-check, .pm-lt-check { padding: 4px; }
+.pm-menu-item > .lucide-check { width: 21px; height: 21px; padding: 4px; border-radius: 50%; color: #256447; background: var(--sd-menu-mark); opacity: 1; }
+:is(.pm-menu, .pm-timeline-menu, .pm-files-menu, .sd-menu-surface) [role="separator"] {
+  height: 0 !important; border: 0 !important; background: none !important; margin: 5px 0 !important;
+}
+.sd-menu-title, .pm-meeting-ingest-menu-label, .pm-settings-hw-import-menu-label,
+.pm-lt-menu-label, .pm-source-kicker { display: block; padding: 6px 16px 10px; color: var(--sd-menu-muted); font: 500 11px/1.5 var(--type-font-ui); text-transform: none; letter-spacing: 0; }
+.pm-select-menu { z-index: 450; max-width: calc(100vw - 24px); }
+.pm-select-opt + .pm-select-opt, .pm-menu-item + .pm-menu-item { margin-top: 3px; }
+.pm-select-filter { border: 0 !important; border-radius: 99px; margin-bottom: 6px; background: var(--sd-field) !important; }
+.pm-menu .pm-select-menu { backdrop-filter: none; }
+
+/* One glass surface with an independently anchored root. Child panels may
+   extend the surface, but never stretch the root or change its item padding. */
+.pm-menu.sd-menu-connected {
+  display: flex; align-items: flex-start; gap: 8px; overflow: hidden; min-width: 0;
+}
+.pm-menu--portal.sd-menu-connected { display: block; box-sizing: border-box; }
+.sd-menu-root, .sd-menu-child { box-sizing: border-box; flex-shrink: 0; min-width: 0; min-height: 0; max-height: calc(var(--pm-menu-viewport-max, 100dvh) - 20px); overflow-y: auto; overscroll-behavior: contain; }
+.sd-menu-root { width: var(--sd-menu-root-width); border-radius: 21px; padding: 5px; }
+.sd-menu-connected.has-child > .sd-menu-root { background: var(--sd-menu-rail); }
+.sd-menu-child { width: var(--sd-menu-child-width); padding: 5px 0; }
+.pm-menu--portal.sd-menu-connected > :is(.sd-menu-root, .sd-menu-child) { position: absolute; top: 10px; left: 10px; max-height: none; }
+.sd-menu-connected:not(.pm-menu--portal)[data-menu-side="left"] { flex-direction: row-reverse; }
+.sd-menu-connected [data-submenu-trigger][aria-expanded="true"] { background: var(--sd-menu-parent) !important; }
+.sd-menu-connected[data-menu-side="left"] [data-submenu-trigger] > .lucide-chevron-right { transform: rotate(180deg); }
+.sd-menu-child .pm-menu-item { min-height: 44px; padding: 10px 18px 10px 20px !important; }
+.sd-menu-child .pm-menu-item:has(.sd-menu-description, [data-slot="menu-item-description"]) { min-height: 60px; }
+.sd-menu-child .sd-menu-title { padding-left: 20px; padding-right: 18px; }
+.sd-menu-root .pm-menu-item > span:first-child, .sd-menu-child .pm-menu-item > span:first-child { min-width: 0; }
+.sd-menu-child .pm-menu-item > span:first-child { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+
+/* Compact multi-select: search + one selected filter + tucked-away bulk tools. */
+.pm-menu.sd-multi-menu { width: 330px; display: flex; flex-direction: column; overflow: hidden; }
+.sd-multi-toolbar { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; position: relative; margin: 2px 2px 9px; }
+.sd-menu-search { display: flex; flex: 1; align-items: center; gap: 7px; min-width: 0; height: 37px; padding: 0 11px; border-radius: 99px; background: #b7c1b816; color: var(--sd-menu-muted); }
+.sd-menu-search input { width: 100%; min-width: 0; outline: 0; border: 0; background: transparent; color: var(--sd-menu-ink); font-size: 12px; }
+.sd-menu-search:focus-within { box-shadow: 0 0 0 2px color-mix(in srgb, var(--sd-focus) 24%, transparent); }
+.sd-multi-selected { display: inline-flex; align-items: center; gap: 4px; height: 32px; flex-shrink: 0; padding: 0 10px; border: 0; border-radius: 99px; background: var(--sd-field); color: var(--sd-menu-muted); font-size: 11px; white-space: nowrap; }
+.sd-multi-selected[aria-pressed="true"] { background: var(--sd-menu-selected); color: var(--sd-menu-ink); }
+.sd-menu-icon-button { display: inline-grid; place-items: center; width: 28px; height: 30px; border-radius: 50%; color: var(--sd-menu-muted); flex-shrink: 0; }
+.sd-menu-icon-button:hover, .sd-menu-icon-button[aria-expanded="true"] { background: var(--sd-menu-parent); }
+.sd-multi-options { overflow-y: auto; min-height: 70px; max-height: 320px; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.sd-multi-options .pm-menu-item { min-height: 54px; padding: 9px 12px !important; margin-top: 3px; }
+.sd-multi-options .pm-menu-item > span:not(.sd-menu-check) { flex: 1; min-width: 0; overflow: hidden; }
+.sd-multi-options .sd-menu-label { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.sd-menu-empty { padding: 28px 14px; font-size: 12px; text-align: center; color: var(--sd-menu-muted); }
+.sd-multi-bulk { position: absolute; top: 42px; right: 0; width: 186px; padding: 6px; z-index: 2; background: var(--sd-surface-overlay); border-radius: 18px; box-shadow: var(--sd-menu-shadow); }
+.sd-multi-bulk .pm-menu-item { min-height: 37px; padding: 8px 11px !important; font-size: 12px; }
+.sd-multi-bulk .pm-menu-item > svg:first-child { width: 16px; height: 16px; padding: 0; background: none; }
+.sd-multi-menu:has(.sd-multi-bulk) .sd-multi-options { min-height: 100px; }
+
+/* Bespoke pickers keep their functions; their surfaces and states use this family. */
+.pm-timeline-menu-row.is-active { background: transparent; border-radius: 28px; }
+.pm-people-picker-row { padding: 4px 9px !important; }
+.pm-people-picker-search, .pm-slash-menu__search { border: 0; border-radius: 99px; background: var(--sd-field); }
+.pm-people-picker-compose, .pm-slash-menu__search { margin: 3px 4px 9px; }
+.pm-people-picker-row-main { padding: 7px 4px; }
+.pm-lt-menu { max-height: min(380px, calc(100dvh - 24px)); overflow-y: auto; }
+.pm-lt-item { width: 100%; }
+.pm-fmt-hd-menu .pm-menu-item { border-radius: 28px !important; }
+.pm-fmt-palette { border-radius: 24px !important; }
+.pm-report-history-entry { min-height: 52px; }
+.pm-date-panel { padding: 16px !important; }
+.pm-date-day.is-on { background: var(--sd-menu-selected) !important; }
+@media (prefers-reduced-transparency: reduce) {
+  :is(.pm-menu, .pm-select-menu, .pm-date-panel, .pm-timeline-menu, .pm-ws-menu, .pm-files-menu,
+      .pm-slash-menu, .pm-assets-card, .pm-report-history-menu, .pm-review-popover, .pm-lt-menu,
+      .pm-chat-pop, .sd-project-menu, .sd-folder-popover, .sd-menu-surface) {
+    background: var(--sd-surface-overlay) !important; backdrop-filter: none; -webkit-backdrop-filter: none;
+  }
+}
+.pm-menu.sd-select-menu { display: flex; flex-direction: column; width: 240px; overflow: hidden; transform: none; }
+.sd-select-search { flex: 0 0 37px; margin: 2px 2px 8px; }
+.sd-select-options { min-height: 0; max-height: 320px; overflow-y: auto; overscroll-behavior: contain; }
+.pm-menu.sd-combobox-menu { max-height: min(320px, var(--pm-menu-viewport-max)); overflow-y: auto; }
+.pm-menu .pm-menu-item.is-highlight:not(.is-on) { background: var(--sd-menu-hover); }
+.sd-menu-root .sd-menu-title, .sd-menu-child .sd-menu-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+:is(.pm-menu, .pm-files-menu, .pm-ws-menu) :is([data-slot="menu-item-title"], .pm-files-menu-item-title, .pm-ws-menu-item-title) { color: inherit !important; }
+.pm-menu.pm-timeline-menu { width: 280px; min-width: 0; }
+.pm-timeline-menu-row .pm-timeline-menu-trail { margin-right: 4px; }
+.pm-timeline-menu-row .pm-timeline-menu-edit { right: 42px; }
+.pm-files-menu-opt { display: flex; align-items: center; width: 100%; }
+.pm-menu .pm-source-row.is-on [data-slot="menu-item-title"] { color: var(--sd-menu-ink); }
+.pm-table-context-menu { position: fixed; z-index: 1100; width: 236px; overflow-y: auto; overscroll-behavior: contain; }
+.pm-table-context-menu .pm-menu-item { display: flex; align-items: center; width: 100%; cursor: pointer; }
+
+/* Rich source/history rows use the same soft capsule as ordinary menu items. */
+.pm-assets-row, .pm-review-nav-row { border-radius: 28px; padding: 10px 16px; }
+.pm-assets-row[data-output] { padding: 10px 16px; }
+.pm-assets-row:hover:not(:disabled), .pm-review-nav-row:hover:not(:disabled) { background: var(--sd-menu-hover); color: var(--sd-menu-ink); }
+.pm-assets-retrieved-toggle { border-radius: 999px; padding: 7px 12px; }
+.pm-review-nav-row .pm-review-number { border-radius: 50%; background: var(--sd-menu-mark); color: var(--sd-menu-muted); }
+
+/* Specialized tree and people pickers retain their richer content and actions. */
+.sd-folder-branch, .sd-folder-root { border: 0; border-radius: 24px; color: var(--sd-menu-ink); }
+.sd-folder-branch:hover, .sd-folder-root:hover { background: var(--sd-menu-hover); }
+.sd-folder-branch[data-active], .sd-folder-root[aria-current] { background: var(--sd-menu-selected); color: var(--sd-menu-ink); }
+.sd-folder-branch[data-active]:hover, .sd-folder-root[aria-current]:hover { background: var(--sd-menu-selected-hover); }
+.pm-people-picker-compose, .pm-prepare-picker-foot { border: 0; }
+.pm-people-picker-search { padding: 9px 12px; }
+.pm-people-picker-row.is-picked .pm-people-picker-name { color: var(--sd-menu-ink); }
+:is(.pm-people-picker-add, .pm-people-picker-clear, .pm-people-picker-manage) { border: 0; border-radius: 24px; min-height: 40px; padding: 10px 16px; color: var(--sd-menu-ink); }
+:is(.pm-people-picker-add, .pm-people-picker-clear, .pm-people-picker-manage):hover:not(:disabled) { background: var(--sd-menu-hover); }
+.pm-prepare-foot-cancel, .pm-prepare-foot-confirm { border: 0; border-radius: 99px; }
+.pm-prepare-foot-cancel { background: var(--sd-field); color: var(--sd-menu-ink); }
+.pm-prepare-foot-confirm { background: var(--sd-brand); }
+:is(.pm-menu-item, .pm-files-menu-item).is-danger, .sd-project-menu .pm-shell-col-action--danger { color: var(--pm-danger) !important; }
+:is(.pm-menu-item, .pm-files-menu-item).is-danger > svg { color: inherit; }
+
+/* One motion family for custom menus and Base UI popovers. Reveal the surface
+   towards its anchor without transforming the popup or moving its hit boxes
+   (animated transforms on these layers cause stale hit testing in WKWebView). */
+:is(.pm-menu--soft, .pm-date-panel, .pm-slash-menu, .sd-multi-bulk,
+    .qa-action-menu, .sd-project-menu, .sd-folder-popover, .pm-report-history-menu,
+    .pm-review-popover) {
+  --sd-menu-closed-clip: inset(0 0 14% 0 round 28px);
+  --sd-menu-open-clip: inset(-48px -56px -64px -56px round 28px);
+  opacity: 1 !important;
+  clip-path: var(--sd-menu-open-clip) !important;
+  filter: blur(0) !important;
+  transform: none !important;
+  will-change: auto !important;
+  transition:
+    opacity var(--pm-menu-ms, var(--sd-menu-ms)) var(--sd-menu-ease),
+    clip-path var(--pm-menu-ms, var(--sd-menu-ms)) var(--sd-menu-ease),
+    filter var(--pm-menu-ms, var(--sd-menu-ms)) var(--sd-menu-ease) !important;
+}
+:is(.pm-menu--soft, .pm-date-panel, .pm-slash-menu,
+    .qa-action-menu, .sd-project-menu, .sd-folder-popover, .pm-report-history-menu,
+    .pm-review-popover):is(.pm-menu--drop-up, [data-menu-flip="up"], [data-side="top"]) {
+  --sd-menu-closed-clip: inset(14% 0 0 0 round 28px);
+}
+.pm-menu--soft[data-menu-placement="right"] { --sd-menu-closed-clip: inset(0 14% 0 0 round 28px); }
+.pm-menu--soft[data-menu-placement="right"][data-menu-side="left"] { --sd-menu-closed-clip: inset(0 0 0 14% round 28px); }
+:is(.pm-menu--soft, .pm-date-panel, .pm-slash-menu, .sd-multi-bulk):not(.is-open),
+:is(.qa-action-menu, .sd-project-menu, .sd-folder-popover, .pm-report-history-menu,
+    .pm-review-popover):is([data-starting-style], [data-ending-style], [data-closed]) {
+  opacity: 0 !important;
+  clip-path: var(--sd-menu-closed-clip) !important;
+  filter: blur(.6px) !important;
+  pointer-events: none !important;
+}
+.sd-menu-child {
+  opacity: 0;
+  transition: opacity var(--sd-menu-ms) var(--sd-menu-ease);
+}
+.sd-menu-child.is-open { opacity: 1; }
+.sd-menu-child-content { animation: sd-menu-category-in 160ms var(--sd-menu-ease); }
+@keyframes sd-menu-category-in {
+  from { opacity: .45; clip-path: inset(0 8px 0 8px round 20px); }
+  to { opacity: 1; clip-path: inset(0 round 20px); }
+}
+.sd-menu-connected .pm-menu-item[data-submenu-trigger],
+.sd-menu-connected .sd-menu-child .pm-menu-item {
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+.sd-menu-connected .pm-menu-item:disabled { cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) {
+  :is(.pm-menu--soft, .pm-date-panel, .pm-slash-menu, .sd-multi-bulk, .sd-menu-child,
+      .qa-action-menu, .sd-project-menu, .sd-folder-popover, .pm-report-history-menu,
+      .pm-review-popover) {
+    transition-duration: 1ms !important;
+    clip-path: none !important;
+    filter: none !important;
+  }
+  .sd-menu-child-content { animation: none; }
+}

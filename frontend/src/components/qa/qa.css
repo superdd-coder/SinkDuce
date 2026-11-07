@@ -144,18 +144,13 @@
 .qa-question-nav .qa-question-summary { font: var(--type-reading-compact); }
 .qa-question-nav .qa-question-summary, .qa-question-nav .qa-outline-note > p, .qa-question-nav .qa-group-toggle > span:not(.qa-display-number):not(.qa-meta) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; text-overflow: ellipsis; }
 .qa-question-nav .qa-group-toggle > .qa-meta { flex-shrink: 0; }
-.qa-replies { display: flex; flex-direction: column; gap: 14px; margin-top: 16px; }
-.qa-reply { padding: 20px 0; }
-.qa-replies > .qa-reply {
-  min-width: 0; padding: 16px;
-  border: 1px solid color-mix(in srgb, var(--pm-ink) 7%, transparent);
-  border-radius: var(--pm-r);
-  background: color-mix(in srgb, var(--pm-canvas) 55%, white);
-}
+.qa-replies { display: flex; flex-direction: column; gap: 20px; margin-top: 24px; }
+.qa-reply { min-width: 0; }
 .qa-replies > .qa-add-reply { align-self: flex-start; }
-.qa-replies > .qa-reply > .qa-reply-text { padding: 10px 16px; }
-.qa-replies .qa-composer-preview { border-color: transparent; background: transparent; }
-.qa-reply > header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+.qa-replies > .qa-reply > :is(.qa-composer, .qa-reply-text, .qa-composer-preview) { margin-inline-start: 32px; }
+.qa-replies > .qa-reply > .qa-reply-text { padding: 6px 10px; }
+.qa-replies .qa-composer-preview { border: 0; background: transparent; min-height: 38px; padding: 8px 10px; }
+.qa-reply > header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 4px; }
 .qa-reply-heading, .qa-reply-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .qa-reply-heading { flex: 1; min-width: 0; }
 .qa-column-name { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; flex-wrap: wrap; }
@@ -163,8 +158,8 @@
 .qa-column-name:has(input) { flex: 1; }
 .qa-column-name input { width: min(100%, 320px); }
 .qa-inline-error { color: var(--pm-danger); font: var(--type-meta); }
-.qa-reply h4 { font: var(--type-label); color: var(--pm-text); }
-.qa-reply-number { display: grid; place-items: center; width: 24px; height: 26px; flex-shrink: 0; color: var(--pm-faint); font: var(--type-meta); font-variant-numeric: tabular-nums; }
+.qa-reply h4 { font: var(--type-label); color: var(--pm-ink); }
+.qa-reply-number { display: grid; place-items: center; width: 24px; height: 24px; flex-shrink: 0; border-radius: 50%; background: var(--sd-field); color: var(--pm-muted); font: var(--type-meta); font-variant-numeric: tabular-nums; }
 .qa-reply p { font: var(--type-reading); white-space: pre-wrap; overflow-wrap: anywhere; }
 .qa-empty-reply { color: var(--pm-faint); padding: 10px 0; }
 .qa-reply.is-removed h4 { text-decoration: line-through; }
@@ -477,9 +472,7 @@
   .qa-stage.is-preview { overflow: auto; }
   .qa-stage.is-preview .qa-detail-slot { flex: 0 0 auto; max-height: 60vh; }
   .qa-reading { padding: 20px; }
-  .qa-replies > .qa-reply { padding: 12px; }
-  .qa-replies > .qa-reply > .qa-reply-text { padding-inline: 8px; }
-  .qa-replies .qa-composer-preview { padding: 12px; }
+  .qa-replies > .qa-reply > :is(.qa-composer, .qa-reply-text, .qa-composer-preview) { margin-inline-start: 24px; }
   .qa-template-grid, .qa-match-texts { grid-template-columns: 1fr; }
   .qa-template-paper { min-height: 180px; }
   .qa-paper-lines { height: 72px; }
@@ -567,6 +560,8 @@
 .qa-rich-placeholder { color: var(--pm-faint); }
 
 /* Plain actions sit below the primary task in the visual hierarchy. */
+.qa-import-action[data-slot="button"] { background: var(--sd-selected); color: var(--sd-selected-ink); }
+.qa-import-action[data-slot="button"]:hover:not(:disabled) { background: var(--sd-selected-hover); }
 .qa-toolbar-action[data-slot="button"], .qa-menu-trigger[data-slot="button"],
 .qa-outline-tools [data-slot="button"], .qa-outline-add [data-slot="button"],
 .qa-add-reply[data-slot="button"], .qa-column-name > [data-slot="button"],

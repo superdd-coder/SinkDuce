@@ -36,7 +36,7 @@ export function SvgCodeBlock({ source, complete, sourceEditor, report = false }:
   const attachImage = useCallback((node: HTMLImageElement | null) => {
     if (!node) return
     try {
-      const preview = createSvgPreview(source, complete)
+      const preview = createSvgPreview(source, complete, "porcelain")
       if (!preview) return
       node.src = preview.url
       return preview.dispose
@@ -75,30 +75,13 @@ export function SvgCodeBlock({ source, complete, sourceEditor, report = false }:
         onMouseDown={sourceEditor ? (event) => { event.preventDefault(); event.stopPropagation() } : undefined}
         onClick={sourceEditor ? (event) => event.stopPropagation() : undefined}
       >
-        {!report && <span>SVG</span>}
-        {report ? <button type="button" aria-pressed={showSource} aria-label={t(showSource ? "common.preview" : "chat.svgSource")}
+        <button type="button" aria-pressed={showSource} aria-label={t(showSource ? "common.preview" : "chat.svgSource")}
           title={t(showSource ? "common.preview" : "chat.svgSource")} onClick={() => setSourceSelected((value) => !value)}>
           {showSource ? <Eye size={15} /> : <Code2 size={15} />}
-        </button> : <>
-        <button
-          type="button"
-          aria-pressed={!showSource}
-          disabled={!canPreview}
-          onClick={() => setSourceSelected(false)}
-        >
-          {t("common.preview")}
         </button>
-        <button
-          type="button"
-          aria-pressed={showSource}
-          onClick={() => setSourceSelected(true)}
-        >
-          {t("chat.svgSource")}
-        </button>
-        </>}
         <button type="button" onClick={() => void copySource()} disabled={!source} aria-live="polite"
           aria-label={t(copyState === "copied" ? "common.copied" : "common.copy")} title={t(copyState === "copied" ? "common.copied" : "common.copy")}>
-          {report ? copyState === "copied" ? <Check size={15} /> : <Copy size={15} /> : t(copyState === "copied" ? "common.copied" : "common.copy")}
+          {copyState === "copied" ? <Check size={15} /> : <Copy size={15} />}
         </button>
         <button
           ref={expandRef} type="button" className="chat-svg-expand-button"
@@ -109,7 +92,7 @@ export function SvgCodeBlock({ source, complete, sourceEditor, report = false }:
             else setExpandedSource(source)
           }}
         >
-          {report ? <Maximize2 size={15} /> : <span aria-hidden="true" className="chat-svg-expand-icon">⤢</span>}
+          <Maximize2 size={15} />
         </button>
       </div>
       {showSource && statusKey && <p className="chat-md-visual-status" role="status" contentEditable={false}>{t(statusKey)}</p>}

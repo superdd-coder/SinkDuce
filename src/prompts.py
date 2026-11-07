@@ -605,6 +605,26 @@ Rules:
 # Call 1 — General Summary (no collection catalog)
 # ═══════════════════════════════════════════════════════════════════════
 
+# Shared by generated report/answer diagrams and meeting minutes. Use literal
+# colors so the SVG also works in a copied file or an exported PDF/Word document.
+SVG_DESIGN_RULES = """Diagram appearance — SinkDuce porcelain / emerald:
+- Use #FAFAFA or white for the canvas, #202020 for primary text and #6E6E6E for
+  secondary labels. Avoid cream, beige or yellow-tinted page backgrounds.
+- Use deep emerald #174C39 for the primary path and #123E2E for strong accents.
+  Node surfaces are porcelain #F3F4F3, pale emerald #E9EFEC, or #DFE9E4 for emphasis.
+  Use #B8CDC3 for subtle node outlines and #A8B6AF for neutral connectors.
+- Use restrained bronze #806544 on #F1ECE4 for a second meaningful category,
+  slate #5D7480 on #EDF1F3 for a third, amber #966526 for warnings, and #A64F4F
+  for risks. Preserve category distinctions; never make every series green.
+  Pair semantic colors with labels, shapes or line styles.
+- Prefer softly rounded nodes (roughly 12–16 units radius at a 900-unit viewBox),
+  generous internal padding and thin connectors. Keep labels high contrast.
+  Avoid heavy outlines, decorative gradients, glass filters on the drawing, and
+  large colored backgrounds; the application supplies the surrounding glass card.
+- Keep all colors self-contained in the SVG, with no dependency on application CSS.
+  Respect an explicit user-requested palette or source legend when color has meaning.
+"""
+
 # MEETING_MINUTES_WRITING_RULES
 #   Purpose: Shared editorial and visual policy for compact, decision-ready minutes.
 #   Role: user (included inside the summary task)
@@ -646,14 +666,13 @@ When a source-supported process, dependency, or relationship is clearer visually
 include at most one compact diagram per summary, as a fenced ```svg block in
 Detail. A diagram replaces repetitive prose rather than adding decoration.
 Use a self-contained SVG with xmlns and viewBox, generous spacing, readable
-labels in the document language, and a white background. Use dark ink, brand
-deep green (#1A5E3D), and restrained pale neutral fills. Keep the diagram under
+labels in the document language, and the shared diagram palette below. Keep the diagram under
 256 KiB; express visual content using SVG shapes and text with internal references.
 Use a passive image-compatible drawing without scripts, foreignObject, or external
 assets. Keep speaker and citation tokens outside the SVG, in a brief caption.
 Only draw relationships established by the transcript; prose is sufficient when
 no diagram improves understanding. Place any source caption on its own short line.
-"""
+""" + "\n\n" + SVG_DESIGN_RULES
 
 # MEETING_GENERAL_SUMMARY_PROMPT
 #   Purpose: Generates a comprehensive meeting summary (General tab)
@@ -2491,9 +2510,7 @@ CHAT_SVG_RULES = """Visual communication:
   requests for another format.
 - Use one primary representation for each finding. Accompany diagrams and tables with
   a short interpretation that adds meaning instead of repeating every node or cell.
-- Use the product palette: #FDFBF7 canvas, #2A2E2A text, #1A5E3D primary accents and
-  #0F4A2D darker accents. Use additional semantic colors for meaningful distinctions
-  such as risks and warnings, with text labels as well as color.
+- Use the shared diagram palette below for answers and generated reports.
 - Keep layouts spacious, labels concise and text readable at the initial preview size.
   Prefer clear arrow directions and few crossings. Split crowded diagrams into focused
   views. Use the user's language for labels unless they request otherwise.
@@ -2515,7 +2532,7 @@ CHAT_SVG_RULES = """Visual communication:
   chosen answer over distilling away its visuals or replacing them with ASCII.
   Respect explicit requests for a summary, text-only output or a selected portion;
   include only the content within that requested scope. When revising a Note,
-  preserve existing SVG fences unless the requested edit changes or removes them."""
+  preserve existing SVG fences unless the requested edit changes or removes them.""" + "\n\n" + SVG_DESIGN_RULES
 
 # MAIN_CHAT_FORMATTING_RULES
 #   Purpose: Focus Main Chat answers and provide readable, branded visual explanations.

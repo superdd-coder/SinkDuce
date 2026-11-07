@@ -210,3 +210,25 @@ test("the nested SVG popup has its own backdrop and keeps mouse events out of th
     }
   } finally { harness.dispose() }
 })
+
+test("answer/report previews and meeting/editor canvases apply the same palette to their image copy", async () => {
+  const source = '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="#FDFBF7"/><text fill="#1A5E3D">49%</text></svg>'
+  for (const [file, name, props] of [
+    ["svg-code-block", "SvgCodeBlock", { source, complete: true }],
+    ["svg-code-block", "SvgCodeBlock", { source, complete: true, report: true }],
+    ["svg-preview-dialog", "SvgPreviewCanvas", { source, inline: true }],
+    ["svg-preview-dialog", "SvgPreviewCanvas", { source }],
+  ] as const) {
+    const harness = await componentHarness(file, name)
+    try {
+      const image = harness.render(props).find((e) => e.type === "img")!
+      const node = { src: "" }
+      const dispose = image.props.ref(node)
+      try {
+        const rendered = await (await fetch(node.src)).text()
+        assert.match(rendered, /fill="#fafafa"/)
+        assert.match(rendered, /fill="#174c39">49%/)
+      } finally { dispose() }
+    } finally { harness.dispose() }
+  }
+})

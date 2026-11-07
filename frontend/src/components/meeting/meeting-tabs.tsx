@@ -46,7 +46,7 @@ import { useShallow } from "zustand/react/shallow"
 import { useAppStore } from "@/stores/app-store"
 import { useT } from "@/i18n/use-t"
 import { formatApiError } from "@/api/http"
-import { useBlueprintStream } from "@/hooks/use-blueprint-stream"
+import { getBlueprintStreamState, resolveBlueprintSummary, useBlueprintStream } from "@/hooks/use-blueprint-stream"
 import {
   useSectionStream,
   startSectionStream,
@@ -536,7 +536,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
   } | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
-  const buttonRef = useRef<HTMLElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
   const topPillRef = useRef<HTMLButtonElement>(null)
   const { collections, fetchCollections, setSidebarView, setActiveCollection, setPendingOpenFile } =
     useAppStore(
@@ -573,12 +573,6 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
   const [chainsByCol, setChainsByCol] = useState<Record<string, Chain[]>>({})
   const [chainFlyoutLoading, setChainFlyoutLoading] = useState(false)
   const flyoutItemRef = useRef<HTMLButtonElement | null>(null)
-  const flyoutCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  /** Explicit viewport coords for chain flyout (avoids broken anchor placement). */
-  const [flyoutCoords, setFlyoutCoords] = useState<{
-    top: number
-    left: number
-  } | null>(null)
   /** Suggested-pill path: standalone chain menu when multi-chain */
   const [pillChainOpen, setPillChainOpen] = useState(false)
   const [pillChainOptions, setPillChainOptions] = useState<Chain[]>([])
@@ -699,46 +693,9 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
     } else {
       setFlyoutColId(null)
       flyoutItemRef.current = null
-      setFlyoutCoords(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dropdownOpen, tab.name])
-
-  const clearFlyoutCloseTimer = () => {
-    if (flyoutCloseTimerRef.current) {
-      clearTimeout(flyoutCloseTimerRef.current)
-      flyoutCloseTimerRef.current = null
-    }
-  }
-
-  const scheduleCloseFlyout = () => {
-    clearFlyoutCloseTimer()
-    flyoutCloseTimerRef.current = setTimeout(() => {
-      setFlyoutColId(null)
-      flyoutItemRef.current = null
-      setFlyoutCoords(null)
-    }, 180)
-  }
-
-  const measureFlyoutCoords = (itemEl: HTMLElement | null) => {
-    if (!itemEl || typeof window === "undefined") return null
-    const menuEl = itemEl.closest("[data-slot='menu']") as HTMLElement | null
-    const ir = itemEl.getBoundingClientRect()
-    const mr = menuEl?.getBoundingClientRect() ?? ir
-    const gap = 6
-    const estW = 220
-    const estH = 220
-    let left = mr.right + gap
-    let top = ir.top
-    if (left + estW > window.innerWidth - 8) {
-      left = Math.max(8, mr.left - estW - gap)
-    }
-    if (top + estH > window.innerHeight - 8) {
-      top = Math.max(8, window.innerHeight - estH - 8)
-    }
-    if (top < 8) top = 8
-    return { top, left }
-  }
 
   const loadChainsForCol = async (colId: string): Promise<Chain[]> => {
     const cached = chainsByCol[colId]
@@ -763,7 +720,6 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
     chainId: string | null,
   ) => {
     setFlyoutColId(null)
-    setFlyoutCoords(null)
     setDropdownOpen(false)
     setPillChainOpen(false)
     setPillChainColId(null)
@@ -778,30 +734,22 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
     colId: string,
     itemEl: HTMLButtonElement | null,
   ) => {
-    clearFlyoutCloseTimer()
     flyoutItemRef.current = itemEl
-    // Position immediately from the row (before async load) so flyout never floats away
-    const coords = measureFlyoutCoords(itemEl)
-    if (coords) setFlyoutCoords(coords)
     try {
       const chains = await loadChainsForCol(colId)
+      if (flyoutItemRef.current !== itemEl) return
       // Main-only collections: never show the secondary flyout
       const hasBranch = chains.some((c) => !c.is_main)
       if (!hasBranch) {
-        setFlyoutColId((cur) => (cur === colId ? null : cur))
-        setFlyoutCoords(null)
+        setFlyoutColId(null)
         return
       }
-      // Re-measure after paint (menu may have scrolled / row highlight changed)
-      const again = measureFlyoutCoords(flyoutItemRef.current)
-      if (again) setFlyoutCoords(again)
       setFlyoutColId(colId)
     } catch (err) {
       toast.error(
         t("common.failedWithError", { error: formatApiError(err, t) }),
       )
-      setFlyoutColId((cur) => (cur === colId ? null : cur))
-      setFlyoutCoords(null)
+      setFlyoutColId(null)
     }
   }
 
@@ -862,7 +810,6 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
   const doIngest = async (colId: string, chainId?: string | null) => {
     setDropdownOpen(false)
     setFlyoutColId(null)
-    setFlyoutCoords(null)
     setPillChainOpen(false)
     setSwitchPending(null)
     const colMeta = collections.find((c) => c.id === colId)
@@ -1246,6 +1193,8 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
         portal
         anchorRef={topPillRef}
         matchAnchorWidth
+        onClose={() => setActionsOpen(false)}
+        autoFocus
         exitMs={MENU_SILK_MS}
         className="pm-meeting-ingest-menu"
       >
@@ -1329,8 +1278,9 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       )}
     >
       {!hideChooseTrigger && (
-      <div ref={buttonRef as RefObject<HTMLDivElement>} className="w-full">
+      <div className="w-full">
         <button
+          ref={buttonRef}
           type="button"
           disabled={ingesting || ingestLocked}
           onClick={() => {
@@ -1352,6 +1302,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       <SoftMenu
         open={dropdownOpen}
         portal
+        connected
         anchorRef={
           (tab.tab_id === "tab_general" || tab.type === "general") && showTopButton
             ? topPillRef
@@ -1360,6 +1311,46 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
         matchAnchorWidth
         exitMs={MENU_SILK_MS}
         className="pm-meeting-ingest-menu"
+        onClose={() => setDropdownOpen(false)}
+        onSubmenuBack={() => { flyoutItemRef.current = null; setFlyoutColId(null) }}
+        rootWidth={240}
+        childWidth={260}
+        connectedPanelKey={flyoutColId}
+        autoFocus
+        connectedPanel={flyoutColId && (chainsByCol[flyoutColId]?.some(c => !c.is_main) ?? false) ? <>
+          <div className="pm-meeting-ingest-menu-label">
+            {chainFlyoutLoading && !(flyoutColId && chainsByCol[flyoutColId])
+              ? t("common.loading")
+              : t("meeting.timelineChain")}
+          </div>
+          {flyoutChains.map((ch) => (
+            <MenuItem
+              key={ch.chain_id}
+              className="pm-meeting-ingest-menu-item"
+              disabled={ingesting || ingestLocked}
+              onClick={() => {
+                if (!flyoutColId) return
+                commitCollectionAndChain(flyoutColId, ch.chain_id)
+              }}
+            >
+              <GitBranch strokeWidth={1.75} />
+              <span className="pm-meeting-ingest-menu-name truncate min-w-0">
+                {ch.is_main
+                  ? ch.title?.trim()
+                    ? t("library.mainDot", { title: ch.title })
+                    : t("library.main")
+                  : ch.title?.trim() || t("library.branch")}
+              </span>
+            </MenuItem>
+          ))}
+          {!chainFlyoutLoading &&
+          flyoutColId &&
+          (chainsByCol[flyoutColId]?.length ?? 0) === 0 ? (
+            <div className="px-3 py-2.5 text-[12px] text-[var(--pm-faint)] text-center">
+              {t("library.noChains")}
+            </div>
+          ) : null}
+        </> : undefined}
       >
         <div className="pm-meeting-ingest-menu-label">{t("common.collections")}</div>
         {tab.tab_id !== "tab_general" && generalAllocColName ? (
@@ -1387,13 +1378,17 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
             return (
               <MenuItem
                 key={col.id}
-                active={col.id === associatedId || flyoutColId === col.id}
+                active={col.id === associatedId}
+                data-submenu-trigger={multi ? "" : undefined}
+                aria-haspopup={multi ? "menu" : undefined}
+                aria-expanded={multi ? flyoutColId === col.id : undefined}
+                title={col.name}
                 disabled={!!pendingName}
                 className="pm-meeting-ingest-menu-item"
                 onMouseEnter={(e) => {
                   void openChainFlyout(col.id, e.currentTarget)
                 }}
-                onMouseLeave={scheduleCloseFlyout}
+                onFocus={(e) => { void openChainFlyout(col.id, e.currentTarget) }}
                 onClick={(e) => {
                   void handleSelectCollection(col.id, e.currentTarget)
                 }}
@@ -1422,11 +1417,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
             disabled={!!pendingName}
             className="pm-meeting-ingest-menu-item"
             onClick={() => setCreating(true)}
-            onMouseEnter={() => {
-              clearFlyoutCloseTimer()
-              setFlyoutColId(null)
-              setFlyoutCoords(null)
-            }}
+            onMouseEnter={() => { flyoutItemRef.current = null; setFlyoutColId(null) }}
           >
             <Plus strokeWidth={1.75} />
             {hasAssociated ? t("meeting.createNewCollection") : t("meeting.newDotName", { name: tab.name })}
@@ -1435,11 +1426,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
           <div
             className="pm-meeting-ingest-create"
             onClick={(e) => e.stopPropagation()}
-            onMouseEnter={() => {
-              clearFlyoutCloseTimer()
-              setFlyoutColId(null)
-              setFlyoutCoords(null)
-            }}
+            onMouseEnter={() => { flyoutItemRef.current = null; setFlyoutColId(null) }}
           >
             <Input
               className="pm-meeting-ingest-create-input"
@@ -1464,56 +1451,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
           </div>
         )}
       </SoftMenu>
-      {/* Chain flyout — explicit coords next to parent menu / hovered row */}
-      <SoftMenu
-        open={
-          dropdownOpen &&
-          !!flyoutColId &&
-          !!flyoutCoords &&
-          (chainsByCol[flyoutColId]?.some((c) => !c.is_main) ?? false)
-        }
-        portal
-        placement="right"
-        fixedCoords={flyoutCoords}
-        repositionKey={flyoutColId}
-        exitMs={MENU_SILK_MS}
-        className="pm-meeting-ingest-menu"
-        onMouseEnter={clearFlyoutCloseTimer}
-        onMouseLeave={scheduleCloseFlyout}
-      >
-        <div className="pm-meeting-ingest-menu-label">
-          {chainFlyoutLoading && !(flyoutColId && chainsByCol[flyoutColId])
-            ? t("common.loading")
-            : t("meeting.timelineChain")}
-        </div>
-        {flyoutChains.map((ch) => (
-          <MenuItem
-            key={ch.chain_id}
-            className="pm-meeting-ingest-menu-item"
-            disabled={ingesting || ingestLocked}
-            onClick={() => {
-              if (!flyoutColId) return
-              commitCollectionAndChain(flyoutColId, ch.chain_id)
-            }}
-          >
-            <GitBranch strokeWidth={1.75} />
-            <span className="pm-meeting-ingest-menu-name truncate min-w-0">
-              {ch.is_main
-                ? ch.title?.trim()
-                  ? t("library.mainDot", { title: ch.title })
-                  : t("library.main")
-                : ch.title?.trim() || t("library.branch")}
-            </span>
-          </MenuItem>
-        ))}
-        {!chainFlyoutLoading &&
-        flyoutColId &&
-        (chainsByCol[flyoutColId]?.length ?? 0) === 0 ? (
-          <div className="px-3 py-2.5 text-[12px] text-[var(--pm-faint)] text-center">
-            {t("library.noChains")}
-          </div>
-        ) : null}
-      </SoftMenu>
+
     </div>
   )
 
@@ -2023,6 +1961,22 @@ export function MeetingTabs({
     startTranslationStream(meetingId, tabId, lang)
   }, [meetingId, translations, langStorageKey])
 
+  const searchTarget = useAppStore(s => s.pendingWorkspaceSearch)
+  useEffect(() => {
+    if (!searchTarget?.meeting_id || searchTarget.meeting_id !== meetingId) return
+    const frame = requestAnimationFrame(() => {
+      if (useAppStore.getState().pendingWorkspaceSearch !== searchTarget) return
+      if (searchTarget.category === "minutes") {
+        const sectionId = searchTarget.section_id || "tab_general"
+        handleSelectLang(sectionId, null)
+        setSelectedSummaryId(sectionId)
+        setMainTab("summary")
+      }
+      useAppStore.setState({ pendingWorkspaceSearch: undefined })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [searchTarget, meetingId, handleSelectLang, setSelectedSummaryId])
+
   // Restore the persisted language view + green-dot list when the tab changes.
   useEffect(() => {
     const tabId = selectedSummaryId
@@ -2308,15 +2262,22 @@ export function MeetingTabs({
   }, [meetingId]) // eslint-disable-line react-hooks/exhaustive-deps -- seed notes from first paint of this meeting
 
   const loadTabContent = useCallback(async (tabId: string) => {
+    const summarySnapshot = tabId === "tab_general" ? getBlueprintStreamState(meetingId) : null
+    // The persisted file still contains the previous summary until generation ends.
+    if (summarySnapshot?.isStreaming) return
     // Already loaded → skip
     if (loadedTabsRef.current.has(tabId)) return
     // Already in-flight → skip (dedup concurrent calls)
     if (inFlightRef.current.has(tabId)) return
-    inFlightRef.current.add(tabId)
+    const inFlight = inFlightRef.current
+    inFlight.add(tabId)
 
     setLoadingTabs((prev) => new Set(prev).add(tabId))
     try {
       const md = await getSectionMd(meetingId, tabId)
+      // Ignore responses from another meeting or from before a new generation.
+      if (inFlightRef.current !== inFlight || viewedMeetingIdRef.current !== meetingId) return
+      if (summarySnapshot && getBlueprintStreamState(meetingId) !== summarySnapshot) return
       if (md) {
         loadedTabsRef.current.add(tabId)   // mark loaded ONLY on success
         setTabMdContents((prev) => ({ ...prev, [tabId]: md }))
@@ -2325,13 +2286,16 @@ export function MeetingTabs({
       // (`"" ?? streamingMd` stays empty).
     } catch {
       /* retry next select */
+    } finally {
+      inFlight.delete(tabId)
+      if (inFlightRef.current === inFlight && viewedMeetingIdRef.current === meetingId) {
+        setLoadingTabs((prev) => {
+          const next = new Set(prev)
+          next.delete(tabId)
+          return next
+        })
+      }
     }
-    inFlightRef.current.delete(tabId)
-    setLoadingTabs((prev) => {
-      const next = new Set(prev)
-      next.delete(tabId)
-      return next
-    })
   }, [meetingId])
   loadTabContentRef.current = loadTabContent
 
@@ -2897,12 +2861,7 @@ export function MeetingTabs({
 
   const getTabContent = (tabId: string): string => {
     if (tabId === "tab_general") {
-      return (
-        tabMdContents["tab_general"] ||
-        bpStream.settledSummaryMd ||
-        bpStream.streamingMd ||
-        ""
-      )
+      return resolveBlueprintSummary(bpStream, tabMdContents["tab_general"])
     }
     // Live SSE wins while this tab is generating (cached "" or stale md
     // must not hide tokens).
@@ -3304,6 +3263,7 @@ export function MeetingTabs({
         <div className="pm-meeting-live-summary-static">
           {isTabRendered("live") && (
           <LiveSummaryPanel
+            mode="saved"
             state={liveSummary ?? null}
             error={null}
             paused={false}

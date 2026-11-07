@@ -10,6 +10,7 @@ import {
   Link2,
   Loader2,
   Plus,
+  UserRound,
 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
@@ -515,8 +516,12 @@ export function TodoCard({
           {t("library.todo")}
         </span>
         <div className="flex items-center gap-1">
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={t("library.onlyTodosAssigned")}
+            aria-pressed={mineOnly}
             title={
               meId
                 ? mineOnly
@@ -526,37 +531,29 @@ export function TodoCard({
             }
             disabled={!meId}
             onClick={() => setMineOnly((v) => !v)}
-            className={cn(
-              "px-1.5 h-6 rounded-md text-[10px] tracking-[0.04em] uppercase border-none transition-colors",
-              mineOnly
-                ? "text-[var(--pm-green)] bg-[var(--pm-green-soft)]"
-                : "text-[var(--pm-faint)] hover:text-[var(--pm-text)] bg-transparent",
-              !meId && "opacity-40 cursor-default"
-            )}
           >
-            {t("library.mine")}
-          </button>
-          <button
-            type="button"
-            title={groupByChain ? t("library.ungroup") : t("library.groupByChain")}
-            onClick={() => setGroupByChain((v) => !v)}
-            className={cn(
-              "p-1 rounded-md transition-colors border-none",
-              groupByChain
-                ? "text-[var(--pm-green)] bg-[var(--pm-green-soft)]"
-                : "text-[var(--pm-faint)] hover:text-[var(--pm-text)] bg-transparent"
-            )}
-          >
-            <Layers className="h-3.5 w-3.5" />
-          </button>
+            <UserRound />
+          </Button>
           <Button
             type="button"
             variant="ghost"
-            size="xs"
+            size="icon-sm"
+            aria-label={t("library.groupByChain")}
+            aria-pressed={groupByChain}
+            title={groupByChain ? t("library.ungroup") : t("library.groupByChain")}
+            onClick={() => setGroupByChain((v) => !v)}
+          >
+            <Layers className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
             onClick={() => setCreateOpen(true)}
             title={t("library.addTodo")}
+            aria-label={t("library.addTodo")}
           >
-            {t("common.add")}
+            <Plus />
           </Button>
         </div>
       </div>

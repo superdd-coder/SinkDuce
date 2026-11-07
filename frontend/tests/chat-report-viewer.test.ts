@@ -137,44 +137,40 @@ test("the conversation card shows separate Output and Sources counts and opens o
   } finally { h.dispose() }
 })
 
-test("the asset surface grows from the trigger's own bounds and keeps the trigger hidden through its exit", async () => {
+test("the same visible Output and Sources control toggles the asset surface throughout its transition", async () => {
   const h = await harness("conversation-assets", "ConversationAssets", { getChatReports: async () => [], getChatAttachments: async () => [] })
   try {
     const props = { sessionId: "s", refreshKey: "1", messages: [], onOpenReport() {} }
-    let tree = h.render(props)
-    tree.find((e) => e.props.className === "pm-assets-trigger").props.ref.current = { getBoundingClientRect: () => ({ width: 178, height: 28 }) }
-    tree.find((e) => typeof e.props.open === "boolean" && e.props.onOpenChange).props.onOpenChange(true, { reason: "trigger-press" })
-    tree = h.render(props)
-    assert.equal(tree.find((e) => e.props.className === "pm-assets-positioner")?.props.sideOffset, -28)
-    assert.equal(tree.find((e) => e.props.className === "pm-assets-card")?.props.style["--pm-assets-origin-w"], "178px")
-    const root = tree.find((e) => typeof e.props.open === "boolean" && e.props.onOpenChange)
-    root.props.onOpenChange(false, { reason: "outside-press" })
-    tree = h.render(props)
-    assert.equal(tree.find((e) => e.props.className === "pm-assets-trigger")?.props["data-surface-active"], true)
-    tree.find((e) => typeof e.props.open === "boolean" && e.props.onOpenChangeComplete).props.onOpenChangeComplete(false)
-    assert.equal(h.render(props).find((e) => e.props.className === "pm-assets-trigger")?.props["data-surface-active"], undefined)
+    const triggerRef = h.render(props).find((e) => e.props.className === "pm-assets-trigger").props.ref
+    for (const open of [true, false, true]) {
+      const root = h.render(props).find((e) => typeof e.props.open === "boolean" && e.props.onOpenChange)
+      root.props.onOpenChange(open, { reason: "trigger-press" })
+      const tree = h.render(props)
+      const trigger = tree.find((e) => e.props.className === "pm-assets-trigger")
+      assert.equal(trigger.props.ref, triggerRef)
+      assert.equal(trigger.props["aria-expanded"], open)
+      assert.equal(tree.filter((e) => e.props["data-output-count"] !== undefined).length, 1)
+      assert.equal(tree.filter((e) => e.props["data-source-count"] !== undefined).length, 1)
+      assert.equal(tree.find((e) => e.props.className === "pm-assets-card")?.props.inert, !open)
+    }
   } finally { h.dispose() }
 })
 
 test("collapsing the asset surface restores keyboard focus without stealing an outside click", async () => {
-  const original = globalThis.requestAnimationFrame
-  globalThis.requestAnimationFrame = ((fn) => { fn(0); return 1 }) as typeof requestAnimationFrame
   let focused = 0
   const h = await harness("conversation-assets", "ConversationAssets", { getChatReports: async () => [], getChatAttachments: async () => [] })
   try {
     const props = { sessionId: "s", refreshKey: "1", messages: [], onOpenReport() {} }
     const tree = h.render(props)
-    tree.find((e) => e.props.className === "pm-assets-trigger").props.ref.current = { getBoundingClientRect: () => ({ width: 178, height: 28 }), focus() { focused++ } }
-    const root = tree.find((e) => typeof e.props.open === "boolean" && e.props.onOpenChangeComplete)
+    tree.find((e) => e.props.className === "pm-assets-trigger").props.ref.current = { focus() { focused++ } }
+    const root = tree.find((e) => typeof e.props.open === "boolean" && e.props.onOpenChange)
     root.props.onOpenChange(true, { reason: "trigger-press" })
     root.props.onOpenChange(false, { reason: "escape-key" })
-    root.props.onOpenChangeComplete(false)
     assert.equal(focused, 1)
     root.props.onOpenChange(true, { reason: "trigger-press" })
     root.props.onOpenChange(false, { reason: "outside-press" })
-    root.props.onOpenChangeComplete(false)
     assert.equal(focused, 1)
-  } finally { h.dispose(); globalThis.requestAnimationFrame = original }
+  } finally { h.dispose() }
 })
 
 test("asset requests finishing after a session switch cannot replace the new session's files", async () => {
@@ -224,9 +220,9 @@ test("the asset card caps itself at two thirds of its own stage and tracks stage
     const tree = h.render(props)
     tree.find((e) => e.props.className === "pm-assets-trigger").props.ref.current = { closest: () => ({ getBoundingClientRect: () => ({ height }) }) }
     await h.flush(); callback()
-    assert.equal(h.render(props).find((e) => e.props.className === "pm-assets-card")?.props.style.maxHeight, 400)
+    assert.equal(h.render(props).find((e) => e.props.className === "pm-assets-card")?.props.style["--pm-assets-stage-max"], "400px")
     height = 900; callback()
-    assert.equal(h.render(props).find((e) => e.props.className === "pm-assets-card")?.props.style.maxHeight, 600)
+    assert.equal(h.render(props).find((e) => e.props.className === "pm-assets-card")?.props.style["--pm-assets-stage-max"], "600px")
   } finally { h.dispose(); globalThis.ResizeObserver = original }
   assert.equal(disconnected, true)
 })

@@ -1645,23 +1645,6 @@ li.pm-toast[data-sonner-toast] {
   animation: sk-btn-ring 2.4s cubic-bezier(0.25, 1, 0.5, 1) infinite;
 }
 
-/* ── AI-COMP-121 · streaming cursor ── */
-@keyframes sk-cursor-blink {
-  0%, 45%   { opacity: 1; transform: scaleY(1); }
-  50%, 95%  { opacity: 0.25; transform: scaleY(0.85); }
-  100%      { opacity: 1; transform: scaleY(1); }
-}
-.sk-stream-cursor {
-  display: inline-block;
-  width: 2px;
-  height: 1em;
-  background: var(--ze-green);
-  vertical-align: text-bottom;
-  margin-left: 2px;
-  border-radius: 1px;
-  animation: sk-cursor-blink 0.9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-}
-
 /* ── AI-COMP-010 · checkbox-diamond (rounded diamond) ── */
 .sk-diamond {
   width: 6px;
@@ -8161,14 +8144,12 @@ button.pm-rail-new:hover:not(:disabled) {
   right: 12px;
   top: 0;
   z-index: 0;
-  border-radius: 10px;
+  border-radius: 17px;
   pointer-events: none;
   /* Soft mint wash on float surface */
-  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 9%, #fdfbf7);
-  /* Deep green left edge (mock) */
-  box-shadow:
-    inset 2.5px 0 0 0 var(--pm-green, #1a5e3d),
-    inset 0 0 0 1px color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, transparent);
+  background: var(--sd-selected);
+  /* Selection uses only a soft fill; focus outlines remain keyboard-only. */
+  box-shadow: none;
   will-change: transform, height;
   transition: none;
 }
@@ -8208,8 +8189,8 @@ button.pm-rail-new:hover:not(:disabled) {
   --col-row-surface: color-mix(in srgb, var(--pm-ink, #121410) 3.5%, var(--pm-float, #fdfbf7));
 }
 .pm-shell-col-row.is-active {
-  background: transparent; /* mint + green bar from sliding indicator */
-  --col-row-surface: color-mix(in srgb, var(--pm-green, #1a5e3d) 9%, #fdfbf7);
+  background: transparent; /* fill comes from the sliding indicator */
+  --col-row-surface: var(--sd-selected);
   color: var(--pm-ink, #121410);
 }
 /* Archived rows stay fully usable — greyed name + tag, same interactions */
@@ -12196,8 +12177,8 @@ html:lang(zh) .pm-settings-card-desc {
 }
 .pm-settings-hw-main {
   flex: 1 1 auto;
-  /* Soft canvas well so nested cards float */
-  background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 72%, #ffffff);
+  background: transparent;
+  box-shadow: none;
 }
 .pm-settings-hw-rail-head {
   position: relative;
@@ -12325,12 +12306,10 @@ html:lang(zh) .pm-settings-card-desc {
   right: 8px;
   top: 0;
   z-index: 0;
-  border-radius: 10px;
+  border-radius: 17px;
   pointer-events: none;
-  background: var(--pm-green-wash);
-  box-shadow:
-    inset 2.5px 0 0 0 var(--pm-green, #1a5e3d),
-    inset 0 0 0 1px color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, transparent);
+  background: var(--sd-selected);
+  box-shadow: none;
   will-change: transform, height;
   transition: none;
 }
@@ -12401,11 +12380,9 @@ html:lang(zh) .pm-settings-card-desc {
   flex-direction: column;
   gap: 10px;
   padding: 12px var(--pm-hw-inset, 14px);
-  border-radius: 16px;
-  background: #ffffff;
-  box-shadow:
-    0 1px 2px color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent),
-    0 0 0 1px color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent);
+  border-radius: var(--sd-radius-card);
+  background: var(--sd-surface-raised);
+  box-shadow: var(--sd-shadow-control);
 }
 .pm-settings-hw-meta-top {
   display: flex;
@@ -12435,11 +12412,11 @@ html:lang(zh) .pm-settings-card-desc {
   padding-bottom: 0;
 }
 .pm-settings-hw-action-btn {
-  height: 30px !important;
-  min-height: 30px !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  width: 32px;
   border-radius: 999px !important;
-  padding-left: 12px !important;
-  padding-right: 12px !important;
+  padding: 0 !important;
   gap: 5px !important;
   font: var(--type-label) !important;
   letter-spacing: 0.02em !important;
@@ -12513,11 +12490,9 @@ html:lang(zh) .pm-settings-card-desc {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border-radius: 16px;
-  background: #ffffff;
-  box-shadow:
-    0 1px 2px color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent),
-    0 0 0 1px color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent);
+  border-radius: var(--sd-radius-card);
+  background: var(--sd-surface-raised);
+  box-shadow: var(--sd-shadow-control);
   overflow: hidden;
 }
 .pm-settings-hw-words-head {
@@ -12572,10 +12547,10 @@ html:lang(zh) .pm-settings-card-desc {
 }
 .pm-settings-hw-add {
   border-radius: 999px !important;
-  height: 24px !important;
-  min-height: 24px !important;
-  padding-left: 10px !important;
-  padding-right: 10px !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  width: 32px;
+  padding: 0 !important;
   gap: 4px !important;
   color: var(--pm-green, #1a5e3d) !important;
   background: var(--pm-green-wash) !important;
@@ -12608,37 +12583,38 @@ html:lang(zh) .pm-settings-card-desc {
 .pm-settings-hw-word-slot.is-leaving {
   pointer-events: none;
 }
-/* Dense soft capsule row */
+/* Quiet editable rows: only the current interaction needs a filled surface. */
 .pm-settings-hw-word-row {
   display: flex;
   align-items: center;
-  gap: 5px;
-  min-height: 30px;
-  padding: 2px 4px 2px 6px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 72%, #ffffff);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent);
+  gap: 8px;
+  min-height: 44px;
+  padding: 6px;
+  border-radius: 18px;
+  background: transparent;
+  box-shadow: none;
   transition:
     background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
     box-shadow 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
+.pm-settings-hw-word-row:hover {
+  background: var(--sd-field);
+}
 .pm-settings-hw-word-row:focus-within {
-  background: #ffffff;
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--pm-green, #1a5e3d) 20%, transparent),
-    0 0 0 2px var(--pm-green-wash);
+  background: var(--sd-selected);
+  box-shadow: none;
 }
 .pm-settings-hw-word-text[data-slot="input"],
 .pm-settings-hw-main .pm-settings-hw-word-text {
   flex: 1 1 auto;
   min-width: 0;
-  height: 26px !important;
-  min-height: 26px !important;
+  height: 32px !important;
+  min-height: 32px !important;
   border-radius: 999px !important;
   border-color: transparent !important;
   background: transparent !important;
   box-shadow: none !important;
-  padding-left: 8px !important;
+  padding-left: 12px !important;
   padding-right: 4px !important;
   padding-top: 0 !important;
   padding-bottom: 0 !important;
@@ -12656,11 +12632,11 @@ html:lang(zh) .pm-settings-card-desc {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  height: 24px;
+  height: 30px;
   padding: 0 2px 0 7px;
   border-radius: 999px;
-  background: #ffffff;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pm-ink, #121410) 7%, transparent);
+  background: var(--sd-field);
+  box-shadow: none;
 }
 .pm-settings-hw-weight-label {
   font: var(--type-meta);
@@ -12671,8 +12647,8 @@ html:lang(zh) .pm-settings-card-desc {
 .pm-settings-hw-weight-input[data-slot="input"],
 .pm-settings-hw-main .pm-settings-hw-weight-input {
   width: 1.75rem !important;
-  height: 22px !important;
-  min-height: 22px !important;
+  height: 28px !important;
+  min-height: 28px !important;
   padding: 0 2px !important;
   text-align: center !important;
   border: none !important;
@@ -12695,13 +12671,20 @@ html:lang(zh) .pm-settings-card-desc {
 }
 /* Dense lang select inside word row */
 .pm-settings-hw-word-row .pm-select-trigger--sm {
-  min-height: 28px !important;
-  height: 28px !important;
+  min-height: 32px !important;
+  height: 32px !important;
   padding: 0 8px 0 10px !important;
   font: var(--type-ui) !important;
   letter-spacing: 0.01em;
-  background: #ffffff !important;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pm-ink, #121410) 7%, transparent) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.pm-settings-hw-word-row .pm-select-trigger--sm:hover:not(.is-disabled) {
+  background: var(--sd-hover) !important;
+}
+.pm-settings-hw-word-row .pm-select-trigger--sm.is-open {
+  background: var(--sd-selected) !important;
+  color: var(--sd-selected-ink);
 }
 .pm-settings-hw-word-row .pm-select-chev {
   width: 12px !important;
@@ -12712,13 +12695,13 @@ html:lang(zh) .pm-settings-card-desc {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 32px;
+  height: 32px;
   margin: 0;
   padding: 0;
   border: none;
   border-radius: 999px;
-  color: var(--pm-faint, #969c96);
+  color: var(--sd-muted);
   background: transparent;
   cursor: pointer;
   transition:
@@ -12728,6 +12711,10 @@ html:lang(zh) .pm-settings-card-desc {
 .pm-settings-hw-word-del:hover {
   color: var(--pm-danger, #c43c3c);
   background: color-mix(in srgb, var(--pm-danger, #c43c3c) 10%, transparent);
+}
+.pm-settings-hw-word-del:focus-visible {
+  outline: 2px solid var(--sd-focus);
+  outline-offset: -2px;
 }
 .pm-settings-hw-words-empty {
   display: flex;
@@ -20724,12 +20711,10 @@ button.pm-files-row-edit {
   right: 12px;
   top: 0;
   z-index: 0;
-  border-radius: 10px;
+  border-radius: 17px;
   pointer-events: none;
-  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 9%, #fdfbf7);
-  box-shadow:
-    inset 2.5px 0 0 0 var(--pm-green, #1a5e3d),
-    inset 0 0 0 1px color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, transparent);
+  background: var(--sd-selected);
+  box-shadow: none;
   will-change: transform, height;
   transition: none;
 }
@@ -21160,7 +21145,7 @@ button.pm-files-row-edit {
   overflow-y: auto;
   overscroll-behavior: contain;
   /* room for floating composer + scroll-to-bottom chip */
-  --pm-chat-composer-reserve: 9.5rem;
+  --pm-chat-composer-reserve: max(9.5rem, calc(var(--pm-chat-dock-height, 0px) + 36px));
   padding-bottom: var(--pm-chat-composer-reserve);
 }
 /* Session switch: opacity only — frozen content keeps height (no stage jitter) */
@@ -21227,36 +21212,10 @@ button.pm-files-row-edit {
   padding: 18px 32px 28px;
   box-sizing: border-box;
 }
-.pm-chat-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  /* Parent (.pm-chat-thread-fade) is height:auto — % height would collapse.
-     100% alone resolves against the thread's *padded* content box (composer
-     reserve carved out of the bottom), which centers the text too high.
-     Re-claim the reserve so the block spans the FULL thread height, and
-     cancel it with a negative bottom margin so no scroll range appears. */
-  min-height: calc(100% + var(--pm-chat-composer-reserve, 9.5rem));
-  margin-bottom: calc(-1 * var(--pm-chat-composer-reserve, 9.5rem));
-  padding: 48px 24px;
-  text-align: center;
-}
-.pm-chat-empty-title {
-  margin: 0;
-  font: var(--pm-t-body);
-  color: var(--pm-muted, #6a706a);
-}
-.pm-chat-empty-sub {
-  margin: 0;
-  font: var(--pm-t-body);
-  color: var(--pm-muted, #6a706a);
-}
 .pm-chat-scroll-btn {
-  /* Sit above the floating composer (tools + field ~92–110px + dock pad) */
+  /* Stay above the composer as its draft and queue grow. */
   position: absolute;
-  bottom: calc(7.75rem + env(safe-area-inset-bottom, 0px));
+  bottom: calc(var(--pm-chat-dock-height, 7.25rem) + 8px);
   left: 50%;
   transform: translateX(-50%);
   z-index: 16; /* above composer dock (15) so it is never buried */
@@ -21319,6 +21278,28 @@ button.pm-files-row-edit {
 .pm-chat-composer-dock > * {
   pointer-events: auto;
 }
+.pm-chat-stage-surface[data-starter] > :is(.pm-chat-thread-shell, .pm-chat-edge-fade) {
+  display: none;
+}
+.pm-chat-stage-surface[data-starter] > .pm-chat-composer-dock {
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: safe center;
+  gap: 18px;
+  padding-block: 24px clamp(24px, 10dvh, 120px);
+  background: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.pm-chat-starter-title {
+  margin: 0;
+  color: var(--pm-ink-display);
+  font: 500 clamp(22px, 2.4vw, 30px)/1.25 var(--type-font-ui);
+  letter-spacing: -0.025em;
+  text-align: center;
+  text-wrap: balance;
+}
 
 /*
  * ── Composer: simple frosted glass
@@ -21363,6 +21344,54 @@ button.pm-files-row-edit {
     0 2px 6px rgba(18, 20, 16, 0.06),
     0 12px 28px -10px rgba(18, 20, 16, 0.14),
     0 28px 64px -18px color-mix(in srgb, var(--pm-green, #1a5e3d) 48%, transparent);
+}
+
+.pm-chat-queue {
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: var(--sd-radius-field);
+  background: var(--sd-field);
+}
+.pm-chat-queue-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 26px;
+  padding-inline: 6px;
+  color: var(--pm-muted);
+  font: var(--type-meta);
+}
+.pm-chat-queue-head > button { margin-inline-start: auto; }
+.pm-chat-queue-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 96px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.pm-chat-queue-list > li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding-inline: 6px 2px;
+}
+.pm-chat-queue-number {
+  flex: 0 0 1em;
+  font: var(--type-meta);
+  color: var(--pm-faint);
+  font-variant-numeric: tabular-nums;
+}
+.pm-chat-queue-message {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--type-ui);
+  color: var(--pm-text);
 }
 
 .pm-chat-composer-tools {
@@ -21854,9 +21883,6 @@ button.pm-files-row-edit {
 .pm-chat-composer-textarea::placeholder {
   color: var(--pm-faint, #969c96);
 }
-.pm-chat-composer-textarea:disabled {
-  opacity: 0.55;
-}
 .pm-chat-composer-send {
   width: 34px;
   height: 34px;
@@ -21874,10 +21900,6 @@ button.pm-files-row-edit {
   background: color-mix(in srgb, var(--pm-ink, #121410) 7%, #ffffff);
   color: color-mix(in srgb, var(--pm-ink, #121410) 32%, #ffffff);
   opacity: 1;
-}
-.pm-chat-composer-cancel {
-  height: 30px;
-  border-radius: 999px;
 }
 /*
  * Composer-scoped quiet tools — ghost pills (thin hairline, normal case),
@@ -25403,10 +25425,8 @@ button.pm-files-row-edit {
   z-index: 0;
   border-radius: 12px;
   pointer-events: none;
-  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 10%, #fff);
-  box-shadow:
-    inset 2.5px 0 0 0 var(--pm-green, #1a5e3d),
-    inset 0 0 0 1px color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, transparent);
+  background: var(--sd-selected);
+  box-shadow: none;
   will-change: transform, height;
   transition: none;
 }
@@ -26842,9 +26862,9 @@ button.pm-files-row-edit {
   -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* line-height 1.35 on .pm-chat-sess-name → two fixed lines */
-  min-height: calc(1.35em * 2);
-  height: calc(1.35em * 2);
+  /* Follow the computed line-height, including the active row's font token. */
+  min-height: 2lh;
+  height: 2lh;
 }
 
 .pm-meeting-title {

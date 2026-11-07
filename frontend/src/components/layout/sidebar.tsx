@@ -8,6 +8,7 @@ import { useUpdateCheck } from "@/hooks/use-update-check"
 import { useT } from "@/i18n/use-t"
 import { UpdateDialog } from "./update-dialog"
 import { SidebarUtilities } from "./sidebar-utilities"
+import { GlobalSearch } from "./global-search"
 
 /** Float update card fade duration — keep in sync with --pm-update-card-ms in CSS */
 const UPDATE_CARD_MS = 280
@@ -115,8 +116,11 @@ export function Sidebar() {
         <aside className="sd-navigation" aria-label={t("nav.main")}>
           <div className="sd-nav-brand">
             <img src="/sinkduce-mark.png" alt="SinkDuce" width="32" height="32" />
-            <span aria-hidden="true">SinkDuce</span>
+            <span className="sd-nav-wordmark" aria-hidden="true">
+              <img src="/sinkduce-wordmark.png" alt="" width="761" height="160" />
+            </span>
           </div>
+          <GlobalSearch />
           <nav className="sd-nav-list" aria-label={t("nav.main")}>
             {navItems.filter(({ view }) => view !== "llm_provider" && (view !== "recall" || developerMode)).map(({ view, label, Icon }) => (
               <button

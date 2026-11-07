@@ -44,7 +44,10 @@ test("Note SVG code blocks show an image and retain a hidden editable source DOM
   assert.match(html, /<pre\b[^>]*hidden=""[^>]*>/)
   assert.match(html, /data-node-view-content=""/)
   assert.match(html, /投资人 A/)
-  assert.doesNotMatch(html, /<svg\b/)
+  const canvas = html.match(/<div class="chat-svg-canvas"[\s\S]*?<\/div>/)?.[0]
+  assert.ok(canvas)
+  assert.doesNotMatch(canvas, /<svg\b/)
+  assert.match(html, /&lt;svg xmlns=/, "editable source must stay escaped, separate from toolbar icons")
 })
 
 test("SVG toolbar icon clicks are kept out of ProseMirror while source edits remain editable", async () => {

@@ -301,6 +301,20 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
     }
   }, [pendingOpenFile, setPendingOpenFile])
 
+  const searchTarget = useAppStore(s => s.pendingWorkspaceSearch)
+  useEffect(() => {
+    if (!searchTarget?.collection_id || searchTarget.collection_id !== activeCollection) return
+    // Wait until the collection transition has reset its stage before opening it.
+    const frame = requestAnimationFrame(() => {
+      if (useAppStore.getState().pendingWorkspaceSearch !== searchTarget) return
+      handleTabChange(searchTarget.category === "files" ? "files" : "info")
+      if (searchTarget.file_id) setDetailOpen({ fileId: searchTarget.file_id, source: `__file__:${searchTarget.file_id}` })
+      if (searchTarget.note_id) useAppStore.getState().setPendingOpenNote(searchTarget.note_id)
+      useAppStore.setState({ pendingWorkspaceSearch: undefined })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [searchTarget, activeCollection, handleTabChange])
+
   // From note editor: switch to Files tab → Notes folder → open file detail
   useEffect(() => {
     const handler = async (ev: Event) => {

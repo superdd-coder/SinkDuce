@@ -24,9 +24,9 @@
   width: auto;
   overflow: hidden;
   border: 0;
-  border-radius: var(--pm-r-lg);
-  background: var(--pm-float);
-  box-shadow: var(--pm-shadow);
+  border-radius: var(--sd-radius-panel);
+  background: var(--sd-surface-raised);
+  box-shadow: var(--sd-shadow-panel);
 }
 .pm-chat-report-layout:has(> .pm-report-embedded) .pm-chat-sessions {
   overflow: hidden;
@@ -44,13 +44,13 @@
   transition-delay: 0s, 0s, 0s, 0s, 0s, 320ms;
 }
 .pm-report-contents { margin: 0 0 30px; padding: 0; color: var(--report-muted); font: 12px/1.6 var(--type-font-ui); }
-.pm-report-contents summary { display: flex; align-items: center; gap: 8px; width: fit-content; padding: 8px 12px; border-radius: 10px; background: var(--report-surface); cursor: pointer; list-style: none; color: #58645d; }
+.pm-report-contents summary { display: flex; align-items: center; gap: 8px; width: fit-content; padding: 8px 12px; border-radius: var(--sd-radius-pill); background: var(--report-surface); cursor: pointer; list-style: none; color: var(--sd-muted); }
 .pm-report-contents summary::-webkit-details-marker { display: none; }
 .pm-report-contents summary svg:last-child { margin-left: 6px; transition: transform 200ms var(--pm-ease); }
 .pm-report-contents[open] summary svg:last-child { transform: rotate(180deg); }
 .pm-report-contents nav { display: grid; gap: 0; margin: 12px 0 0; padding: 10px 12px; border-radius: 14px; background: var(--report-surface); }
-.pm-report-contents button { border: 0; border-radius: 8px; background: none; padding: 7px 10px; text-align: left; color: inherit; font: inherit; cursor: pointer; }
-.pm-report-contents button:hover { color: var(--pm-green); background: #fff; }
+.pm-report-contents button { border: 0; border-radius: var(--sd-radius-pill); background: none; padding: 8px 14px; text-align: left; color: inherit; font: inherit; cursor: pointer; }
+.pm-report-contents button:hover { color: var(--sd-ink); background: var(--sd-hover); }
 .pm-report-contents button:focus-visible, .pm-report-contents summary:focus-visible { outline: 2px solid var(--pm-green); outline-offset: 2px; }
 
 .pm-report-workspace {

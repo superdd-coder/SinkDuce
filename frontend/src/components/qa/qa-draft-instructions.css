@@ -1,31 +1,34 @@
 .qa-reply .qa-composer {
-  border-color: transparent;
-  border-radius: var(--pm-r-sm);
+  border: 0;
+  border-radius: var(--sd-radius-field);
   background: transparent;
 }
 
 .qa-reply .qa-composer:hover {
-  border-color: color-mix(in srgb, var(--pm-ink) 10%, transparent);
+  background: var(--sd-field);
 }
 
 .qa-reply .qa-composer:focus-within {
-  border-color: color-mix(in srgb, var(--pm-green) 24%, transparent);
-  background: var(--pm-float);
-  box-shadow: 0 0 0 2px var(--pm-green-wash);
+  background: var(--sd-field);
+  box-shadow: 0 0 0 2px var(--sd-focus-wash);
 }
 
 .qa-reply .qa-composer.is-error {
-  border-color: color-mix(in srgb, var(--pm-danger) 45%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pm-danger) 32%, transparent);
 }
 
 .qa-reply .qa-composer .qa-reply-rich-input {
-  min-height: 72px;
-  padding: 14px 16px 4px;
+  min-height: 38px;
+  padding: 8px 10px;
 }
 
 .qa-reply .qa-composer-footer {
-  min-height: 36px;
-  padding: 0 10px 6px 16px;
+  min-height: 0;
+  padding: 0 6px 6px 10px;
+}
+
+.qa-reply .qa-composer-footer:has(> .qa-save-status:empty):has(> .qa-composer-actions:empty) {
+  display: none;
 }
 
 .qa-reply .qa-reply-draft-trigger {

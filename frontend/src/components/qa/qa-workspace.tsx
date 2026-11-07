@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { ArrowLeft, ChevronDown, ChevronRight, Download, FileQuestion, FolderOpen, List, Plus, Upload, Pencil, CircleMinus, RotateCcw, Settings2, History, Archive, Trash2, LoaderCircle } from "lucide-react"
+import { ArrowLeft, ChevronDown, ChevronRight, Download, FileInput, FileQuestion, FolderOpen, List, Plus, Pencil, CircleMinus, RotateCcw, Settings2, History, Archive, Trash2, LoaderCircle } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -239,10 +239,10 @@ function QaWorkspaceContent({ collectionId, railCovered }: { collectionId: strin
       {!data && !allQuestions && <div className="qa-tools qa-list-tools"><Button variant="ghost" size="icon" onClick={showAll} disabled={loading} aria-label={t("qa.allQuestions")} title={t("qa.allQuestions")}><List /></Button><QaToggle checked={archived} onChange={setArchived} label={t("qa.showArchived")} /></div>}
       <div className="qa-actions">
         {data?.can_edit && <Button size="icon" onClick={() => action("question")} disabled={busy} aria-label={t("qa.addQuestion")} title={t("qa.addQuestion")}><Plus /></Button>}
-        {data && <Button variant="ghost" size="icon" className="qa-toolbar-action" disabled={busy} onClick={() => setExchange("export")} aria-label={t("qa.export")} title={t("qa.export")}><Download /></Button>}
-        {data?.can_edit && <Button variant="ghost" size="icon" className="qa-toolbar-action" disabled={busy} onClick={() => { setResume(undefined); setExchange("import") }} aria-label={t("qa.import")} title={t("qa.import")}><Upload /></Button>}
+        {data?.can_edit && <Button variant="secondary" size="icon" className="qa-import-action" disabled={busy} onClick={() => { setResume(undefined); setExchange("import") }} aria-label={t("qa.import")} title={t("qa.import")}><FileInput aria-hidden /></Button>}
+        {data && <Button variant="ghost" size="icon" className="qa-toolbar-action" disabled={busy} onClick={() => setExchange("export")} aria-label={t("qa.export")} title={t("qa.export")}><Download aria-hidden /></Button>}
         {data && <Button ref={fileSpaceTrigger} variant="ghost" size="icon" className="qa-toolbar-action" disabled={loading} aria-haspopup="dialog" aria-label={t("qa.materials")} title={t("qa.materials")} onClick={() => setFileSpaceListId(data.id)}><FolderOpen /></Button>}
-        {!data && writable && <Button variant="ghost" size="icon" className="qa-toolbar-action" aria-label={t("qa.createFromExcel")} title={t("qa.createFromExcel")} onClick={() => { setResume(undefined); setExchange("import") }}><Upload /></Button>}
+        {!data && writable && <Button variant="secondary" size="icon" className="qa-import-action" aria-label={t("qa.createFromExcel")} title={t("qa.createFromExcel")} onClick={() => { setResume(undefined); setExchange("import") }}><FileInput aria-hidden /></Button>}
         {!data && writable && <Button size="icon" onClick={() => action("list")} disabled={busy} aria-label={t("qa.createList")} title={t("qa.createList")}><Plus /></Button>}
         {data && <QaActionMenu label={t("qa.more")}>
           {data.can_edit && <QaMenuItem disabled={busy} onClick={() => setOptionsOpen(true)}><Settings2 />{t("qa.manageOptions")}</QaMenuItem>}

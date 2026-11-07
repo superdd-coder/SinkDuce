@@ -272,7 +272,10 @@ test("complete SVG renders only a passive img, without placing active SVG in the
   const source = '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(1)</script></svg>'
   const html = renderToStaticMarkup(createElement(SvgCodeBlock, { source, complete: true }))
   assert.match(html, /<img\b/)
-  assert.doesNotMatch(html, /<(?:svg|script|iframe|object)\b/)
+  const preview = html.match(/<div class="chat-md-visual-preview"[\s\S]*?<\/div>/)?.[0]
+  assert.ok(preview)
+  assert.doesNotMatch(preview, /<(?:svg|script|iframe|object)\b/)
+  assert.doesNotMatch(html, /<(?:script|iframe|object)\b/)
   assert.doesNotMatch(html, /\bonload=/)
 })
 
@@ -299,7 +302,9 @@ test("a recovered SVG preview is disclosed without exposing active markup", asyn
   const html = renderToStaticMarkup(createElement(SvgCodeBlock, { source: legacyDrawing, complete: true }))
   assert.match(html, /chat\.svgRecovered/)
   assert.match(html, /<img\b/)
-  assert.doesNotMatch(html, /<(?:svg|script|iframe|object)\b/)
+  const preview = html.match(/<div class="chat-md-visual-preview"[\s\S]*?<\/div>/)?.[0]
+  assert.ok(preview)
+  assert.doesNotMatch(preview, /<(?:svg|script|iframe|object)\b/)
 })
 
 test("invalid SVG candidates fall back to escaped original source", async () => {

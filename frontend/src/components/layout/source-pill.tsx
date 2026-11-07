@@ -18,7 +18,7 @@ import { writeSourceScopedFor } from "@/api/source-scope"
 import { useAppStore, type SourceHealthState } from "@/stores/app-store"
 import { cn } from "@/lib/utils"
 import { useT } from "@/i18n/use-t"
-import { MenuItemDescription, MenuItemTitle, MenuSeparator, SoftMenu } from "@/components/ui/menu"
+import { MenuItemDescription, MenuItemTitle, MenuSeparator, SoftMenu, MenuCheck } from "@/components/ui/menu"
 
 /**
  * 导航栏底部「来源控制台」：盒子切换菜单 × 在线/离线指示合并体（HUB-7）。
@@ -138,7 +138,8 @@ export function SourcePill() {
       <button
         key={id}
         type="button"
-        role="menuitem"
+        role="menuitemradio"
+        aria-checked={active}
         disabled={blocked}
         title={blocked ? t("shell.switcher.blockedOffline") : undefined}
         onClick={() => pick(id)}
@@ -161,6 +162,7 @@ export function SourcePill() {
             </span>
           )}
         </span>
+        <MenuCheck checked={active} />
       </button>
     )
   }

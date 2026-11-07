@@ -2,18 +2,22 @@ import { useReportReview } from "@/hooks/use-report-review"
 import { canSendReview } from "@/lib/report-review"
 import { ReportReviewChip } from "./report-review-chip"
 import { useState, useRef, useEffect, type KeyboardEvent } from "react"
-import { createPortal } from "react-dom"
 import { useShallow } from "zustand/react/shallow"
-import { ArrowUp, ChevronDown, ChevronRight, Globe } from "lucide-react"
+import { ArrowUp, ChevronDown, ChevronRight, Cpu, Globe, ListOrdered, Play, Square, X } from "lucide-react"
 import { useAppStore } from "@/stores/app-store"
 import { useStreamChat } from "@/hooks/use-stream"
 import { useChatAttachments } from "@/hooks/use-chat-attachments"
 import { ChatAttachmentDrafts, ChatAttachmentPicker } from "./chat-attachments"
 import { Button } from "@/components/ui/button"
+import { SoftMenu, MenuItem, MenuCheck } from "@/components/ui/menu"
+import { MultiSelectMenu } from "@/components/ui/multi-select-menu"
 import { cn } from "@/lib/utils"
 import { createImeEnterGuard } from "@/lib/ime"
 import { chatModelLabel } from "@/lib/chat-model-label"
+import { reservedChatInputs } from "@/lib/chat-queue"
 import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
+import { toast } from "sonner"
 import {
   clearWebSearchAlwaysAllow,
   setWebSearchConfirmAnchor,
@@ -41,11 +45,6 @@ function providerChatModels(p: {
   return fc.length === 0 ? all : all.filter((m) => fc.includes(m))
 }
 
-/** Full-open cascade width (provider col + models col + chrome). A fixed
-    popup anchored by `left` never reflows to fit the viewport, so the
-    positioning below reserves this up front. */
-const PROVIDER_POP_OPEN_W = 400
-
 export function ChatInput() {
   const t = useT()
   const [input, setInput] = useState("")
@@ -61,7 +60,7 @@ export function ChatInput() {
     collections,
     fetchCollections,
     selectedCollections,
-    toggleCollection,
+    setSelectedCollections,
     activeProvider,
     activeModel,
     setActiveModel,
@@ -72,27 +71,24 @@ export function ChatInput() {
       collections: s.collections,
       fetchCollections: s.fetchCollections,
       selectedCollections: s.selectedCollections,
-      toggleCollection: s.toggleCollection,
+      setSelectedCollections: s.setSelectedCollections,
       activeProvider: s.activeProvider,
       activeModel: s.activeModel,
       setActiveModel: s.setActiveModel,
       providers: s.providers,
     }))
   )
-  const { sendMessage, stopGeneration } = useStreamChat()
+  const { sendMessage, stopGeneration, resumeQueue } = useStreamChat()
+  const queue = useAppStore(state => sessionId ? state.chatQueues[sessionId] : undefined)
   const attachments = useChatAttachments(sessionId, () => useAppStore.getState().ensureSessionHydrated(), isStreaming)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const imeGuardRef = useRef(createImeEnterGuard())
   const collectionMenuRef = useRef<HTMLDivElement>(null)
-  const dropdownRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const [showProviderMenu, setShowProviderMenu] = useState(false)
   const [hoveredProvider, setHoveredProvider] = useState<string | null>(null)
   const providerMenuRef = useRef<HTMLDivElement>(null)
-  const providerDropdownRef = useRef<HTMLDivElement>(null)
   const providerButtonRef = useRef<HTMLButtonElement>(null)
-  /** Force re-measure on open (layout can shift). */
-  const [, setMenuTick] = useState(0)
 
   useEffect(() => { fetchCollections() }, [fetchCollections])
 
@@ -143,66 +139,33 @@ export function ChatInput() {
     }
   }, [input])
 
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (
-        collectionMenuRef.current && !collectionMenuRef.current.contains(e.target as Node) &&
-        dropdownRef.current && !dropdownRef.current.contains(e.target as Node)
-      ) {
-        setShowCollections(false)
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside)
-    return () => document.removeEventListener("mousedown", handleClickOutside)
-  }, [])
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (
-        providerMenuRef.current && !providerMenuRef.current.contains(e.target as Node) &&
-        providerDropdownRef.current && !providerDropdownRef.current.contains(e.target as Node)
-      ) {
-        setShowProviderMenu(false)
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside)
-    return () => document.removeEventListener("mousedown", handleClickOutside)
-  }, [])
-
-  // Reposition open menus on scroll/resize
-  useEffect(() => {
-    if (!showCollections && !showProviderMenu) return
-    const bump = () => {
-      if (showProviderMenu && providerMenuRef.current?.getClientRects().length === 0) {
-        setShowProviderMenu(false)
-        return
-      }
-      // Chat pins the thread while streaming; capture-phase scroll would
-      // setState every token and hit React error #185 (max update depth).
-      if (useAppStore.getState().isStreaming) return
-      setMenuTick((t) => t + 1)
-    }
-    window.addEventListener("resize", bump)
-    window.addEventListener("scroll", bump, true)
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(bump)
-    if (composerRef.current) observer?.observe(composerRef.current)
-    return () => {
-      window.removeEventListener("resize", bump)
-      window.removeEventListener("scroll", bump, true)
-      observer?.disconnect()
-    }
-  }, [showCollections, showProviderMenu])
-
   const readyProviders = providers.filter((p) => (p.status === "ready" || p.status === "unknown" || !p.status))
   const providerList = readyProviders.length > 0 ? readyProviders : providers
 
   const review = useReportReview(sessionId, isStreaming)
+  const reserved = reservedChatInputs(queue)
+  const drafts = attachments.drafts.filter(draft => !draft.attachment || !reserved.attachments.has(draft.attachment.id))
+  const ready = attachments.ready.filter(file => !reserved.attachments.has(file.id))
+  const comments = review.comments.filter(comment => !reserved.comments.has(comment.id))
+  const canSend = canSendReview(input, drafts, comments.length > 0)
+  const generating = isStreaming || Boolean(queue?.running)
+  const showStop = generating && !input.trim() && !canSend
+  const actionLabel = t(showStop ? "chat.stopGenerating"
+    : generating || queue?.pending.length ? "chat.queue.send" : "common.send")
+
+  const showSendError = (error: unknown) => toast.error(t("chat.failed", { error: formatApiError(error, t) }))
 
   const handleSend = async () => {
-    if (!canSendReview(input, attachments.drafts, review.hasComments) || isStreaming) return
+    if (!canSend || showStop) return
     const text = input.trim()
     setInput("")
-    await sendMessage(text, thinking, webSearch, attachments.ready)
+    textareaRef.current?.focus({ preventScroll: true })
+    try {
+      const accepted = await sendMessage(text, ready)
+      if (!accepted && useAppStore.getState().sessionId === sessionId) setInput(draft => draft || text)
+    } catch (error) {
+      showSendError(error)
+    }
   }
 
   const handleKeyDown = (e: KeyboardEvent) => {
@@ -235,21 +198,40 @@ export function ChatInput() {
     : null
   const hoveredModels = hoveredProviderObj ? providerChatModels(hoveredProviderObj) : []
 
-  const colBtnRect = buttonRef.current?.getBoundingClientRect()
-  const colHostRect = collectionMenuRef.current?.getBoundingClientRect()
-  const provHostRect = providerMenuRef.current?.getBoundingClientRect()
-
   return (
     <div
       ref={composerRef}
       {...attachments.dropProps}
       className={cn(
         "pm-chat-composer",
-        isStreaming && "is-streaming",
+        generating && "is-streaming",
       )}
     >
-      <ReportReviewChip comments={review.comments} disabled={isStreaming} />
-      <ChatAttachmentDrafts manager={attachments} />
+      {sessionId && !!queue?.pending.length && (
+        <div className="pm-chat-queue">
+          <div className="pm-chat-queue-head">
+            <ListOrdered size={14} aria-hidden="true" />
+            <span role="status">{t(queue.paused ? "chat.queue.paused" : "chat.queue.waiting", { count: queue.pending.length })}</span>
+            {queue.paused && <Button variant="ghost" size="icon-xs" aria-label={t("chat.queue.resume")} title={t("chat.queue.resume")}
+              onClick={() => void resumeQueue(sessionId).catch(showSendError)}><Play aria-hidden="true" /></Button>}
+          </div>
+          <ol className="pm-chat-queue-list" aria-label={t("chat.queue.title")}>
+            {queue.pending.map((turn, index) => {
+              const label = turn.content || turn.attachments.map(file => file.filename).join(", ") || t("chat.queue.review")
+              return <li key={turn.id}>
+                <span className="pm-chat-queue-number" aria-hidden="true">{index + 1}</span>
+                <span className="pm-chat-queue-message" title={label}>{label}</span>
+                <Button variant="ghost" size="icon-xs" aria-label={t("chat.queue.remove", { number: index + 1 })} title={t("common.remove")}
+                  onClick={() => useAppStore.getState().setChatQueue(sessionId, current => current && {
+                    ...current, pending: current.pending.filter(item => item.id !== turn.id),
+                  })}><X aria-hidden="true" /></Button>
+              </li>
+            })}
+          </ol>
+        </div>
+      )}
+      <ReportReviewChip comments={comments} disabled={isStreaming} />
+      <ChatAttachmentDrafts manager={{ ...attachments, drafts }} />
       {/* Input — single quiet line on top, tools docked below (ChatGPT-style) */}
       <div className="pm-chat-composer-field">
         <textarea
@@ -265,11 +247,7 @@ export function ChatInput() {
             imeGuardRef.current.onCompositionEnd()
             requestAnimationFrame(() => imeGuardRef.current.clearJustEnded())
           }}
-          disabled={isStreaming}
         />
-        {isStreaming && (
-          <span className="sk-stream-cursor absolute right-1 bottom-2" aria-hidden />
-        )}
       </div>
 
       {/* Tool row — web toggle · collections · spacer · model · thinking · send */}
@@ -286,14 +264,15 @@ export function ChatInput() {
           <Globe className="size-4" strokeWidth={1.75} />
         </button>
 
-        {/* Collections — ghost pill, portal menu unchanged */}
+        {/* Project scope — searchable multi-select with one selection summary. */}
         <div className="pm-chat-composer-collections relative min-w-0" ref={collectionMenuRef}>
           <button
             type="button"
             ref={buttonRef}
+            aria-haspopup="dialog" aria-expanded={showCollections}
             onClick={() => {
               setShowCollections((v) => !v)
-              setMenuTick((t) => t + 1)
+              setShowProviderMenu(false)
             }}
             className={cn(
               "pm-chat-tool-chip",
@@ -310,69 +289,23 @@ export function ChatInput() {
             </span>
             <ChevronDown className="size-3 opacity-60" strokeWidth={1.75} />
           </button>
-          {createPortal(
-            <div
-              ref={dropdownRef}
-              className={cn(
-                "pm-chat-pop pm-chat-pop--collections",
-                showCollections && "is-open",
-              )}
-              style={{
-                // Wide enough for name + archived tag on collection items
-                width: colBtnRect ? Math.max(colBtnRect.width, 230) : 230,
-                minWidth: 210,
-                bottom: colHostRect
-                  ? Math.max(8, window.innerHeight - colHostRect.top + 6)
-                  : 0,
-                left: colHostRect ? colHostRect.left : 0,
-              }}
-            >
-              {collections.length === 0 ? (
-                <div className="pm-chat-pop-empty">{t("chat.noCollections")}</div>
-              ) : (
-                <div className="pm-chat-pop-scroll">
-                  {collections.map((col) => (
-                    <label
-                      key={col.id}
-                      onClick={() => toggleCollection(col.id)}
-                      className={cn("pm-chat-pop-item group", col.archived && "is-archived")}
-                    >
-                      <span className="pm-chat-pop-item-label is-wrap">
-                        <span
-                          className={cn(
-                            "sk-diamond",
-                            selectedCollections.includes(col.id) && "on",
-                          )}
-                          aria-hidden
-                        />
-                        <span className="pm-chat-pop-item-name">{col.name}</span>
-                        {col.archived && (
-                          <span className="pm-chat-pop-archived-tag">
-                            {t("library.archivedTag")}
-                          </span>
-                        )}
-                      </span>
-                      <span className="pm-chat-pop-item-wipe" aria-hidden />
-                    </label>
-                  ))}
-                </div>
-              )}
-            </div>,
-            document.body,
-          )}
+          <MultiSelectMenu open={showCollections} onClose={() => setShowCollections(false)} anchorRef={buttonRef}
+            value={selectedCollections} onChange={setSelectedCollections} label={t("common.collections")}
+            options={collections.map(col => ({ value: col.id, label: col.name, description: col.archived ? t("library.archivedTag") : undefined }))} />
         </div>
 
         <span className="flex-1" />
 
-        {/* Provider / model cascade — two-level menu unchanged */}
+        {/* Provider and model share one adaptive connected surface. */}
         <div className="pm-chat-composer-model relative shrink-0" ref={providerMenuRef}>
           <button
             type="button"
             ref={providerButtonRef}
+            aria-haspopup="menu" aria-expanded={showProviderMenu}
             onClick={() => {
               setShowProviderMenu((v) => !v)
-              setHoveredProvider(null)
-              setMenuTick((t) => t + 1)
+              setShowCollections(false)
+              setHoveredProvider(activeProvider || providerList[0]?.id || null)
             }}
             className={cn(
               "pm-chat-tool-chip",
@@ -385,138 +318,42 @@ export function ChatInput() {
             </span>
             <ChevronDown className="size-3 opacity-60" strokeWidth={1.75} />
           </button>
-          {createPortal(
-            <div
-              ref={providerDropdownRef}
-              className={cn(
-                "pm-chat-pop pm-chat-pop--cascade",
-                showProviderMenu && "is-open",
-              )}
-              style={{
-                bottom: provHostRect
-                  ? Math.max(8, window.innerHeight - provHostRect.top + 6)
-                  : 0,
-                /* The chip sits at the right edge of the tool row; anchoring
-                   at its left edge would push the models column off-window.
-                   Shift the pop left whenever the full-open cascade (models
-                   column expanded) wouldn't fit. */
-                left: provHostRect
-                  ? Math.max(
-                      8,
-                      Math.min(
-                        provHostRect.left,
-                        window.innerWidth - PROVIDER_POP_OPEN_W - 8,
-                      ),
-                    )
-                  : 0,
-              }}
-            >
-              <div className="pm-chat-pop-col">
-                <button
-                  type="button"
-                  className={cn(
-                    "pm-chat-pop-item group",
-                    !activeProvider && "is-active",
-                  )}
-                  onMouseEnter={() => setHoveredProvider(null)}
-                  onClick={() => {
-                    useAppStore.getState().setActiveProvider(null)
-                    setActiveModel(null)
-                    setShowProviderMenu(false)
-                  }}
-                >
-                  <span className="pm-chat-pop-item-label">Default</span>
-                  <span className="pm-chat-pop-item-wipe" aria-hidden />
-                </button>
-                {providerList.map((p) => {
-                  const chatModels = providerChatModels(p)
-                  const isActive = activeProvider === p.id && !hoveredProvider
-                  const isHover = hoveredProvider === p.id
-                  return (
-                    <button
-                      key={p.id}
-                      type="button"
-                      className={cn(
-                        "pm-chat-pop-item group",
-                        isActive && "is-active",
-                        isHover && "is-hover",
-                      )}
-                      onMouseEnter={() => setHoveredProvider(p.id)}
-                      onClick={() => {
-                        /* WKWebView (desktop app) never delivers mouseenter,
-                           so hover cannot be load-bearing: the first click pins
-                           the submenu open; clicking the pinned row (or a model
-                           in it) commits the provider at its default model. */
-                        if (hoveredProvider !== p.id) {
-                          setHoveredProvider(p.id)
-                          return
-                        }
-                        useAppStore.getState().setActiveProvider(p.id)
-                        setActiveModel(
-                          p.default_model && chatModels.includes(p.default_model)
-                            ? p.default_model
-                            : chatModels[0] ?? p.model ?? null,
-                        )
-                        setShowProviderMenu(false)
-                      }}
-                    >
-                      <span className="pm-chat-pop-item-label">
-                        <span className="pm-chat-pop-item-name truncate">
-                          {p.name || p.model}
-                        </span>
-                      </span>
-                      {chatModels.length > 0 && (
-                        <span className="pm-chat-pop-item-arrow" aria-hidden>
-                          <ChevronRight className="size-3" strokeWidth={1.75} />
-                        </span>
-                      )}
-                      <span className="pm-chat-pop-item-wipe" aria-hidden />
-                    </button>
-                  )
-                })}
-                {providers.length === 0 && (
-                  <div className="pm-chat-pop-empty">
-                    No providers — configure in Settings
-                  </div>
-                )}
-              </div>
-
-              {/* Mounted only while a provider is pinned — no width transition:
-                  WKWebView freezes same-frame class-toggle expansions, so the
-                  column must appear by mounting, not by animating open. */}
-              {hoveredProvider && hoveredModels.length > 0 && (
-                <div className="pm-chat-pop-models">
-                  <div className="pm-chat-pop-models-inner">
-                    {hoveredModels.map((m) => (
-                    <button
-                      key={m}
-                      type="button"
-                      className={cn(
-                        "pm-chat-pop-item group",
-                        activeProvider === hoveredProvider &&
-                          activeModel === m &&
-                          "is-active",
-                      )}
-                      onClick={() => {
-                        if (hoveredProvider) {
-                          useAppStore.getState().setActiveProvider(hoveredProvider)
-                          setActiveModel(m)
-                        }
-                        setShowProviderMenu(false)
-                      }}
-                    >
-                      <span className="pm-chat-pop-item-label">
-                        <span className="pm-chat-pop-item-name truncate">{m}</span>
-                      </span>
-                      <span className="pm-chat-pop-item-wipe" aria-hidden />
-                    </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>,
-            document.body,
-          )}
+          <SoftMenu open={showProviderMenu} portal connected anchorRef={providerButtonRef} align="end"
+            onClose={() => setShowProviderMenu(false)} onSubmenuBack={() => setHoveredProvider(null)} autoFocus
+            className="sd-provider-menu" rootWidth={220} childWidth={290} connectedPanelKey={hoveredProvider}
+            connectedPanel={hoveredProvider && hoveredModels.length > 0 ? <>
+              <div className="sd-menu-title">{t("menus.models")}</div>
+              {hoveredModels.map(m => <MenuItem key={m} role="menuitemradio"
+                aria-checked={activeProvider === hoveredProvider && activeModel === m}
+                active={activeProvider === hoveredProvider && activeModel === m} title={m}
+                onClick={() => {
+                  useAppStore.getState().setActiveProvider(hoveredProvider)
+                  setActiveModel(m); setShowProviderMenu(false)
+                  providerButtonRef.current?.focus()
+                }}><span className="truncate">{m}</span><MenuCheck checked={activeProvider === hoveredProvider && activeModel === m} /></MenuItem>)}
+            </> : undefined}>
+            <div className="sd-menu-title">{t("menus.providers")}</div>
+            <MenuItem role="menuitemradio" aria-checked={!activeProvider} active={!activeProvider}
+              onMouseEnter={() => setHoveredProvider(null)} onClick={() => {
+                useAppStore.getState().setActiveProvider(null); setActiveModel(null); setShowProviderMenu(false)
+                providerButtonRef.current?.focus()
+              }}><Cpu className="sd-menu-icon" /><span className="flex-1">{t("chat.defaultProvider")}</span><MenuCheck checked={!activeProvider} /></MenuItem>
+            {providerList.map(p => {
+              const chatModels = providerChatModels(p)
+              return <MenuItem key={p.id} data-submenu-trigger={chatModels.length ? "" : undefined}
+                aria-haspopup={chatModels.length ? "menu" : undefined} aria-expanded={chatModels.length ? hoveredProvider === p.id : undefined}
+                active={activeProvider === p.id} title={p.name || p.model}
+                onMouseEnter={() => setHoveredProvider(p.id)} onClick={() => {
+                  if (hoveredProvider !== p.id && chatModels.length) { setHoveredProvider(p.id); return }
+                  useAppStore.getState().setActiveProvider(p.id)
+                  setActiveModel(p.default_model && chatModels.includes(p.default_model) ? p.default_model : chatModels[0] ?? p.model ?? null)
+                  setShowProviderMenu(false); providerButtonRef.current?.focus()
+                }}><Cpu className="sd-menu-icon" /><span className="flex-1 truncate">{p.name || p.model}</span>
+                {chatModels.length > 0 ? <ChevronRight size={13} /> : <MenuCheck checked={activeProvider === p.id} />}
+              </MenuItem>
+            })}
+            {providers.length === 0 && <div className="sd-menu-empty">{t("common.noOptions")}</div>}
+          </SoftMenu>
         </div>
 
         {/* Thinking — simple click toggle */}
@@ -531,28 +368,16 @@ export function ChatInput() {
         </button>
 
         {/* Connectivity probes are advisory; send reports failures, like Enter. */}
-        {isStreaming ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            className="pm-chat-composer-cancel shrink-0"
-            onClick={stopGeneration}
-          >
-            {t("common.cancel")}
-          </Button>
-        ) : (
-          <Button
-            type="button"
-            variant="default"
-            className="pm-chat-composer-send shrink-0"
-            onClick={handleSend}
-            disabled={!canSendReview(input, attachments.drafts, review.hasComments)}
-            aria-label={t("common.send")}
-          >
-            <ArrowUp className="size-4" strokeWidth={2} />
-          </Button>
-        )}
+        <Button
+          type="button"
+          className="pm-chat-composer-send shrink-0"
+          onClick={showStop ? stopGeneration : handleSend}
+          disabled={!showStop && !canSend}
+          aria-label={actionLabel}
+          title={actionLabel}
+        >
+          {showStop ? <Square className="size-3" fill="currentColor" aria-hidden="true" /> : <ArrowUp className="size-4" strokeWidth={2} aria-hidden="true" />}
+        </Button>
       </div>
     </div>
   )

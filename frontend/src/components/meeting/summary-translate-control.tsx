@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from "react"
 import { Languages, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import { SoftMenu, MenuItem } from "@/components/ui/menu"
+import { SoftMenu, MenuItem, MenuCheck } from "@/components/ui/menu"
 import { TRANSLATE_LANGUAGES } from "@/api/client"
 import { useT } from "@/i18n/use-t"
 
@@ -86,6 +86,8 @@ export function SummaryTranslateControl({
 
       <SoftMenu
         open={open}
+        onClose={() => setOpen(false)}
+        autoFocus
         portal
         anchorRef={btnRef}
         align="end"
@@ -95,7 +97,7 @@ export function SummaryTranslateControl({
           active={activeLang === null}
           onClick={() => { onSelect(null); setOpen(false) }}
         >
-          {t("chat.original")}
+          <span className="flex-1">{t("chat.original")}</span><MenuCheck checked={activeLang === null} />
         </MenuItem>
         {TRANSLATE_LANGUAGES.map(({ code, label }) => {
           const generated = generatedLangs.includes(code)
@@ -109,6 +111,7 @@ export function SummaryTranslateControl({
               <span className="flex-1 min-w-0 truncate">{label}</span>
               <span className="pm-meta shrink-0 ml-1">{code}</span>
               {generated && <GlowDot />}
+              <MenuCheck checked={active} />
             </MenuItem>
           )
         })}

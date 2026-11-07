@@ -8,7 +8,7 @@ import {
 } from "react"
 import { useFileMgmtStore } from "@/stores/file-mgmt-store"
 import { Button } from "@/components/ui/button"
-import { SoftMenu } from "@/components/ui/menu"
+import { SoftMenu, MenuCheck } from "@/components/ui/menu"
 import {
   FolderPlus,
   Upload,
@@ -763,7 +763,7 @@ export function Toolbar({
                       setOpenMenu(null)
                     }}
                   >
-                    {opt.label}
+                    <span className="flex-1">{opt.label}</span><MenuCheck checked={folderFileSort === opt.id} />
                   </button>
                 ))}
                 <button
@@ -782,13 +782,13 @@ export function Toolbar({
                     setOpenMenu(null)
                   }}
                 >
-                  {t("fileMgmt.sortByCreated")}
+                  <span className="flex-1">{t("fileMgmt.sortByCreated")}
                   {folderFileSort === "created_desc" && (
                     <span className="text-[var(--pm-faint)]"> · {t("fileMgmt.newest")}</span>
                   )}
                   {folderFileSort === "created_asc" && (
                     <span className="text-[var(--pm-faint)]"> · {t("fileMgmt.oldest")}</span>
-                  )}
+                  )}</span><MenuCheck checked={isCreatedSortMode(folderFileSort)} />
                 </button>
                 <button
                   type="button"
@@ -806,13 +806,13 @@ export function Toolbar({
                     setOpenMenu(null)
                   }}
                 >
-                  {t("fileMgmt.sortByUpdated")}
+                  <span className="flex-1">{t("fileMgmt.sortByUpdated")}
                   {folderFileSort === "updated_desc" && (
                     <span className="text-[var(--pm-faint)]"> · {t("fileMgmt.newest")}</span>
                   )}
                   {folderFileSort === "updated_asc" && (
                     <span className="text-[var(--pm-faint)]"> · {t("fileMgmt.oldest")}</span>
-                  )}
+                  )}</span><MenuCheck checked={isUpdatedSortMode(folderFileSort)} />
                 </button>
               </SoftMenu>
             )}

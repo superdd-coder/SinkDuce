@@ -1,7 +1,6 @@
 import { HelpHint } from "@/components/shared/help-hint"
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
-  Check,
   CircleHelp,
   ClipboardList,
   FileText,
@@ -16,7 +15,7 @@ import {
   X,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { SoftMenu } from "@/components/ui/menu"
+import { SoftMenu, MenuCheck } from "@/components/ui/menu"
 import {
   createPerson,
   generateMeetingBrief,
@@ -405,6 +404,9 @@ function AttendeePicker({
           open={open}
           portal
           anchorRef={anchorRef}
+          onClose={() => setOpen(false)}
+          role="dialog"
+          aria-label={t("meeting.prepareAddAttendees")}
           align="start"
           data-prepare-picker-menu=""
           className="pm-people-picker-menu pm-prepare-picker-menu"
@@ -417,14 +419,13 @@ function AttendeePicker({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => {
-                  e.stopPropagation()
-                  if (e.key === "Escape") setOpen(false)
+                  if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setOpen(false); anchorRef.current?.focus() }
                 }}
                 autoFocus
               />
             </div>
           </div>
-          <div className="pm-people-picker-list">
+          <div className="pm-people-picker-list" role="listbox" aria-label={t("meeting.prepareAddAttendees")} aria-multiselectable="true" data-menu-list>
             {rows.length > 0 && (
               <div className="pm-people-picker-sec">{t("common.directory")}</div>
             )}
@@ -434,7 +435,8 @@ function AttendeePicker({
                 <div key={person.id} className={cn("pm-people-picker-row", picked && "is-picked")}>
                   <button
                     type="button"
-                    role="menuitem"
+                    role="option"
+                    aria-selected={picked}
                     className="pm-people-picker-row-main"
                     onClick={() =>
                       setDraft((cur) =>
@@ -459,11 +461,7 @@ function AttendeePicker({
                         <span className="pm-people-picker-sub">{person.disambiguator.trim()}</span>
                       ) : null}
                     </span>
-                    {picked && (
-                      <span className="pm-prepare-pick-badge" aria-hidden>
-                        <Check className="size-3" />
-                      </span>
-                    )}
+                    <MenuCheck checked={picked} />
                   </button>
                 </div>
               )

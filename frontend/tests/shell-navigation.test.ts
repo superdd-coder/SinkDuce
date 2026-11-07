@@ -21,7 +21,7 @@ before(async () => {
     "virtual:shell-dialog": `export const UpdateDialog = () => null;`,
     "virtual:shell-source": `export const SourcePill = () => null;`,
     "virtual:shell-client": `export const getLocalHealth = async () => ({ desktop: false });`,
-    "virtual:shell-i18n": `export const useT = () => key => ({ "nav.main": "Main navigation", "nav.chat": "Chat", "nav.library": "Library", "nav.meeting": "Meeting", "nav.recall": "Recall", "nav.settings": "Settings", "logs.backendLogs": "Backend logs" }[key] || key);`,
+    "virtual:shell-i18n": `export const useT = () => key => ({ "nav.main": "Main navigation", "search.title": "Search workspace", "nav.chat": "Chat", "nav.library": "Library", "nav.meeting": "Meeting", "nav.recall": "Recall", "nav.settings": "Settings", "logs.backendLogs": "Backend logs" }[key] || key);`,
   }
   server = await createServer({
     root, configFile: false,
@@ -59,19 +59,19 @@ function actions(html: string) {
 
 test("icon navigation retains accessible names, current page and the settings entry", () => {
   const html = render(null)
-  assert.deepEqual(actions(html), ["Chat", "Library", "Meeting", "Settings"])
+  assert.deepEqual(actions(html), ["Search workspace", "Chat", "Library", "Meeting", "Settings"])
   assert.match(html, /aria-label="Library"[^>]*aria-current="page"/)
   assert.match(html, /<img[^>]*alt="SinkDuce"/)
 })
 
 test("module permissions still hide routes and the separate settings action", () => {
   const html = render({ modules: { chat: false, settings: false }, domains: { meeting: false } }, true)
-  assert.deepEqual(actions(html), ["Library", "Recall", "Backend logs"])
+  assert.deepEqual(actions(html), ["Search workspace", "Library", "Recall", "Backend logs"])
 })
 
 test("Recall requires both developer mode and module access; meeting follows its domain access", () => {
   const allowed = { modules: {}, domains: { meeting: true } }
-  assert.deepEqual(actions(render(allowed, true)), ["Chat", "Library", "Meeting", "Recall", "Settings", "Backend logs"])
-  assert.deepEqual(actions(render(allowed, false)), ["Chat", "Library", "Meeting", "Settings"])
-  assert.deepEqual(actions(render({ modules: { recall: false, meeting: false }, domains: { meeting: true } }, true)), ["Chat", "Library", "Meeting", "Settings", "Backend logs"])
+  assert.deepEqual(actions(render(allowed, true)), ["Search workspace", "Chat", "Library", "Meeting", "Recall", "Settings", "Backend logs"])
+  assert.deepEqual(actions(render(allowed, false)), ["Search workspace", "Chat", "Library", "Meeting", "Settings"])
+  assert.deepEqual(actions(render({ modules: { recall: false, meeting: false }, domains: { meeting: true } }, true)), ["Search workspace", "Chat", "Library", "Meeting", "Settings", "Backend logs"])
 })

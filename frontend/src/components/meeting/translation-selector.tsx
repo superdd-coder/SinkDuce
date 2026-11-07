@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Check } from "lucide-react"
+import { SoftMenu, MenuCheck } from "@/components/ui/menu"
 import { cn } from "@/lib/utils"
 import { useT } from "@/i18n/use-t"
 
@@ -53,8 +53,10 @@ export function TranslationSelector({
   disabled = false,
 }: Props) {
   const t = useT()
+  const triggerRef = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
   const [closing, setClosing] = useState(false)
+  const [keyboardOpen, setKeyboardOpen] = useState(false)
   const closeTimerRef = useRef<number | null>(null)
   const retractTimerRef = useRef<number | null>(null)
 
@@ -81,6 +83,7 @@ export function TranslationSelector({
   }
 
   const closeNow = () => {
+    setKeyboardOpen(false)
     if (closeTimerRef.current) window.clearTimeout(closeTimerRef.current)
     closeTimerRef.current = null
     if (!open) return
@@ -120,6 +123,7 @@ export function TranslationSelector({
 
   const trigger = (
     <Button
+      ref={triggerRef}
       type="button"
       variant={enabled ? "secondary" : "ghost"}
       size="sm"
@@ -127,9 +131,15 @@ export function TranslationSelector({
       className="pm-meeting-live-captions-btn pm-lt-btn"
       aria-haspopup="menu"
       aria-expanded={open}
+      aria-pressed={enabled}
       aria-label={t("meeting.liveTranslation")}
       title={title}
       onClick={() => onEnabledChange(!enabled)}
+      onKeyDown={event => {
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault(); setKeyboardOpen(true); openNow()
+        }
+      }}
     >
       <span
         className={cn(
@@ -147,25 +157,17 @@ export function TranslationSelector({
       className="pm-lt-wrap"
       onMouseEnter={openNow}
       onMouseLeave={scheduleClose}
-      onFocusCapture={openNow}
       onBlurCapture={(e) => {
         const next = e.relatedTarget as Node | null
-        if (next && e.currentTarget.contains(next)) return
+        if (next && (e.currentTarget.contains(next) || (next instanceof Element && next.closest('[data-translation-menu]')))) return
         scheduleClose()
       }}
     >
       {trigger}
 
-      {(open || closing) && (
-        <div
-          role="menu"
-          aria-label={t("meeting.liveTranslationTarget")}
-          className={cn(
-            "pm-lt-menu",
-            closing ? "is-retracting" : "is-emerging",
-          )}
-          onMouseEnter={openNow}
-        >
+      <SoftMenu open={open && !closing && !disabled} portal anchorRef={triggerRef} onClose={closeNow} autoFocus={keyboardOpen}
+        data-translation-menu="" aria-label={t("meeting.liveTranslationTarget")}
+        className="pm-lt-menu" onMouseEnter={openNow} onMouseLeave={scheduleClose}>
           <span className="pm-lt-menu-label">
             {t("meeting.liveTranslationTarget")}
           </span>
@@ -185,15 +187,14 @@ export function TranslationSelector({
               >
                 <span className="pm-lt-item-label">{lang}</span>
                 {isOn ? (
-                  <Check className="pm-lt-check" strokeWidth={2.25} />
+                  <MenuCheck />
                 ) : (
                   <span className="pm-lt-item-code t-mono-family">{code}</span>
                 )}
               </button>
             )
           })}
-        </div>
-      )}
+      </SoftMenu>
     </div>
   )
 }

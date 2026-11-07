@@ -133,7 +133,9 @@
   isolation: isolate;
 }
 .sd-shell .pm-shell-body { display: contents; }
-.sd-shell .pm-shell-main { grid-column: 2; grid-row: 1; padding: 8px 10px 10px; background: transparent; }
+/* Scroll and round-corner clipping belong to the inner panels. Clipping this
+ * host cuts the shared rail/stage shadow off ten pixels below each card. */
+.sd-shell .pm-shell-main { grid-column: 2; grid-row: 1; padding: 8px 10px 10px; background: transparent; overflow: visible; }
 
 /* The sidebar's slot never grows, so hover cannot shift documents underneath. */
 .sd-nav-slot { position: relative; grid-column: 1; grid-row: 1 / -1; min-height: 0; z-index: 40; }
@@ -156,8 +158,10 @@
   transition: width 220ms cubic-bezier(.2,.8,.2,1), box-shadow 220ms ease;
 }
 .sd-nav-brand { display: flex; align-items: center; gap: 9px; padding: 0 8px; height: 36px; min-height: 36px; margin-bottom: 35px; overflow: hidden; white-space: nowrap; }
-.sd-nav-brand img { width: 32px; height: 32px; flex: 0 0 32px; object-fit: contain; }
-.sd-nav-brand>span { font: 560 21px/1.3 var(--type-font-ui); letter-spacing: -.8px; }
+.sd-nav-brand>img { width: 32px; height: 32px; flex: 0 0 32px; object-fit: contain; }
+.sd-nav-wordmark { display: flex; align-items: center; width: 102px; }
+.sd-nav-wordmark img { display: block; width: 102px; height: auto; }
+.dark .sd-nav-wordmark img { filter: brightness(0) invert(1); opacity: .9; }
 .sd-nav-list { display: flex; flex-direction: column; gap: 7px; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
 .sd-nav-item, .sd-nav-version, .sd-navigation .pm-shell-version-pill {
   display: flex; align-items: center; justify-content: flex-start; gap: 11px;
@@ -216,6 +220,15 @@
   -webkit-backdrop-filter: none;
 }
 
+/* Reading panes remain quiet and opaque enough for long text, while sharing
+ * the porcelain material instead of the old solid-white nested card skin. */
+.sd-shell :is(.pm-meeting-title-card, .pm-meeting-content-card, .pm-meeting-player-zone-card, .pm-meeting-stage-right-card) {
+  background: var(--sd-surface-raised);
+  border: 0;
+  border-radius: var(--sd-radius-panel);
+  box-shadow: var(--sd-shadow-control);
+}
+
 /* Shared controls: semantic focus/error outlines stay, decorative strokes go. */
 .sd-button { border-radius: var(--sd-radius-pill); letter-spacing: 0; }
 .sd-button[data-variant]:is([aria-pressed="true"], [data-state="on"]) {
@@ -248,8 +261,6 @@
 }
 .pm-dialog.sd-dialog [data-slot="dialog-title"] { font: 550 20px/1.4 var(--type-font-ui) !important; letter-spacing: -.3px !important; text-transform: none; }
 .sd-card { background: var(--sd-surface-raised); border-color: transparent; }
-.pm-menu[data-slot="menu"], .pm-menu.pm-menu--soft, .pm-select-menu { padding: 6px; background: var(--sd-surface-overlay); border: 0; border-radius: 20px; box-shadow: var(--sd-shadow-float); backdrop-filter: blur(20px) saturate(1.05); -webkit-backdrop-filter: blur(20px) saturate(1.05); }
-.pm-menu .pm-menu-item { border-radius: 12px; min-height: 34px; padding: 8px 11px; }
 .pm-select-trigger { border-radius: 999px; }
 /* Legacy file-detail / file-toolbar controls use the same interaction tokens. */
 :is(.pm-ws-action, .pm-ws-icon-btn, .pm-files-tb-act, .pm-files-tb-btn, .pm-files-tb-icon).is-on:hover:not(:disabled):where(:not(.is-danger)) {
@@ -272,6 +283,17 @@
 /* The chat stage has separate clipping and shadow wrappers; tint only the inner plane. */
 .sd-shell .pm-chat-stage { box-shadow: none; }
 .sd-shell .pm-chat-stage-head { background: transparent; }
+/* Fade the scrolling content itself. A white overlay below the transparent
+ * title used to make the title look like a separate grey strip. */
+.sd-shell .pm-chat-edge-fade { display: none; }
+.sd-shell .pm-chat-thread {
+  --sd-chat-fade-top: 0px;
+  --sd-chat-fade-bottom: 0px;
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--sd-chat-fade-top), #000 calc(100% - var(--sd-chat-fade-bottom)), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--sd-chat-fade-top), #000 calc(100% - var(--sd-chat-fade-bottom)), transparent);
+}
+.sd-shell .pm-chat-thread[data-fade-top] { --sd-chat-fade-top: 36px; }
+.sd-shell .pm-chat-thread[data-fade-bottom] { --sd-chat-fade-bottom: 72px; }
 body.pm-dnd-active .sd-navigation::after {
   content: ""; position: absolute; inset: 0; z-index: 40; border-radius: inherit;
   background: color-mix(in srgb, var(--pm-ink) 30%, transparent); pointer-events: none;

@@ -333,9 +333,12 @@ test("Quick Chat previews completed SVGs with its compact answer layout", async 
   assert.match(html, /<img\b/)
   assert.match(html, /<p>Before<\/p>/)
   assert.match(html, /<p>After<\/p>/)
-  assert.match(html, /Source<\/button>/)
+  assert.match(html, /<button[^>]*aria-label="Source"/)
   assert.match(html, /chat-svg-expand-button/)
-  assert.doesNotMatch(html, /<svg[^>]*xmlns=|&lt;svg|language-svg/)
+  const preview = html.match(/<div class="chat-md-visual-preview"[\s\S]*?<\/div>/)?.[0]
+  assert.ok(preview)
+  assert.doesNotMatch(preview, /<svg\b/)
+  assert.doesNotMatch(html, /&lt;svg|language-svg/)
 })
 
 test("Quick Chat hides unfinished SVG source while keeping surrounding answer text", async () => {
@@ -379,7 +382,7 @@ test("an unfinished SVG fence remains source and pending", async () => {
   assert.match(html, /chat-md-visual/)
   assert.doesNotMatch(html, /<img/)
   assert.match(html, /chat-md-visual-status/)
-  assert.match(html, /<button[^>]*aria-pressed="false"[^>]*>Source<\/button>/)
+  assert.match(html, /<button[^>]*aria-pressed="false"[^>]*aria-label="Source"/)
 })
 
 test("a legacy SVG with lost opening brackets can preview with a recovery notice", async () => {
@@ -387,7 +390,10 @@ test("a legacy SVG with lost opening brackets can preview with a recovery notice
   const html = await render(source)
   assert.match(html, /<img\b/)
   assert.match(html, /The preview was restored/)
-  assert.doesNotMatch(html, /This diagram could not be previewed|<(?:svg|script|iframe|object)\b/)
+  const preview = html.match(/<div class="chat-md-visual-preview"[\s\S]*?<\/div>/)?.[0]
+  assert.ok(preview)
+  assert.doesNotMatch(preview, /<(?:svg|script|iframe|object)\b/)
+  assert.doesNotMatch(html, /This diagram could not be previewed|<(?:script|iframe|object)\b/)
 })
 
 test("the first streaming frame keeps unfinished SVG source out of the live prose tail", async () => {

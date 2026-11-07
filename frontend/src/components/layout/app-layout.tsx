@@ -246,7 +246,7 @@ export function AppLayout() {
         */}
         <main
           className={cn(
-            "pm-shell-main flex-1 min-w-0 flex flex-col overflow-hidden p-3 pt-1",
+            "pm-shell-main flex-1 min-w-0 min-h-0 flex flex-col",
             logPanelOpen && "has-backend-logs"
           )}
         >

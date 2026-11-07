@@ -1,0 +1,179 @@
+/* Shared interaction contract for the remaining legacy workspaces.
+ * Neutral hover → pale emerald selection → solid emerald primary action.
+ * These aliases adapt existing controls without changing their behavior.
+ * !important only fences off the old workspace-specific control skins.
+ * Focus, destructive actions, recording indicators and user-picked colors stay semantic.
+ */
+
+/* Shared buttons win over settings / workspace / dialog color overrides. */
+.sd-button[data-variant] { border-color: transparent !important; border-radius: var(--sd-radius-pill) !important; letter-spacing: 0 !important; }
+.sd-button[data-variant="default"] { background: var(--sd-brand) !important; color: var(--primary-foreground) !important; box-shadow: none !important; }
+.sd-button[data-variant="default"]:hover:not(:disabled) { background: var(--sd-brand-hover) !important; }
+.sd-button[data-variant="ghost"] { background: transparent !important; color: var(--sd-muted) !important; box-shadow: none !important; }
+.sd-button[data-variant="outline"] { background: var(--sd-surface-raised) !important; color: var(--sd-text) !important; box-shadow: none !important; }
+.sd-button[data-variant="secondary"] { background: var(--sd-field) !important; color: var(--sd-text) !important; box-shadow: none !important; }
+.sd-button:is([data-variant="ghost"], [data-variant="outline"], [data-variant="secondary"]):is(:hover, [aria-expanded="true"], [data-popup-open]):not(:disabled) { background: var(--sd-hover) !important; color: var(--sd-ink) !important; }
+.sd-button[data-variant]:is([aria-pressed="true"], [data-state="on"], .is-on, .is-active):not(.is-danger) { background: var(--sd-selected) !important; color: var(--sd-selected-ink) !important; box-shadow: none !important; }
+.sd-button[data-variant]:is([aria-pressed="true"], [data-state="on"], .is-on, .is-active):hover:not(:disabled):not(.is-danger) { background: var(--sd-selected-hover) !important; }
+.sd-button[data-variant]:focus-visible { outline: 2px solid var(--sd-focus); outline-offset: 2px; }
+
+/* Dialogs: compact UI typography, quiet fields and softly raised inner surfaces. */
+.pm-dialog.sd-dialog [data-slot="dialog-kicker"] { color: var(--sd-muted) !important; text-transform: none !important; letter-spacing: 0 !important; }
+.pm-dialog.sd-dialog [data-slot="dialog-footer"] button { font: 500 12px/1.4 var(--type-font-ui) !important; letter-spacing: 0 !important; }
+.pm-dialog.sd-dialog [data-slot="dialog-footer"] .sd-button[data-variant="ghost"] { background: var(--sd-field) !important; color: var(--sd-text) !important; }
+.pm-dialog.sd-dialog [data-slot="dialog-footer"] .sd-button[data-variant="ghost"]:hover:not(:disabled) { background: var(--sd-hover) !important; }
+.pm-dialog.sd-dialog .pm-nested-pane { background: var(--sd-field); border: 0; border-radius: 20px; }
+.pm-dialog.sd-dialog .pm-dialog-callout { background: var(--sd-field); border: 0; border-radius: 14px; padding: 12px 14px; }
+.sd-input:not(.sd-input--inline):not(:focus-visible):not([aria-invalid="true"]), .pm-dialog.sd-dialog .pm-field:not(:focus):not([aria-invalid="true"]) { background: var(--sd-field) !important; border-color: transparent !important; box-shadow: none !important; }
+/* Inline list editors share the row's surface instead of nesting another field. */
+.sd-input.sd-input--inline:not([aria-invalid="true"]) { background: transparent !important; border-color: transparent !important; box-shadow: none !important; }
+.sd-input.sd-input--inline:focus-visible { outline: 2px solid var(--sd-focus); outline-offset: -2px; }
+:is(.pm-settings, .pm-settings-dlg) .pm-select-trigger,
+.pm-date-picker .pm-date-trigger { background: var(--sd-field); box-shadow: none; border: 0; border-radius: 999px; }
+:is(.pm-settings, .pm-settings-dlg) .pm-select-trigger:is(:hover, .is-open):not(.is-disabled),
+.pm-date-picker .pm-date-trigger:is(:hover, .is-open):not(.is-disabled) { background: var(--sd-hover); box-shadow: none; color: var(--sd-ink); }
+:is(.pm-settings, .pm-settings-dlg) .pm-select-trigger:focus-visible,
+.pm-date-picker .pm-date-trigger:focus-visible { outline: 2px solid var(--sd-focus); outline-offset: 2px; box-shadow: none; }
+:is(.pm-settings-subcard, .pm-settings-provider-card, .pm-settings-fold-card) { background: var(--sd-surface-raised); border-radius: var(--sd-radius-card); box-shadow: var(--sd-shadow-control); }
+.pm-settings-card { background-image: var(--sd-grain), var(--sd-stage-fill); background-color: transparent; background-size: 128px 128px, 100% 100%; border-radius: var(--sd-radius-panel); box-shadow: var(--sd-shadow-panel); }
+.pm-settings-provider-card:hover { background: var(--sd-surface-raised); box-shadow: var(--sd-shadow-control); }
+.pm-settings-provider-actions .sd-button[data-variant="ghost"] { background: var(--sd-field) !important; }
+.pm-settings-provider-actions .sd-button[data-variant="ghost"]:hover:not(:disabled) { background: var(--sd-hover) !important; }
+
+/* Menu surfaces and option states are centralized in menus.css. */
+.pm-date-day, .pm-date-panel--sm .pm-date-day { border-radius: 999px; }
+.pm-date-day:hover:not(:disabled):not(.is-on) { background: var(--sd-hover); }
+.pm-date-day.is-on { background: var(--sd-selected); color: var(--sd-selected-ink); box-shadow: none; font-weight: 600; }
+.pm-date-day.is-today:not(.is-on) { box-shadow: none; font-weight: 650; text-decoration: underline; text-underline-offset: 4px; }
+.pm-date-day:focus-visible { outline: 2px solid var(--sd-focus); outline-offset: -2px; }
+.pm-date-panel-foot { background: none; }
+.pm-date-today-link, .pm-date-clear-link { padding: 6px 10px; border-radius: 999px; background: var(--sd-field); color: var(--sd-text); }
+.pm-date-today-link:hover, .pm-date-clear-link:hover { background: var(--sd-hover); color: var(--sd-ink); }
+
+/* Legacy toolbar actions, including meeting capture and editor commands. */
+:is(.pm-timeline-tb-btn, .pm-timeline-scope-btn, .pm-timeline-attach-btn, .pm-timeline-date-btn,
+    .pm-meeting-card-btn, .pm-meeting-pill, .pm-meeting-player-chip, .pm-meeting-todos-seg-btn,
+    .pm-fmt-btn, .pm-float-bar-btn, .pm-ws-seg-add, .pm-hw-manage-btn, .pm-people-pill,
+    .pm-people-picker-play, .pm-speakers-people-btn, .pm-lang-pill, .pm-qc-web-btn,
+    .pm-chat-tool-chip, .pm-field-chip) {
+  border-color: transparent !important; border-radius: 999px; box-shadow: none !important; letter-spacing: 0; text-transform: none;
+}
+:is(.pm-timeline-tb-btn, .pm-timeline-scope-btn, .pm-timeline-attach-btn, .pm-timeline-date-btn,
+    .pm-meeting-card-btn, .pm-meeting-pill, .pm-meeting-player-chip, .pm-meeting-todos-seg-btn,
+    .pm-fmt-btn, .pm-float-bar-btn, .pm-ws-seg-add, .pm-hw-manage-btn, .pm-people-pill,
+    .pm-people-picker-play, .pm-speakers-people-btn, .pm-lang-pill, .pm-qc-web-btn,
+    .pm-chat-tool-chip, .pm-field-chip):hover:not(:disabled):not(.is-danger):not(.pm-meeting-player-chip--primary-label) {
+  background: var(--sd-hover) !important; color: var(--sd-ink) !important;
+}
+:is(.pm-timeline-tb-btn, .pm-timeline-scope-btn, .pm-timeline-attach-btn, .pm-meeting-pill,
+    .pm-meeting-player-chip, .pm-meeting-todos-seg-btn, .pm-fmt-btn, .pm-float-bar-btn,
+    .pm-people-pill, .pm-people-picker-play, .pm-lang-pill, .pm-qc-web-btn, .pm-chat-tool-chip,
+    .pm-field-chip, .pm-hw-option):is(.is-on, .is-active, [data-active]) {
+  background: var(--sd-selected) !important; color: var(--sd-selected-ink) !important; box-shadow: none !important;
+}
+:is(.pm-timeline-tb-btn, .pm-timeline-scope-btn, .pm-timeline-attach-btn, .pm-meeting-pill,
+    .pm-meeting-player-chip, .pm-meeting-todos-seg-btn, .pm-fmt-btn, .pm-float-bar-btn,
+    .pm-people-pill, .pm-people-picker-play, .pm-lang-pill, .pm-qc-web-btn, .pm-chat-tool-chip,
+    .pm-field-chip, .pm-hw-option):is(.is-on, .is-active, [data-active]):hover:not(:disabled) { background: var(--sd-selected-hover) !important; }
+:is(.pm-timeline-tb-btn, .pm-timeline-scope-btn, .pm-fmt-btn, .pm-float-bar-btn, .pm-meeting-pill,
+    .pm-chat-tool-chip, .pm-hw-option, .pm-lang-pill, .pm-people-pill, .pm-rail-new):focus-visible { outline: 2px solid var(--sd-focus); outline-offset: 2px; }
+.pm-chat-tool-chip, .pm-chat-composer .pm-chat-tool-chip { background: var(--sd-field); border: 0; }
+.pm-chat-tool-chip.is-menu-open { background: var(--sd-hover) !important; color: var(--sd-ink) !important; }
+.pm-chat-composer-thinking { gap: 6px; }
+.pm-chat-composer-thinking::before {
+  content: "";
+  flex: 0 0 6px;
+  width: 6px;
+  height: 6px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  opacity: .6;
+}
+.pm-chat-composer-thinking[aria-pressed="true"]::before { background: currentColor; opacity: 1; }
+.pm-chat-tool-chip.pm-chat-composer-thinking[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--sd-selected-hover) !important;
+  color: var(--sd-selected-ink) !important;
+}
+/* No decorative perimeter sweep on selected toggles. Loading indicators are separate. */
+.pm-chat-tool-chip--flow::before, .pm-chat-tool-chip--flow::after { display: none; }
+.pm-lang-pill.is-off, .pm-hw-option.is-off { background: var(--sd-field); box-shadow: none; color: var(--sd-text); }
+.pm-hw-option.is-off:hover { background: var(--sd-hover); box-shadow: none; }
+.pm-hw-option.is-on :is(.pm-hw-option-icon, .pm-settings-hw-default-pill) { color: var(--sd-selected-ink); background: transparent; box-shadow: none; }
+
+/* Raw primary and secondary buttons now follow the shared Button variants. */
+:is(.pm-btn-pri, .pm-rail-new, .pm-shell-collections-new, .pm-meeting-new-btn,
+    .pm-ws-foot-btn--pri, .pm-web-confirm-btn--pri, .pm-prepare-foot-confirm) {
+  background: var(--sd-brand) !important; color: var(--primary-foreground) !important;
+  border-color: transparent !important; border-radius: 999px; box-shadow: none !important;
+}
+:is(.pm-btn-pri, .pm-rail-new, .pm-shell-collections-new, .pm-meeting-new-btn,
+    .pm-ws-foot-btn--pri, .pm-web-confirm-btn--pri, .pm-prepare-foot-confirm):hover:not(:disabled) { background: var(--sd-brand-hover) !important; box-shadow: none !important; }
+:is(.pm-btn-ghost, .pm-ws-foot-btn--ghost, .pm-web-confirm-btn--ghost, .pm-web-confirm-btn--soft, .pm-prepare-foot-cancel) { background: var(--sd-field) !important; color: var(--sd-text) !important; border-color: transparent !important; border-radius: 999px; box-shadow: none !important; }
+:is(.pm-btn-ghost, .pm-ws-foot-btn--ghost, .pm-web-confirm-btn--ghost, .pm-web-confirm-btn--soft, .pm-prepare-foot-cancel):hover:not(:disabled) { background: var(--sd-hover) !important; color: var(--sd-ink) !important; }
+.sd-shell .pm-rail-new { width: 30px !important; height: 30px !important; min-height: 30px !important; padding: 0 !important; display: grid; place-items: center; }
+.sd-shell .pm-rail-new svg { width: 16px; height: 16px; }
+
+/* List selection is a single pale plane, without an outline or a left accent. */
+:is(.pm-shell-col-indicator, .pm-chat-sess-indicator, .pm-settings-hw-indicator, .pm-meeting-section-focus) { background: var(--sd-selected); border: 0; border-radius: 17px; box-shadow: none; }
+:is(.pm-shell-col-row, .pm-chat-sess-row):hover:not(.is-active) { background: var(--sd-hover); }
+:is(.pm-files-row.is-selected:not(.is-busy) .pm-files-row-main, .pm-files-item.is-selected:not(.is-busy),
+    .pm-settings-model-row.is-selected, .pm-timeline-ftree-folder.is-selected, .pm-timeline-node.is-selected,
+    .pm-ec-node.is-selected, .pm-chat-source-row.is-kb.is-selected, .pm-meeting-add-section-bp-item.is-active,
+    .pm-meeting-todos-row.is-on, .pm-meeting-seg.is-focused, .pm-meeting-seg.is-playing) {
+  background: var(--sd-selected) !important; border-color: transparent !important; box-shadow: none !important;
+}
+:is(.pm-settings-model-row, .pm-rail-row, .pm-all-files-row, .pm-files-list-row, .pm-chat-chunk-card,
+    .pm-chat-source-row.is-kb, .pm-meeting-add-section-bp-item):hover { background: var(--sd-hover); box-shadow: none; }
+.pm-meeting-section-card:hover:not(:disabled):not(.is-active):not(.is-pending) { background: var(--sd-hover); }
+.pm-meeting-section-card.is-streaming { background: var(--sd-field); box-shadow: none; }
+.pm-chat-source-row.is-kb { box-shadow: none; }
+.pm-meeting-todos-row.is-on:hover:not(.is-done) { background: var(--sd-selected-hover) !important; box-shadow: none !important; }
+
+/* Inline command and report popovers use the same tokens as the rest of Chat. */
+.pm-chat-tool-icon.is-on { background: var(--sd-selected); color: var(--sd-selected-ink); box-shadow: none; }
+.pm-chat-tool-icon.is-on:hover { background: var(--sd-selected-hover); color: var(--sd-selected-ink); }
+.pm-chat-tool-icon:hover:not(.is-on), .pm-review-nav-row:hover, .pm-report-history-entry:hover { background: var(--sd-hover); color: var(--sd-ink); }
+.pm-report-history-entry.is-selected, .pm-review-comment.is-active, .pm-review-comment.is-history.is-active { background: var(--sd-selected) !important; box-shadow: none !important; border-color: transparent !important; }
+.pm-web-confirm-card { background: var(--sd-surface-raised); border-color: transparent; border-radius: 20px; box-shadow: var(--sd-shadow-control); }
+.pm-web-confirm-target-select .pm-select-trigger--tag { background: var(--sd-field); color: var(--sd-text); }
+.pm-web-confirm-target-select .pm-select-trigger--tag:hover:not(.is-disabled) { background: var(--sd-hover); }
+
+/* Report / citation chrome and inline editor tools share the same control scale. */
+:is(.pm-citation-view-toggle, .pm-report-history-trigger, .pm-report-version .pm-select-trigger--tag,
+    .pm-report-export .pm-select-trigger--tag, .pm-review-group-toggle, .pm-review-selection,
+    .pm-review-compare-trigger, .pm-report-history-actions button) { border: 0; border-radius: var(--sd-radius-pill); }
+:is(.pm-citation-view-toggle, .pm-report-history-trigger, .pm-report-version .pm-select-trigger--tag,
+    .pm-review-group-toggle, .pm-review-compare-trigger, .pm-report-history-actions button) { background: var(--sd-field); color: var(--sd-text); }
+:is(.pm-citation-view-toggle, .pm-report-history-trigger, .pm-report-version .pm-select-trigger--tag,
+    .pm-review-group-toggle, .pm-review-compare-trigger, .pm-report-history-actions button):hover:not(:disabled) { background: var(--sd-hover); color: var(--sd-ink); }
+.pm-citation-view-toggle[aria-pressed="true"] { background: var(--sd-selected); color: var(--sd-selected-ink); }
+.pm-review-compare-trigger { padding: 6px 11px; }
+.pm-report-history-actions { background: transparent; }
+.pm-report-history-actions .pm-report-history-restore,
+.pm-report-export .pm-select-trigger--tag { background: var(--sd-brand); color: var(--primary-foreground); }
+.pm-report-history-actions .pm-report-history-restore:hover:not(:disabled),
+.pm-report-export .pm-select-trigger--tag:hover:not(.is-disabled) { background: var(--sd-brand-hover); color: var(--primary-foreground); }
+.pm-report-history-entry-title small { background: var(--sd-field); color: var(--sd-muted); border-radius: var(--sd-radius-pill); }
+.pm-report-history-entry time, .pm-report-history-summary { color: var(--sd-muted); }
+.pm-report-history-entry.is-selected .pm-report-history-dot { background: var(--sd-brand); box-shadow: none; }
+.pm-report-history-check { width: 21px; height: 21px; padding: 4px; border-radius: 50%; background: var(--sd-menu-mark); color: var(--sd-brand); }
+.pm-review-block-action { border-radius: 50%; background: var(--sd-surface-raised); box-shadow: var(--sd-shadow-control); }
+.pm-review-followup textarea { border-radius: var(--sd-radius-field); background: var(--sd-field); color: var(--sd-text); }
+.pm-review-followup textarea:focus-visible { outline: 2px solid var(--sd-focus); outline-offset: 2px; }
+
+.pm-float-bar { border: 0; border-radius: var(--sd-radius-pill); background: var(--sd-surface-overlay); box-shadow: var(--sd-shadow-float); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); }
+.pm-float-bar-panel { border: 0; border-radius: var(--sd-radius-card); background: var(--sd-surface-overlay); box-shadow: var(--sd-shadow-float); padding: 16px; }
+.pm-float-bar-sep, .pm-float-bar-panel-rule { background: transparent; }
+.pm-float-bar-panel-input { border-color: transparent; border-radius: var(--sd-radius-pill); background: var(--sd-field); color: var(--sd-ink); }
+.pm-float-bar-panel-input:focus { border-color: var(--sd-focus); box-shadow: 0 0 0 2px var(--sd-focus-wash); }
+.pm-float-bar-panel-apply { border-radius: 50%; background: var(--sd-brand); color: var(--primary-foreground); }
+.pm-float-bar-panel-apply:hover { background: var(--sd-brand-hover); }
+.pm-float-bar-grid-cell { border-color: transparent; border-radius: 5px; background: var(--sd-field); }
+.pm-float-bar-grid-cell.is-hot { border-color: transparent; background: var(--sd-selected); }
+
+/* Source rows are navigation controls, with one quiet hover / selection plane. */
+.pm-chat-sources-toggle { width: fit-content; padding: 7px 12px; gap: 10px; border-radius: var(--sd-radius-pill); background: var(--sd-field); letter-spacing: 0; text-transform: none; }
+.pm-chat-sources-toggle:hover { background: var(--sd-hover); color: var(--sd-ink); }
+.pm-chat-sources-toggle:focus-visible { outline: 2px solid var(--sd-focus); outline-offset: 2px; }
+.pm-chat-source-row { border-radius: var(--sd-radius-card); }
+.pm-chat-source-row.is-web:hover { background: var(--sd-hover); }

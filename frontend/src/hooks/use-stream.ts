@@ -7,7 +7,7 @@ import {
   useAppStore,
   _registerStream, _abortStream, _unregisterStream, _ownsStream,
   _getCachedMessages, _setCachedMessages,
-  type ThinkingSummary,
+  type Message, type ThinkingSummary,
 } from "@/stores/app-store"
 import { confirmNoteCreate, confirmTodoDelete, confirmWebSearch, generateSessionTitle, iterateSessionSse, listSessions, postSessionMessage } from "@/api/client"
 import type { ChatAttachment } from "@/api/client"
@@ -17,6 +17,8 @@ import { promptTodoDeleteConfirm } from "@/lib/todo-delete-confirm"
 import { promptNoteCreateConfirm } from "@/lib/note-create-confirm"
 import { refreshTodosAfterChatTool } from "@/lib/todo-refresh"
 import { mergeNoteChanges } from "@/lib/note-changes"
+import { reservedChatInputs, type ChatTurn } from "@/lib/chat-queue"
+import { rememberSessionConfig } from "@/api/session-config"
 /** Check if sid is the active session; if not, update cache instead of store. */
 function _isActive(sid: string) {
   return useAppStore.getState().sessionId === sid
@@ -76,20 +78,10 @@ export function useStreamChat() {
   // and would re-render every consumer of this hook (ChatInput, etc.).
   // Read actions/state via getState() inside sendMessage / stopGeneration.
 
-  const sendMessage = async (content: string, _thinkingArg?: boolean, _webSearchArg?: boolean, attachments: ChatAttachment[] = []) => {
+  const streamTurn = async (sid: string, { content, attachments, comments, config }: ChatTurn): Promise<boolean> => {
     const store = useAppStore.getState()
-    // Hydrate restored sessionId (localStorage) before sending so we never
-    // append into an old session while the UI still looks blank.
-    // No session → create; load fail → create new via ensureSessionHydrated.
-    const sid = await store.ensureSessionHydrated()
-    if (!sid) return
-    if (attachments.some((a) => a.session_id !== sid)) return
-
-    const comments = useAppStore.getState().reportComments[sid] || []
     const reviews = reviewRequests(comments)
 
-    // Abort previous stream for the SAME session only
-    _abortStream(sid)
     const controller = new AbortController()
     _registerStream(sid, controller)
 
@@ -126,19 +118,18 @@ export function useStreamChat() {
 
     try {
       const userId = newId()
-      store.addMessage({ id: userId, role: "user", content, attachments, reportReviews: reviewSnapshots(comments, content) })
-      const assistantId = newId()
-      store.addMessage({ id: assistantId, role: "assistant", content: "", isStreaming: true })
-      store.setStreaming(true)
-      _syncCacheFromStore(sid)
+      const user: Message = { id: userId, role: "user", content, attachments, reportReviews: reviewSnapshots(comments, content) }
+      const assistant: Message = { id: newId(), role: "assistant", content: "", isStreaming: true }
+      if (_isActive(sid)) {
+        store.addMessage(user)
+        store.addMessage(assistant)
+        store.setStreaming(true)
+        _syncCacheFromStore(sid)
+      } else {
+        _setCachedMessages(sid, [...(_getCachedMessages(sid) ?? []), user, assistant])
+      }
 
       const {
-        selectedCollections,
-        activeProvider,
-        activeModel,
-        // 与上面几项一致：都取自 store（唯一真相源），并随消息存进会话配置
-        thinking,
-        webSearch,
         appendToLastMessage,
         setLastMessageSources,
         appendTimelineThinking,
@@ -157,25 +148,27 @@ export function useStreamChat() {
           content,
           attachment_ids: attachments.map((a) => a.id),
           ...(reviews.length ? {report_reviews: reviews} : {}),
-          thinking,
-          collections: selectedCollections,
-          provider_id: activeProvider || undefined,
-          model: activeModel || undefined,
-          web_search_enabled: webSearch,
+          thinking: config.thinking,
+          collections: config.collections,
+          provider_id: config.provider_id || undefined,
+          model: config.model || undefined,
+          web_search_enabled: config.web_search,
         },
         controller.signal,
       )
-      if (!_ownsStream(sid, controller)) return
+      if (!_ownsStream(sid, controller)) return false
 
       if (!resp.ok) {
         const err = await resp.text()
+        if (!_ownsStream(sid, controller)) return false
         if (_isActive(sid)) appendToLastMessage(`Error: ${resp.status} - ${err}`)
         else _cacheAppend(sid, `Error: ${resp.status} - ${err}`)
         if (_isActive(sid)) finishLastMessage()
         else _cacheFinishLast(sid)
-        return
+        return false
       }
 
+      rememberSessionConfig(sid, config)
       useAppStore.getState().consumeChatAttachments(sid, attachments.map((a) => a.id))
       if (reviews.length) consumeReportComments(sid, reviews.flatMap(r=>r.comment_ids))
 
@@ -239,7 +232,7 @@ export function useStreamChat() {
 
       if (resp.body) {
         for await (const { event: currentEvent, data } of iterateSessionSse(resp.body)) {
-            if (!_ownsStream(sid, controller)) return
+            if (!_ownsStream(sid, controller)) return false
             const active = _isActive(sid)
 
             switch (currentEvent) {
@@ -515,7 +508,7 @@ export function useStreamChat() {
                       })
                   }
                 }
-                return
+                return true
 
               case "error":
                 flushThinkingBufNow()
@@ -524,20 +517,22 @@ export function useStreamChat() {
                 else _cacheAppend(sid, `Error: ${data.content}`)
                 if (active) finishLastMessage()
                 else _cacheFinishLast(sid)
-                return
+                return false
             }
         }
       }
       // Stream body ended without a done event — still flush pending answer text
       flushThinkingBufNow()
       flushAnswerTokensNow()
+      return false
     } catch (err: any) {
-      if (!_ownsStream(sid, controller)) return
+      if (!_ownsStream(sid, controller)) return false
       flushThinkingBufNow()
       flushAnswerTokensNow()
-      if (err.name === "AbortError") return
+      if (err.name === "AbortError") return false
       if (_isActive(sid)) useAppStore.getState().appendToLastMessage(`Error: ${err.message}`)
       else _cacheAppend(sid, `Error: ${err.message}`)
+      return false
     } finally {
       if (reviews.length) {
         void refreshReportComments(sid).catch(()=>{})
@@ -548,12 +543,68 @@ export function useStreamChat() {
     }
   }
 
+  async function runNext(sid: string) {
+    const { chatQueues, setChatQueue } = useAppStore.getState()
+    const queue = chatQueues[sid]
+    if (!queue?.pending.length || queue.running || queue.paused) return
+    const [turn, ...pending] = queue.pending
+    setChatQueue(sid, () => ({ ...queue, pending, running: turn }))
+    let completed = false
+    try {
+      completed = await streamTurn(sid, turn)
+    } finally {
+      const current = useAppStore.getState().chatQueues[sid]
+      // Stop and deletion can release the slot before an old transport settles.
+      if (current?.running?.id === turn.id) {
+        setChatQueue(sid, () => ({ ...current, running: null, paused: current.paused || !completed }))
+        if (completed) void runNext(sid).catch(error => console.error("Queued chat turn failed:", error))
+      }
+    }
+  }
+
+  const sendMessage = async (content: string, attachments: ChatAttachment[] = []) => {
+    const before = useAppStore.getState()
+    const sid = before.sessionId && before.sessionHydratedId === before.sessionId
+      ? before.sessionId
+      : await before.ensureSessionHydrated()
+    if (!sid || !_isActive(sid) || attachments.some(file => file.session_id !== sid)) return false
+
+    const state = useAppStore.getState()
+    const reserved = reservedChatInputs(state.chatQueues[sid])
+    const files = attachments.filter(file => !reserved.attachments.has(file.id))
+    const comments = (state.reportComments[sid] ?? []).filter(comment => comment.state === "pending" && !reserved.comments.has(comment.id))
+    if (!content.trim() && !files.length && !comments.length) return false
+    // Snapshot the user's choices now. Another conversation can be active when this turn runs.
+    const turn: ChatTurn = {
+      id: newId(), content, attachments: files, comments,
+      config: {
+        thinking: state.thinking, web_search: state.webSearch,
+        collections: [...state.selectedCollections], provider_id: state.activeProvider, model: state.activeModel,
+      },
+    }
+    state.setChatQueue(sid, queue => ({
+      running: queue?.running ?? null,
+      paused: queue?.paused ?? false,
+      pending: [...(queue?.pending ?? []), turn],
+    }))
+    await runNext(sid)
+    return true
+  }
+
   const stopGeneration = useCallback(() => {
-    const sid = useAppStore.getState().sessionId
-    if (sid) _abortStream(sid)
+    const { sessionId: sid, setChatQueue } = useAppStore.getState()
+    if (sid) {
+      setChatQueue(sid, queue => queue && { ...queue, paused: true, running: null })
+      _abortStream(sid)
+    }
     useAppStore.getState().finishLastMessage()
     if (sid) _syncCacheFromStore(sid)
   }, [])
 
-  return { sendMessage, stopGeneration }
+  function resumeQueue(sid: string) {
+    useAppStore.getState().setChatQueue(sid, queue => queue && { ...queue, paused: false })
+    return runNext(sid)
+  }
+
+  return { sendMessage, stopGeneration, resumeQueue }
 }

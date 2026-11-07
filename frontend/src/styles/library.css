@@ -19,7 +19,7 @@
 .sd-project-rail .pm-shell-col-row { min-height: 48px; padding: 11px 10px; gap: 10px; margin-bottom: 5px; border-radius: 17px; }
 .sd-project-folder { flex-shrink: 0; color: var(--sd-muted); }
 .sd-project-rail .pm-shell-col-name { font-size: 12.5px; }
-.sd-project-rail .pm-shell-col-indicator { border-radius: 17px; background: var(--sd-selected); box-shadow: 0 3px 8px #17281c06; }
+.sd-project-rail .pm-shell-col-indicator { border-radius: 17px; background: var(--sd-selected); box-shadow: none; }
 .sd-project-rail .pm-shell-col-row.is-active .sd-project-folder { color: var(--sd-brand); }
 .sd-project-more { display: grid; place-items: center; flex: 0 0 24px; height: 26px; margin-right: -4px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--sd-muted); opacity: 0; cursor: pointer; }
 .pm-shell-col-row:is(:hover,:focus-within) .sd-project-more, .sd-project-more[data-popup-open] { opacity: 1; }
