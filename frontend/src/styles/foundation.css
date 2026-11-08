@@ -122,6 +122,7 @@
 
 /* A fixed icon rail beside the full-height keep-alive view host. */
 .pm-shell-root.sd-shell {
+  --sd-workspace-inset-block: 8px 10px;
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
@@ -129,16 +130,30 @@
   padding: 16px;
   height: 100dvh;
   min-height: 520px;
-  background: var(--sd-canvas-image);
+  background: linear-gradient(var(--sd-canvas), transparent 64px), var(--sd-canvas-image);
   isolation: isolate;
 }
 .sd-shell .pm-shell-body { display: contents; }
 /* Scroll and round-corner clipping belong to the inner panels. Clipping this
  * host cuts the shared rail/stage shadow off ten pixels below each card. */
-.sd-shell .pm-shell-main { grid-column: 2; grid-row: 1; padding: 8px 10px 10px; background: transparent; overflow: visible; }
+.sd-shell .pm-shell-main {
+  grid-column: 2;
+  grid-row: 1;
+  padding-block: var(--sd-workspace-inset-block);
+  padding-inline: 10px;
+  background: transparent;
+  overflow: visible;
+}
 
 /* The sidebar's slot never grows, so hover cannot shift documents underneath. */
-.sd-nav-slot { position: relative; grid-column: 1; grid-row: 1 / -1; min-height: 0; z-index: 40; }
+.sd-nav-slot {
+  position: relative;
+  grid-column: 1;
+  grid-row: 1 / -1;
+  min-height: 0;
+  margin-block: var(--sd-workspace-inset-block);
+  z-index: 40;
+}
 .sd-navigation {
   --sd-nav-width: 72px;
   --sd-label-opacity: 0;
@@ -163,18 +178,18 @@
 .sd-nav-wordmark img { display: block; width: 102px; height: auto; }
 .dark .sd-nav-wordmark img { filter: brightness(0) invert(1); opacity: .9; }
 .sd-nav-list { display: flex; flex-direction: column; gap: 7px; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
-.sd-nav-item, .sd-nav-version, .sd-navigation .pm-shell-version-pill {
+.sd-nav-item, .sd-nav-version {
   display: flex; align-items: center; justify-content: flex-start; gap: 11px;
   width: 100%; min-height: 44px; height: 44px; flex-shrink: 0;
   padding: 0 15px; border: 0; border-radius: 999px; overflow: hidden; white-space: nowrap;
   background: transparent; color: var(--pm-muted); font: 450 13px/1.4 var(--type-font-ui);
   transition: background-color 160ms, color 160ms;
 }
-.sd-nav-item>svg, .sd-nav-version>svg, .sd-navigation .pm-shell-version-pill>svg { flex: 0 0 18px; }
+.sd-nav-item>svg, .sd-nav-version>svg { flex: 0 0 18px; }
 .sd-nav-item:hover { background: var(--sd-hover); color: var(--sd-ink); }
 .sd-nav-item.is-active { color: var(--pm-on); background: linear-gradient(145deg, var(--sd-brand-hover), var(--sd-brand)); box-shadow: var(--sd-shadow-control); }
-.sd-nav-item:focus-visible, .sd-navigation .pm-shell-version-pill:focus-visible { outline: 2px solid var(--sd-focus); outline-offset: -2px; }
-.sd-nav-brand>span, .sd-nav-label, .sd-navigation .pm-shell-version-pill-label {
+.sd-nav-item:focus-visible { outline: 2px solid var(--sd-focus); outline-offset: -2px; }
+.sd-nav-brand>span, .sd-nav-label {
   flex-shrink: 0; opacity: var(--sd-label-opacity); visibility: var(--sd-label-visibility);
   transition: opacity 140ms ease, visibility 140ms ease;
 }
@@ -188,10 +203,8 @@
 .sd-navigation .pm-source-pill-chevron { flex: 0 0 12px; width: 12px; height: 12px; }
 .sd-nav-meta { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; font-size: 11px; line-height: 1.2; }
 .sd-nav-edition { font-size: 9px; font-weight: 550; letter-spacing: .06em; color: var(--pm-faint); }
-.sd-navigation .pm-shell-update-stack { width: 100%; }
-.sd-navigation .pm-shell-version-pill { opacity: 1; transform: none; color: var(--sd-brand); }
-.sd-navigation .pm-shell-version-pill-label { padding: 0; background: transparent; box-shadow: none; font-size: 11px; color: inherit; letter-spacing: 0; }
-.sd-navigation .pm-shell-update-card { left: 0; border-radius: 20px; background: var(--sd-surface-overlay); box-shadow: var(--sd-shadow-float); }
+button.sd-nav-version:hover { background: var(--sd-surface-raised); }
+.sd-nav-version.is-update { color: var(--sd-brand); }
 .sd-navigation:has(:focus-visible), .sd-navigation:has([data-source-menu-open="true"]) { --sd-nav-width: 204px; --sd-label-opacity: 1; --sd-label-visibility: visible; box-shadow: var(--sd-shadow-float); }
 @media (hover: hover) and (pointer: fine) {
   .sd-navigation:hover { --sd-nav-width: 204px; --sd-label-opacity: 1; --sd-label-visibility: visible; box-shadow: var(--sd-shadow-float); }
@@ -277,7 +290,7 @@
 [data-slot="tabs-list"][data-variant="pill"]:not(:has([data-slot="tabs-indicator"])) [data-slot="tabs-trigger"][aria-selected="true"] { background: var(--sd-selected) !important; box-shadow: none !important; }
 [data-slot="tabs-list"] [data-slot="tabs-trigger"]:focus-visible { outline: 2px solid var(--sd-focus); outline-offset: -2px; }
 @media (prefers-reduced-motion: reduce) {
-  .sd-navigation, .sd-nav-item, .sd-nav-brand>span, .sd-nav-label, .sd-navigation .pm-shell-version-pill-label { transition: none; }
+  .sd-navigation, .sd-nav-item, .sd-nav-brand>span, .sd-nav-label { transition: none; }
 }
 
 /* The chat stage has separate clipping and shadow wrappers; tint only the inner plane. */

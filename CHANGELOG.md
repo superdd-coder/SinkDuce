@@ -4,6 +4,18 @@ Kept newest-first. CI extracts the section matching the release tag into
 `latest.json → notes` (shown in the desktop update dialog), so headings must
 stay in the exact `## vX.Y.Z` form.
 
+## v1.7.1
+
+- 更新 macOS 的 Dock 与菜单栏图标，并统一窗口标题栏和工作区背景。
+- 对齐左侧导航和主舞台，统一会话、知识库和会议的列表标题。软件更新从左下角的版本图标打开。
+- 调整权限管理的角色与规则界面，提升只读项和勾选状态的可读性，并将保存按钮固定在右下角。
+- 移除 macOS 启动时的录屏权限请求，录制系统音频时沿用已有授权和音频回退方案。
+
+- Refresh the macOS Dock and menu bar icons, and match the window title bar to the workspace background.
+- Align navigation with the main panels, match list headings across Chat, Library, and Meetings, and open updates from the version icon.
+- Improve readability in Permissions for both Roles and Rules, with a fixed Save button at the bottom right.
+- Remove the Screen Recording prompt at macOS startup. System audio capture uses an existing grant or the audio-only fallback.
+
 ## v1.7.0
 
 - 新增项目 Q&A 工作台，支持问题清单和版本、Excel 导入映射与匹配审阅、多轮回复、资料引用、AI 起草进度和模板导出

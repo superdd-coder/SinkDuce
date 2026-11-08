@@ -632,11 +632,9 @@
     "resizeSidebarHint": "拖动调整宽度，双击恢复默认。",
     "toggleLogs": "开关后端日志",
     "reload": "重新加载",
-    "update": "更新",
     "ignoreVersion": "忽略此版本",
-    "fromVersion": "当前 v{version}",
-    "updateAvailable": "有新版本 — 查看详情",
-    "updateAvailableAria": "有新版本，当前 v{version}。打开详情。",
+    "updateAvailableAria": "有新版本，当前 {version}。打开详情。",
+    "versionDetails": "当前版本 {version}。打开更新详情。",
     "downloadingModels": "正在下载模型…",
     "allModelsDownloaded": "全部模型已下载！",
     "switcher": {
@@ -2449,9 +2447,9 @@
     "roles": "角色",
     "newRole": "新建角色",
     "newRoleName": "新角色",
-    "pickRole": "从左侧选择一个角色",
+    "pickRole": "选择一个角色",
     "roleName": "角色名称",
-    "builtinHint": "内置角色不可修改（防止误配锁死管理通道）",
+    "builtinHint": "内置角色 · 仅供查看",
     "modules": "功能区访问",
     "capabilities": "管理能力",
     "roleSaved": "角色已保存",
@@ -2468,13 +2466,14 @@
       "settings": "设置"
     },
     "cap": {
-      "config.write": "改全局配置",
-      "key.manage": "管钥匙",
-      "acl.manage": "管权限规则",
-      "collection.create": "建知识库",
-      "box.manage": "改盒子档案",
-      "localOnly": "管钥匙（仅本机可授予）"
+      "config": { "write": "编辑全局设置" },
+      "key": { "manage": "管理访问密钥" },
+      "acl": { "manage": "管理权限规则" },
+      "collection": { "create": "创建知识库" },
+      "box": { "manage": "编辑盒子资料" },
+      "localOnly": "仅限本机"
     },
+    "rule": "权限",
     "domain": {
       "meeting": "会议",
       "hot_words": "热词",
@@ -2482,9 +2481,9 @@
     },
     "tier": {
       "meeting": {
-        "read": "读取（纯查看：列表、转写稿、回放、总结）",
-        "create": "创建（建会议，并完全管理自己创建的会议）",
-        "manage": "管理（操作与删除别人的会议、会议分组）"
+        "read": "查看会议",
+        "create": "创建会议",
+        "manage": "管理所有会议"
       },
       "hot_words": {
         "read": "读取热词",
@@ -2497,6 +2496,11 @@
         "write": "修改资料",
         "delete": "删除人物"
       }
+    },
+    "meetingRuleDetail": {
+      "read": "查看会议列表、转写稿、回放和纪要",
+      "create": "发起会议并管理自己创建的会议",
+      "manage": "管理和删除他人创建的会议及分组"
     }
   },
   "remoteMode": {

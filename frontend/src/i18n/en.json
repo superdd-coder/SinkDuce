@@ -632,11 +632,9 @@
     "resizeSidebarHint": "Drag to resize. Double-click to reset.",
     "toggleLogs": "Toggle backend logs",
     "reload": "Reload",
-    "update": "Update",
     "ignoreVersion": "Ignore this version",
-    "fromVersion": "from v{version}",
-    "updateAvailable": "Update available — view details",
-    "updateAvailableAria": "Update available, current version v{version}. Open details.",
+    "updateAvailableAria": "Update available, current version {version}. Open details.",
+    "versionDetails": "Current version {version}. Open update details.",
     "downloadingModels": "Downloading models...",
     "allModelsDownloaded": "All models downloaded!",
     "switcher": {
@@ -2449,9 +2447,9 @@
     "roles": "Roles",
     "newRole": "New role",
     "newRoleName": "New role",
-    "pickRole": "Pick a role on the left",
+    "pickRole": "Select a role",
     "roleName": "Role name",
-    "builtinHint": "Built-in roles cannot be modified (prevents lockout by misconfiguration)",
+    "builtinHint": "Built-in role · View only",
     "modules": "Module access",
     "capabilities": "Management capabilities",
     "roleSaved": "Role saved",
@@ -2468,13 +2466,14 @@
       "settings": "Settings"
     },
     "cap": {
-      "config.write": "Edit global config",
-      "key.manage": "Manage keys",
-      "acl.manage": "Manage permission rules",
-      "collection.create": "Create collections",
-      "box.manage": "Edit box profile",
-      "localOnly": "Manage keys (local machine only)"
+      "config": { "write": "Edit global settings" },
+      "key": { "manage": "Manage keys" },
+      "acl": { "manage": "Manage permission rules" },
+      "collection": { "create": "Create collections" },
+      "box": { "manage": "Edit box profile" },
+      "localOnly": "Local only"
     },
+    "rule": "Permission",
     "domain": {
       "meeting": "Meetings",
       "hot_words": "Hot words",
@@ -2482,9 +2481,9 @@
     },
     "tier": {
       "meeting": {
-        "read": "Read (view only: list, transcript, playback, summary)",
-        "create": "Create (start meetings, and fully manage the ones you created)",
-        "manage": "Manage (operate and delete other people's meetings and groups)"
+        "read": "View meetings",
+        "create": "Create meetings",
+        "manage": "Manage all meetings"
       },
       "hot_words": {
         "read": "Read hot words",
@@ -2497,6 +2496,11 @@
         "write": "Edit profile",
         "delete": "Delete people"
       }
+    },
+    "meetingRuleDetail": {
+      "read": "Meeting list, transcripts, playback and summaries",
+      "create": "Start and manage your own meetings",
+      "manage": "Manage and delete meetings and groups created by others"
     }
   },
   "remoteMode": {

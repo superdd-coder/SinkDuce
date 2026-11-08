@@ -86,6 +86,6 @@ Models still download in-app to that folder. They are not inside the `.app`.
   Open no longer exists on macOS 15+; end users should use the one-line installer instead
 - Do not run the .app and Docker `app` against the same data directory
 - Microphone permission is requested the first time you live-transcribe
-- Screen Recording permission is required so meeting recordings include system audio (Zoom / Meet / browser playback). macOS will prompt on first record; if denied, enable SinkDuce under System Settings → Privacy & Security → Screen Recording.
+- Meeting recordings use an existing ScreenCaptureKit grant for system audio, with an audio-only Core Audio fallback. To enable ScreenCaptureKit, add the installed SinkDuce app in **System Settings → Privacy & Security → Screen & System Audio Recording**.
 - Closing the window hides to the menu-bar extra; Quit from the extra or press Cmd+Q to stop Qdrant and the API.
 - `package_macos.sh` also writes `desktop/dist/SinkDuce.dmg` (app + Applications shortcut). Unsigned builds hit Gatekeeper on browser download — public distribution should point users at the one-line installer; a real fix needs an Apple Developer ID + notarization.

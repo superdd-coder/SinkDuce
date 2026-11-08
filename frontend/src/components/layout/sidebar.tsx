@@ -1,17 +1,14 @@
-import { useEffect, useLayoutEffect, useState } from "react"
+import { useLayoutEffect, useState } from "react"
 import { useShallow } from "zustand/react/shallow"
 import { cn } from "@/lib/utils"
 import { useAppStore, type SidebarView } from "@/stores/app-store"
-import { X, ArrowUpRight, ArrowUpCircle, BookOpen, FlaskConical, Info, MessageCircle, Mic, Settings2, type LucideIcon } from "lucide-react"
+import { ArrowUpCircle, BookOpen, FlaskConical, Info, MessageCircle, Mic, Settings2, type LucideIcon } from "lucide-react"
 import { EDITION_LABEL } from "#edition/edition-label"
 import { useUpdateCheck } from "@/hooks/use-update-check"
 import { useT } from "@/i18n/use-t"
 import { UpdateDialog } from "./update-dialog"
 import { SidebarUtilities } from "./sidebar-utilities"
 import { GlobalSearch } from "./global-search"
-
-/** Float update card fade duration — keep in sync with --pm-update-card-ms in CSS */
-const UPDATE_CARD_MS = 280
 
 export function Sidebar() {
   const t = useT()
@@ -45,11 +42,6 @@ export function Sidebar() {
   )
   const { update, ignored, ignoreVersion, currentVersion } = useUpdateCheck()
   const [dialogOpen, setDialogOpen] = useState(false)
-  /** After Ignore or closing Details — hide float card; version becomes update pill */
-  const [cardDismissed, setCardDismissed] = useState(false)
-  /** Soft enter/leave for float card (keep mounted while fading out) */
-  const [cardMounted, setCardMounted] = useState(false)
-  const [cardIn, setCardIn] = useState(false)
 
   /* Recall view lives behind developer mode — bounce out when it turns off
      (also covers stale persisted sidebarView="recall" on a fresh load) */
@@ -57,58 +49,19 @@ export function Sidebar() {
     if (!developerMode && sidebarView === "recall") setSidebarView("chat")
   }, [developerMode, sidebarView, setSidebarView])
 
-  /** Logical visibility — fade keep-alive is cardMounted / cardIn */
-  const shouldShowCard = !!update && !ignored && !cardDismissed
-  /**
-   * Keep the version as the green pill whenever an update exists (even while
-   * the float card is open). That way card `left: 0` and the pill share one
-   * left edge in the same stack — no shift when the card is dismissed.
-   */
-  const showUpdatePill = !!update
-
-  // Mount before fading in; keep the last frame for the exit transition.
-  useEffect(() => {
-    let raf2 = 0
-    let raf3 = 0
-    let exitTimer = 0
-    const raf1 = requestAnimationFrame(() => {
-      if (shouldShowCard) {
-        setCardMounted(true)
-        setCardIn(false)
-        raf2 = requestAnimationFrame(() => {
-          raf3 = requestAnimationFrame(() => setCardIn(true))
-        })
-      } else {
-        setCardIn(false)
-        exitTimer = window.setTimeout(() => setCardMounted(false), UPDATE_CARD_MS)
-      }
-    })
-    return () => {
-      cancelAnimationFrame(raf1)
-      cancelAnimationFrame(raf2)
-      cancelAnimationFrame(raf3)
-      window.clearTimeout(exitTimer)
-    }
-  }, [shouldShowCard])
-
-  const handleIgnore = () => {
-    /* Flag dismiss first so leave animation runs; ignore persists after */
-    setCardDismissed(true)
-    ignoreVersion()
-  }
-
-  const handleDialogOpenChange = (open: boolean) => {
-    setDialogOpen(open)
-    if (!open && update) {
-      /* Close Details → fade float card into version pill */
-      setCardDismissed(true)
-    }
-  }
-
-  const openUpdateDetails = () => {
-    if (!update) return
-    setDialogOpen(true)
-  }
+  const hasUpdate = update !== null && !ignored
+  const version = currentVersion === "—" ? currentVersion : `v${currentVersion.replace(/^v/, "")}`
+  const versionAction = t(hasUpdate ? "shell.updateAvailableAria" : "shell.versionDetails", { version })
+  const VersionIcon = hasUpdate ? ArrowUpCircle : Info
+  const versionContent = (
+    <>
+      <VersionIcon size={18} strokeWidth={1.65} aria-hidden="true" />
+      <span className="sd-nav-label sd-nav-meta">
+        <span className="sd-nav-edition">{EDITION_LABEL}</span>
+        <span>{version}</span>
+      </span>
+    </>
+  )
 
   return (
     <>
@@ -146,81 +99,23 @@ export function Sidebar() {
               </button>
             ))}
             <SidebarUtilities />
-            {/* Shared stack so float card + version pill share the same left edge */}
-            <div className="pm-shell-update-stack">
-              {cardMounted && update && (
-                <div
-                  className={cn(
-                    "pm-shell-update-card",
-                    cardIn && "is-in",
-                  )}
-                  role="status"
-                >
-                  <div className="pm-shell-update-card-head">
-                    <span className="pm-shell-update-label">{t("shell.update")}</span>
-                    <button
-                      type="button"
-                      onClick={handleIgnore}
-                      className="pm-shell-update-dismiss"
-                      title={t("shell.ignoreVersion")}
-                      aria-label={t("shell.ignoreVersion")}
-                    >
-                      <X className="h-3 w-3" strokeWidth={2} />
-                    </button>
-                  </div>
-                  <p className="pm-shell-update-ver">
-                    {update.latestVersion.startsWith("v")
-                      ? update.latestVersion
-                      : `v${update.latestVersion}`}
-                  </p>
-                  <p className="pm-shell-update-from">
-                    {t("shell.fromVersion", {
-                      version: update.currentVersion.replace(/^v/, ""),
-                    })}
-                  </p>
-                  <div className="pm-shell-update-actions">
-                    <button
-                      type="button"
-                      onClick={openUpdateDetails}
-                      className="pm-shell-update-link"
-                    >
-                      {t("common.details")}
-                      <ArrowUpRight className="h-3 w-3" strokeWidth={2} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleIgnore}
-                      className="pm-shell-update-ghost"
-                    >
-                      {t("common.ignore")}
-                    </button>
-                  </div>
-                </div>
-              )}
-              {showUpdatePill ? (
-                <button
-                  type="button"
-                  className="pm-shell-version-pill is-update is-in"
-                  onClick={openUpdateDetails}
-                  title={t("shell.updateAvailable")}
-                  aria-label={t("shell.updateAvailableAria", { version: currentVersion })}
-                >
-                  <ArrowUpCircle size={18} strokeWidth={1.65} aria-hidden="true" />
-                  <span className="pm-shell-version-pill-label sd-nav-meta">
-                    <span className="sd-nav-edition">{EDITION_LABEL}</span>
-                    <span>v{currentVersion}</span>
-                  </span>
-                </button>
-              ) : (
-                <div className="sd-nav-version" title={`SinkDuce · ${EDITION_LABEL} · v${currentVersion}`} aria-label={`SinkDuce ${EDITION_LABEL} v${currentVersion}`}>
-                  <Info size={18} strokeWidth={1.65} aria-hidden="true" />
-                  <span className="sd-nav-label sd-nav-meta">
-                    <span className="sd-nav-edition">{EDITION_LABEL}</span>
-                    <span>v{currentVersion}</span>
-                  </span>
-                </div>
-              )}
-            </div>
+            {update ? (
+              <button
+                type="button"
+                className={cn("sd-nav-item sd-nav-version", hasUpdate && "is-update")}
+                onClick={() => setDialogOpen(true)}
+                title={versionAction}
+                aria-label={versionAction}
+                aria-haspopup="dialog"
+                aria-expanded={dialogOpen}
+              >
+                {versionContent}
+              </button>
+            ) : (
+              <div className="sd-nav-version" title={`SinkDuce · ${EDITION_LABEL} · ${version}`}>
+                {versionContent}
+              </div>
+            )}
           </div>
         </aside>
       </div>
@@ -228,8 +123,9 @@ export function Sidebar() {
       {update && (
         <UpdateDialog
           open={dialogOpen}
-          onOpenChange={handleDialogOpenChange}
+          onOpenChange={setDialogOpen}
           update={update}
+          onIgnore={ignored ? undefined : ignoreVersion}
         />
       )}
     </>
