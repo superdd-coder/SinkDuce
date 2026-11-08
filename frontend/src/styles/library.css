@@ -5,7 +5,7 @@
 .sd-project-workspace .sd-project-header-action { width: 34px; height: 34px; min-width: 34px; padding: 0 !important; border-radius: 50%; background: var(--sd-field); position: relative; }
 .sd-project-header-action .pm-ingest-badge { position: absolute; right: -4px; top: -3px; font-size: 9px; padding: 2px 4px; }
 .sd-project-rail .pm-shell-collections-head { padding: 19px 16px 12px; }
-.sd-project-rail .pm-rail-title { font-size: 14px; font-weight: 550; color: var(--sd-ink); display: flex; align-items: center; gap: 8px; }
+.sd-project-rail .pm-rail-title { display: flex; align-items: center; gap: 8px; }
 .sd-project-count { font-size: 10px; font-weight: 450; color: var(--sd-muted); padding: 3px 6px; border-radius: 999px; background: var(--sd-field); }
 .sd-project-rail .pm-shell-collections-new { width: 32px; height: 32px; padding: 0; }
 .sd-library-search { height: 36px; display: flex; align-items: center; gap: 8px; border-radius: 999px; background: var(--sd-field); padding: 0 12px; color: var(--sd-muted); min-width: 0; }

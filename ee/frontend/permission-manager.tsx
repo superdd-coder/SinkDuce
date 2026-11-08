@@ -1,19 +1,7 @@
-/**
- * 「权限管理」大弹窗（RBAC 阶段 6）。
- *
- * 两个 tab（用户 2026-09-16 定案）：
- * 1. **角色** —— 左 rail 角色列表 + 右面板权限矩阵；
- * 2. **权限规则** —— meeting / hot_words / people 三份领域 ACL。
- *
- * 刻意不含：三域的模块开关（不存在，它们的 read 档就是"能否访问"）、每库 ACL
- * （在各库自己的设置里）。
- *
- * 形态复用现成配方（pm-settings-hw-dialog + 左 rail 右面板），与 PeopleManager /
- * HotWordsManager 同一骨架，零新 CSS 骨架。
- */
+/* Workspace roles and the meeting, hot-word, and people permission rules. */
 
-import { useCallback, useEffect, useState } from "react"
-import { Loader2, Lock, Plus, Trash2 } from "lucide-react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { Check, Loader2, Lock, Plus, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -26,7 +14,6 @@ import {
   DialogKicker,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import {
   createRole,
@@ -41,8 +28,8 @@ import {
   type RoleInfo,
 } from "@/api/client"
 import { formatApiError } from "@/api/http"
-import { cn } from "@/lib/utils"
 import { useT } from "@/i18n/use-t"
+import "./permission-manager.css"
 
 /** 与后端 roles.ALL_MODULES 对应（顺序即展示顺序）。 */
 const MODULE_KEYS = ["chat", "database", "recall", "tasks", "settings"] as const
@@ -80,6 +67,7 @@ export function PermissionManagerDialog({
   isLocal,
 }: PermissionManagerDialogProps) {
   const t = useT()
+  const rolesTab = useRef<HTMLButtonElement>(null)
   const [roles, setRoles] = useState<RoleInfo[]>([])
   const [catalogue, setCatalogue] = useState<CapabilityCatalogue | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -126,7 +114,8 @@ export function PermissionManagerDialog({
   }, [open, refresh, loadDomains])
 
   const selected = roles.find((r) => r.id === selectedId) ?? null
-  const readOnly = !selected || !selected.editable
+  const readOnly = !selected?.editable
+  const roleLocked = readOnly || saving
 
   const patchSelected = (patch: Partial<RoleInfo>) => {
     if (!selectedId) return
@@ -202,220 +191,193 @@ export function PermissionManagerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className={cn(
-          "pm-dialog pm-dialog--silk pm-settings-hw-dialog",
-          "sm:max-w-6xl h-[80vh]",
-          "!animate-none data-open:!animate-none data-closed:!animate-none",
-        )}
-      >
-        <DialogHeader className="shrink-0">
+      <DialogContent className="pm-permissions-dialog" initialFocus={rolesTab}>
+        <DialogHeader>
           <DialogKicker>{t("nav.settings")}</DialogKicker>
-          <DialogTitle>{t("permissions.title")}<HelpHint label={t("permissions.tabRules")}>{t("permissions.rulesHint")}</HelpHint></DialogTitle>
+          <DialogTitle>
+            {t("permissions.title")}
+            <HelpHint label={t("permissions.tabRules")}>{t("permissions.rulesHint")}</HelpHint>
+          </DialogTitle>
         </DialogHeader>
 
-        <Tabs defaultValue="roles" className="flex flex-col flex-1 min-h-0">
-          <TabsList className="shrink-0 px-1">
-            <TabsTrigger value="roles">{t("permissions.tabRoles")}</TabsTrigger>
+        <Tabs defaultValue="roles" className="pm-permissions-tabs">
+          <TabsList>
+            <TabsTrigger value="roles" ref={rolesTab}>{t("permissions.tabRoles")}</TabsTrigger>
             <TabsTrigger value="rules">{t("permissions.tabRules")}</TabsTrigger>
           </TabsList>
 
-          {/* ── Tab 1：角色 ── */}
-          <TabsContent value="roles" className="flex-1 min-h-0">
-            <div className="pm-settings-hw h-full">
-              {/* 左 rail：角色列表 */}
-              <div className="pm-settings-hw-rail">
-                <div className="pm-settings-hw-rail-head">
-                  <span className="pm-label text-[var(--pm-ink)]">
-                    {t("permissions.roles")}
-                  </span>
-                  <span className="pm-settings-hw-count">{roles.length}</span>
-                </div>
-                <ScrollArea className="flex-1 min-h-0">
-                  <div className="pm-settings-hw-lib-list">
-                    {roles.map((role) => (
-                      <button
-                        key={role.id}
-                        type="button"
-                        onClick={() => setSelectedId(role.id)}
-                        className={cn(
-                          "pm-settings-hw-lib",
-                          role.id === selectedId && "is-on",
-                        )}
-                      >
-                        <span className="pm-settings-hw-lib-name">
-                          {role.builtin && (
-                            <Lock className="inline size-3 opacity-50" strokeWidth={1.75} />
-                          )}{" "}
-                          {role.name}
-                        </span>
-                        {role.key_count > 0 && (
-                          <span className="pm-settings-hw-count">{role.key_count}</span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </ScrollArea>
-                <div className="p-2">
+          <TabsContent value="roles" className="pm-permissions-tab">
+            <div className="pm-permissions-roles">
+              <aside className="pm-permissions-rail" aria-label={t("permissions.roles")}>
+                <div className="pm-permissions-rail-head">
+                  <h3>{t("permissions.roles")}</h3>
                   <Button
-                    variant="ghost"
-                    size="sm"
-                    className="w-full justify-start gap-1.5"
+                    variant="secondary"
+                    size="icon-sm"
+                    title={t("permissions.newRole")}
+                    aria-label={t("permissions.newRole")}
                     onClick={() => void handleCreateRole()}
                   >
-                    <Plus className="size-3.5" strokeWidth={1.75} />
-                    {t("permissions.newRole")}
+                    <Plus aria-hidden />
                   </Button>
                 </div>
-              </div>
+                <div className="pm-permissions-role-list">
+                  {roles.map((role) => (
+                    <button
+                      key={role.id}
+                      type="button"
+                      aria-pressed={role.id === selectedId}
+                      className="pm-permissions-role"
+                      onClick={() => setSelectedId(role.id)}
+                    >
+                      {role.builtin && <Lock size={13} aria-hidden />}
+                      <span title={role.name}>{role.name}</span>
+                      {role.key_count > 0 && <small>{role.key_count}</small>}
+                    </button>
+                  ))}
+                </div>
+              </aside>
 
-              {/* 右面板：权限矩阵 */}
-              <div className="pm-settings-hw-main">
-                {loading ? (
-                  <div className="flex h-full items-center justify-center">
-                    <Loader2 className="size-5 animate-spin opacity-50" />
-                  </div>
-                ) : !selected ? (
-                  <div className="flex h-full items-center justify-center text-sm opacity-60">
-                    {t("permissions.pickRole")}
+              <div className="pm-permissions-pane">
+                {loading || !selected ? (
+                  <div className="pm-permissions-empty" role="status">
+                    {loading ? <Loader2 className="size-5 animate-spin" aria-label={t("common.loading")} /> : t("permissions.pickRole")}
                   </div>
                 ) : (
-                  <ScrollArea className="h-full">
-                    <div className="space-y-6 p-5">
-                      <div className="space-y-1.5">
-                        <label className="pm-label">{t("permissions.roleName")}</label>
-                        <Input
-                          value={selected.name}
-                          disabled={readOnly}
-                          onChange={(e) => patchSelected({ name: e.target.value })}
-                        />
-                        {!selected.editable && (
-                          <p className="text-xs opacity-60">
-                            {t("permissions.builtinHint")}
-                          </p>
+                  <>
+                    <div className="pm-permissions-scroll pm-permissions-role-body">
+                      <section className="pm-permissions-card pm-permissions-role-summary">
+                        {readOnly ? (
+                          <>
+                            <h3>{selected.name}</h3>
+                            <p><Lock size={13} aria-hidden />{t("permissions.builtinHint")}</p>
+                          </>
+                        ) : (
+                          <label className="pm-permissions-role-field">
+                            <span>{t("permissions.roleName")}</span>
+                            <Input
+                              value={selected.name}
+                              disabled={saving}
+                              onChange={(e) => patchSelected({ name: e.target.value })}
+                            />
+                          </label>
                         )}
-                      </div>
-
-                      <section className="space-y-2">
-                        <h4 className="pm-label">{t("permissions.modules")}</h4>
-                        {MODULE_KEYS.map((key) => (
-                          <CheckRow
-                            key={key}
-                            label={t(`permissions.module.${key}`)}
-                            checked={selected.modules[key] ?? false}
-                            disabled={readOnly}
-                            onChange={(v) =>
-                              patchSelected({
-                                modules: { ...selected.modules, [key]: v },
-                              })
-                            }
-                          />
-                        ))}
                       </section>
 
-                      <section className="space-y-2">
-                        <h4 className="pm-label">{t("permissions.capabilities")}</h4>
-                        {CAP_KEYS.map((key) => {
-                          const ownerOnly = catalogue?.owner_only_capabilities.includes(key)
-                          // 「管钥匙」只有本机能授予（UI 置灰；后端同样强制）
-                          const disabled = readOnly || (ownerOnly && !isLocal)
-                          return (
+                      <div className="pm-permissions-groups">
+                        <section className="pm-permissions-card">
+                          <h3>{t("permissions.modules")}</h3>
+                          {MODULE_KEYS.map((key) => (
                             <CheckRow
                               key={key}
-                              label={
-                                ownerOnly
-                                  ? t("permissions.cap.localOnly")
-                                  : t(`permissions.cap.${key}`)
-                              }
-                              checked={selected.capabilities[key] ?? false}
-                              disabled={disabled}
-                              highlight={ownerOnly}
-                              onChange={(v) =>
-                                patchSelected({
-                                  capabilities: { ...selected.capabilities, [key]: v },
-                                })
-                              }
+                              label={t(`permissions.module.${key}`)}
+                              checked={selected.modules[key] ?? false}
+                              disabled={roleLocked}
+                              onChange={(value) => patchSelected({
+                                modules: { ...selected.modules, [key]: value },
+                              })}
                             />
-                          )
-                        })}
-                      </section>
+                          ))}
+                        </section>
 
-                      <div className="flex items-center gap-2 pt-2">
-                        <Button
-                          size="sm"
-                          disabled={readOnly || saving}
-                          onClick={() => void handleSaveRole()}
-                        >
-                          {saving && <Loader2 className="size-3.5 animate-spin" />}
-                          {t("common.save")}
-                        </Button>
+                        <section className="pm-permissions-card">
+                          <h3>{t("permissions.capabilities")}</h3>
+                          {CAP_KEYS.map((key) => {
+                            const ownerOnly = catalogue?.owner_only_capabilities.includes(key)
+                            return (
+                              <CheckRow
+                                key={key}
+                                label={t(`permissions.cap.${key}`)}
+                                badge={ownerOnly ? t("permissions.cap.localOnly") : undefined}
+                                checked={selected.capabilities[key] ?? false}
+                                disabled={roleLocked || (ownerOnly && !isLocal)}
+                                onChange={(value) => patchSelected({
+                                  capabilities: { ...selected.capabilities, [key]: value },
+                                })}
+                              />
+                            )
+                          })}
+                        </section>
+                      </div>
+                    </div>
+                    <footer className="pm-permissions-footer">
+                      {!readOnly && (
                         <Button
                           variant="ghost"
                           size="sm"
-                          disabled={readOnly}
-                          className="gap-1.5"
+                          className="pm-permissions-delete"
+                          disabled={saving}
                           onClick={() => void handleDeleteRole()}
                         >
-                          <Trash2 className="size-3.5" strokeWidth={1.75} />
-                          {t("common.delete")}
+                          <Trash2 aria-hidden />{t("common.delete")}
                         </Button>
-                      </div>
-                    </div>
-                  </ScrollArea>
+                      )}
+                      <Button size="lg" disabled={roleLocked} onClick={() => void handleSaveRole()}>
+                        {saving && <Loader2 className="animate-spin" aria-hidden />}
+                        {t("common.save")}
+                      </Button>
+                    </footer>
+                  </>
                 )}
               </div>
             </div>
           </TabsContent>
 
-          {/* ── Tab 2：权限规则 ── */}
-          <TabsContent value="rules" className="flex-1 min-h-0">
-            <ScrollArea className="h-full">
-              <div className="space-y-7 p-5">
-                {domains &&
-                  Object.entries(DOMAIN_META).map(([domain, meta]) => (
-                    <section key={domain} className="space-y-2">
-                      <h4 className="pm-label">{t(`permissions.domain.${domain}`)}</h4>
-                      {(domainTiers[domain] ?? meta.tiers).map((tier) => (
-                        <div key={tier} className="space-y-1">
-                          <span className="text-xs opacity-70">
-                            {t(`permissions.tier.${domain}.${tier}`)}
-                          </span>
-                          <div className="flex flex-wrap gap-1.5">
-                            {pickableRoles.map((role) => {
-                              const on = (domains[domain]?.[tier] ?? []).includes(role.id)
-                              return (
-                                <button
-                                  key={role.id}
-                                  type="button"
-                                  onClick={() => toggleTierRole(domain, tier, role.id)}
-                                  className={cn(
-                                    "rounded-full border px-2.5 py-0.5 text-xs transition-colors",
-                                    on
-                                      ? "border-transparent bg-[var(--ze-green)] text-white"
-                                      : "opacity-60 hover:opacity-100",
-                                  )}
-                                >
-                                  {role.name}
-                                </button>
-                              )
-                            })}
-                          </div>
-                        </div>
-                      ))}
-                    </section>
-                  ))}
-                <div className="pt-1">
-                  <Button
-                    size="sm"
-                    disabled={!domains || domainSaving}
-                    onClick={() => void handleSaveDomains()}
-                  >
-                    {domainSaving && <Loader2 className="size-3.5 animate-spin" />}
-                    {t("common.save")}
-                  </Button>
-                </div>
+          <TabsContent value="rules" className="pm-permissions-tab">
+            <div className="pm-permissions-pane">
+              <div className="pm-permissions-scroll pm-permissions-rules">
+                {domains && (
+                  <table className="pm-permissions-matrix" aria-label={t("permissions.tabRules")}>
+                    <thead>
+                      <tr>
+                        <th scope="col">{t("permissions.rule")}</th>
+                        {pickableRoles.map((role) => <th scope="col" key={role.id}>{role.name}</th>)}
+                      </tr>
+                    </thead>
+                    {Object.entries(DOMAIN_META).map(([domain, meta]) => (
+                      <tbody key={domain}>
+                        <tr className="pm-permissions-domain">
+                          <th scope="rowgroup" colSpan={pickableRoles.length + 1}>
+                            {t(`permissions.domain.${domain}`)}
+                          </th>
+                        </tr>
+                        {(domainTiers[domain] ?? meta.tiers).map((tier) => {
+                          const label = t(`permissions.tier.${domain}.${tier}`)
+                          return (
+                            <tr className="pm-permissions-rule" key={tier}>
+                              <th scope="row">
+                                {label}
+                                {domain === "meeting" && meta.tiers.includes(tier) && (
+                                  <small>{t(`permissions.meetingRuleDetail.${tier}`)}</small>
+                                )}
+                              </th>
+                              {pickableRoles.map((role) => (
+                                <td key={role.id}>
+                                  <label className="pm-permissions-rule-check">
+                                    <PermissionCheck
+                                      label={`${label} · ${role.name}`}
+                                      checked={(domains[domain]?.[tier] ?? []).includes(role.id)}
+                                      disabled={domainSaving}
+                                      onChange={() => toggleTierRole(domain, tier, role.id)}
+                                    />
+                                  </label>
+                                </td>
+                              ))}
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    ))}
+                  </table>
+                )}
               </div>
-            </ScrollArea>
+              <footer className="pm-permissions-footer">
+                <Button size="lg" disabled={!domains || domainSaving} onClick={() => void handleSaveDomains()}>
+                  {domainSaving && <Loader2 className="animate-spin" aria-hidden />}
+                  {t("common.save")}
+                </Button>
+              </footer>
+            </div>
           </TabsContent>
         </Tabs>
       </DialogContent>
@@ -423,40 +385,34 @@ export function PermissionManagerDialog({
   )
 }
 
-function CheckRow({
-  label,
-  checked,
-  disabled,
-  highlight,
-  onChange,
-}: {
-  label: string
+interface PermissionCheckProps {
+  label?: string
   checked: boolean
   disabled?: boolean
-  highlight?: boolean
-  onChange: (v: boolean) => void
-}) {
+  onChange: (value: boolean) => void
+}
+
+function PermissionCheck({ label, checked, disabled, onChange }: PermissionCheckProps) {
   return (
-    <label
-      className={cn(
-        "flex cursor-pointer items-center gap-2 text-sm",
-        disabled && "cursor-not-allowed opacity-50",
-      )}
-    >
+    <span className="pm-permissions-check">
       <input
         type="checkbox"
+        aria-label={label}
         checked={checked}
         disabled={disabled}
-        onChange={(e) => onChange(e.target.checked)}
-        className="size-3.5 accent-[var(--ze-green)]"
+        onChange={(event) => onChange(event.target.checked)}
       />
+      <Check size={12} strokeWidth={2.25} aria-hidden />
+    </span>
+  )
+}
+
+function CheckRow({ label, badge, ...check }: PermissionCheckProps & { label: string; badge?: string }) {
+  return (
+    <label className="pm-permissions-choice">
+      <PermissionCheck {...check} />
       <span>{label}</span>
-      {highlight && (
-        <span className="text-[10px] uppercase tracking-wide opacity-50">
-          {/* 「管钥匙」的注记：只有本机能授予 */}
-          local-only
-        </span>
-      )}
+      {badge && <small>{badge}</small>}
     </label>
   )
 }

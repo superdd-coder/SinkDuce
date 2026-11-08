@@ -31,6 +31,7 @@ interface UpdateDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   update: UpdateInfo
+  onIgnore?: () => void
 }
 
 /** Parse markdown-ish release body into plain text highlights. */
@@ -44,12 +45,13 @@ function formatReleaseBody(body: string): string {
     .slice(0, 2000)
 }
 
-export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) {
+export function UpdateDialog({ open, onOpenChange, update, onIgnore }: UpdateDialogProps) {
   const t = useT()
   const [copied, setCopied] = useState(false)
   const [updaterStatus, setUpdaterStatus] = useState<DesktopUpdateStatus | null>(null)
   const [restarting, setRestarting] = useState(false)
   const pollRef = useRef<number | null>(null)
+  const closeButton = useRef<HTMLButtonElement>(null)
 
   const updaterReady = update.desktop && desktopUpdaterAvailable()
 
@@ -170,6 +172,7 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
           "!animate-none data-open:!animate-none data-closed:!animate-none",
         )}
         overlayClassName="pm-dialog-overlay--silk"
+        initialFocus={closeButton}
       >
         <DialogHeader className="pm-update-dialog-head shrink-0">
           <DialogKicker>{t("update.release")}</DialogKicker>
@@ -280,9 +283,25 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
             <p className="pm-update-foot-note">{t("update.alreadyLatest")}</p>
           ) : null}
           <div className="pm-update-foot-actions">
+            {onIgnore && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="pm-update-foot-link pm-update-foot-ignore"
+                disabled={updaterBusy}
+                onClick={() => {
+                  onIgnore()
+                  onOpenChange(false)
+                }}
+              >
+                {t("shell.ignoreVersion")}
+              </Button>
+            )}
             {update.desktop ? (
               <>
                 <Button
+                  ref={closeButton}
                   type="button"
                   variant="ghost"
                   size="sm"
@@ -357,6 +376,7 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
               </>
             ) : (
               <Button
+                ref={closeButton}
                 type="button"
                 size="sm"
                 className="pm-update-foot-close"

@@ -48,7 +48,7 @@ fn preferred_ports(enterprise: bool) -> &'static [u16] {
     }
 }
 
-/// Monochrome menubar template icon (lake silhouette, black + alpha).
+/// Monochrome menubar template icon (rounded diamond, black + alpha).
 /// icon_as_template(true) lets macOS recolour it for light/dark menubars.
 const TRAY_TEMPLATE_PNG: &[u8] = include_bytes!("../icons/tray-template.png");
 

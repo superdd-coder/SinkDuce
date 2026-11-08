@@ -573,8 +573,8 @@ final class Capture {
         // helper cannot show. Never block GET /pcm on it — mic-only first.
         controlQueue.async { [weak self] in
             guard let self, self.attempts.isCurrent(attempt) else { return }
-            // 授权请求已在 App 启动时发出（见 SysAudioMain.main）——录制
-            // 路径只做静默检查，绝不弹窗打断录制。
+            // Use ScreenCaptureKit with an existing grant. Otherwise,
+            // capture system audio through the Core Audio process tap.
             let pf = CGPreflightScreenCaptureAccess()
             FileHandle.standardError.write(Data("sysaudio: sck preflight=\(pf)\n".utf8))
             guard pf else {
@@ -1349,10 +1349,8 @@ struct SysAudioMain {
         }
         fputs("sysaudio: listening 127.0.0.1:\(port)\n", stderr)
 
-        // 用户已拍板启用 SCK 新路线（2026-09-24）：App 启动即请求屏幕录制
-        // 授权（若未授予），不要等到第一次录音时才弹——那时弹窗会打断录制
-        // 流程。macOS 对同一进程只弹一次；用户在系统设置打开开关并重启
-        // App 后，SCK 自动生效（录制路径只做静默检查）。
+        // Launch and watchdog recovery only start the local audio service.
+        // Capture begins when a recording client connects.
         let acceptQueue = DispatchQueue(label: "sinkduce.sysaudio.accept", attributes: .concurrent)
         acceptQueue.async {
             while true {
@@ -1361,12 +1359,6 @@ struct SysAudioMain {
                 acceptQueue.async {
                     handleClient(fd: cfd)
                 }
-            }
-        }
-        // Health must remain available while the user considers the sheet.
-        DispatchQueue.main.async {
-            if !CGPreflightScreenCaptureAccess() {
-                _ = CGRequestScreenCaptureAccess()
             }
         }
         // A detached helper must not outlive its spawner: an orphan keeps its

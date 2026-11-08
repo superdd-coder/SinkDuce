@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a macOS Dock icon: white squircle + centered wordmark.
+"""Build the desktop icons and macOS menu bar template from the shared line mark.
 
 A full-bleed opaque square becomes a square glass plate on Tahoe. An
 inset 824/1024 squircle leaves a transparent margin that Tahoe also
@@ -17,15 +17,15 @@ from pathlib import Path
 from PIL import Image, ImageChops
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "frontend" / "public" / "favicon.png"
+# Rasterized from SinkDuce.icon/Assets/line-mark.svg for older build hosts.
+SRC = ROOT / "desktop" / "icons" / "line-mark.png"
 ICONS = ROOT / "desktop" / "tauri" / "src-tauri" / "icons"
 
 # Full-canvas squircle. Tahoe treats leftover margin as a square glass plate.
 MAC_ICON_SHAPE_RATIO = 1.0
-# Squircle plate fill — brand cream (v42 米白底), was hardcoded white
-PLATE_FILL_RGB = (247, 245, 236)
-# Orb float margin on the plate — 1.0 = full bleed (clips diamond corners)
-MARK_PLATE_RATIO = 0.80
+PLATE_FILL_RGB = (255, 255, 255)
+# Match the mark scale in SinkDuce.icon.
+MARK_PLATE_RATIO = 0.71
 SQUIRCLE_EXPONENT = 5.0
 
 ICONSET_SIZES = {
@@ -135,32 +135,44 @@ def compose(crop: Image.Image, canvas_size: int, src_w: int) -> Image.Image:
     return _blank_transparent_rgb(plate)
 
 
+def compose_tray(crop: Image.Image) -> Image.Image:
+    """Fit the black template mark to 16pt inside the native 18pt slot."""
+    size = 72
+    ink = crop.getchannel("A")
+    ink.thumbnail((64, 64), Image.LANCZOS)
+    alpha = Image.new("L", (size, size))
+    alpha.paste(ink, ((size - ink.width) // 2, (size - ink.height) // 2))
+    template = Image.new("RGBA", alpha.size)
+    template.putalpha(alpha)
+    return template
+
+
 def main() -> None:
     if not SRC.is_file():
         raise SystemExit(f"missing logo: {SRC}")
-    src = Image.open(SRC).convert("RGBA")
+    with Image.open(SRC) as source:
+        src = source.convert("RGBA")
     crop = _ink_crop(src)
     ICONS.mkdir(parents=True, exist_ok=True)
 
-    master = compose(crop, 1024, src.size[0])
-    master.save(ICONS / "icon-master.png")
-
-    for name, size in TAURI_PNGS.items():
-        compose(crop, size, src.size[0]).save(ICONS / name)
-
-    ico_sizes = [16, 32, 48, 64, 128, 256]
-    ico_images = [compose(crop, s, src.size[0]) for s in ico_sizes]
-    ico_images[0].save(
-        ICONS / "icon.ico",
-        sizes=[(s, s) for s in ico_sizes],
-        append_images=ico_images[1:],
-    )
-
     with tempfile.TemporaryDirectory() as tmp:
+        compose(crop, 1024, src.width).save(ICONS / "icon-master.png")
+        compose_tray(crop).save(ICONS / "tray-template.png")
+        for name, size in TAURI_PNGS.items():
+            compose(crop, size, src.width).save(ICONS / name)
+
+        ico_sizes = [16, 32, 48, 64, 128, 256]
+        ico_images = [compose(crop, size, src.width) for size in ico_sizes]
+        ico_images[0].save(
+            ICONS / "icon.ico",
+            sizes=[(size, size) for size in ico_sizes],
+            append_images=ico_images[1:],
+        )
+
         iconset = Path(tmp) / "SinkDuce.iconset"
         iconset.mkdir()
         for name, size in ICONSET_SIZES.items():
-            compose(crop, size, src.size[0]).save(iconset / name)
+            compose(crop, size, src.width).save(iconset / name)
         icns = ICONS / "icon.icns"
         subprocess.check_call(["iconutil", "-c", "icns", str(iconset), "-o", str(icns)])
         shutil.copy2(icns, ICONS / "AppIcon.icns")

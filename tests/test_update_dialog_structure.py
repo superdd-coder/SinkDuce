@@ -31,7 +31,7 @@ def test_update_check_attaches_download_url_and_desktop_flag():
     assert "shouldOfferUpdate" in text
     assert "detectDesktopClient" in text
     assert "mock_update" in text
-    assert "getHealth" in text
+    assert "getLocalHealth" in text
     assert "downloadUrl" in text
     assert "desktop" in text
 
@@ -43,7 +43,7 @@ def test_dialog_branches_desktop_download_vs_docker_compose():
     assert "desktopDmgAssetName" in text
     assert 't("update.desktopHelp"' in text
     assert 't("update.downloadVersion"' in text
-    assert "git pull &&" in text
     assert "docker compose pull" in text
+    assert "docker compose up -d" in text
     en = (ROOT / "frontend" / "src" / "i18n" / "en.json").read_text(encoding="utf-8")
     assert "Cmd+Q" in en

@@ -19,7 +19,7 @@
         "dragDropEnabled": false,
         "hiddenTitle": true,
         "titleBarStyle": "Transparent",
-        "backgroundColor": "#f6f5f1",
+        "backgroundColor": "#e9e9e9",
         "theme": "Light",
         "minWidth": 1120,
         "minHeight": 640

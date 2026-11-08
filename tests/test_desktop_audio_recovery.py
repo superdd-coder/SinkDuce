@@ -23,6 +23,13 @@ def test_packager_signs_helpers_with_existing_edition_identity():
     assert signing < script.index('codesign --force --deep --sign - "$APP"')
 
 
+def test_native_helper_does_not_request_screen_recording():
+    source = (ROOT / "desktop/sysaudio/main.swift").read_text()
+    startup = source.split("struct SysAudioMain {", 1)[1]
+    assert "CGPreflightScreenCaptureAccess(" not in startup
+    assert "CGRequestScreenCaptureAccess(" not in source
+
+
 @pytest.fixture
 def desktop_client(monkeypatch):
     from src.api.routes import desktop

@@ -68,7 +68,7 @@ echo "== 4/5 Tauri shell =="
   if [[ ! -d node_modules ]]; then
     pnpm install
   fi
-  echo "→ generating macOS squircle icons from frontend/public/favicon.png"
+  echo "→ generating desktop icons and menu bar template from the line mark"
   PY=""
   for c in "$ROOT/desktop/.cache/python/bin/python3.12" python3.12 python3.11 python3.10 python3; do
     if command -v "$c" >/dev/null 2>&1; then PY="$c"; break; fi
