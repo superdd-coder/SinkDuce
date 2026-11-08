@@ -278,8 +278,11 @@ export function CollectionList({
           {query && <button className="sd-search-clear" onClick={() => setQuery("")} aria-label={t("fileBrowser.clearSearch")}><X size={14} /></button>}
         </div>
 
-        {/* Native scroll + edge fades — same path as Chat Sessions / Meeting */}
-        <div className="pm-rail-list-shell">
+        <div
+          className="pm-rail-list-shell"
+          data-fade-top={edgeFade.top || undefined}
+          data-fade-bottom={edgeFade.bottom || undefined}
+        >
           <div ref={listRef} className="pm-shell-col-list">
             {indicator && (
               <div
@@ -324,20 +327,6 @@ export function CollectionList({
               </div>
             )}
           </div>
-          <div
-            className={cn(
-              "pm-rail-edge-fade pm-rail-edge-fade--top",
-              edgeFade.top && "is-visible",
-            )}
-            aria-hidden
-          />
-          <div
-            className={cn(
-              "pm-rail-edge-fade pm-rail-edge-fade--bottom",
-              edgeFade.bottom && "is-visible",
-            )}
-            aria-hidden
-          />
         </div>
       </div>
     </aside>

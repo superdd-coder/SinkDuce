@@ -618,7 +618,11 @@ export function MeetingList({
           />
         </div>
 
-        <div className="pm-rail-list-shell">
+        <div
+          className="pm-rail-list-shell"
+          data-fade-top={edgeFade.top || undefined}
+          data-fade-bottom={edgeFade.bottom || undefined}
+        >
           <div ref={listRef} className="pm-meeting-rail-list">
             {activeRowKey && (
               <div
@@ -679,20 +683,6 @@ export function MeetingList({
               </div>
             )}
           </div>
-          <div
-            className={cn(
-              "pm-rail-edge-fade pm-rail-edge-fade--top",
-              edgeFade.top && "is-visible",
-            )}
-            aria-hidden
-          />
-          <div
-            className={cn(
-              "pm-rail-edge-fade pm-rail-edge-fade--bottom",
-              edgeFade.bottom && "is-visible",
-            )}
-            aria-hidden
-          />
         </div>
       </div>
 

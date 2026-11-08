@@ -35,7 +35,7 @@ Source code is available under **AGPL-3.0-or-later**, including role and access 
 
 ### macOS (Apple Silicon)
 
-1. Download **[SinkDuce v1.7.1 for Apple Silicon](https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/SinkDuce-macos-arm64-v1.7.1.dmg)** ([SHA-256](https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/SinkDuce-macos-arm64-v1.7.1.dmg.sha256)).
+1. Download **[SinkDuce v1.7.2 for Apple Silicon](https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/SinkDuce-macos-arm64-v1.7.2.dmg)** ([SHA-256](https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/SinkDuce-macos-arm64-v1.7.2.dmg.sha256)).
 2. Open the disk image and drag **SinkDuce** into Applications.
 3. The app is ad-hoc signed and is not notarized. If macOS blocks it, allow it in **System Settings → Privacy & Security → Open Anyway**, then confirm.
 4. After an update: **Cmd+Q** then reopen — the red window button only hides to the menu bar.

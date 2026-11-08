@@ -149,7 +149,11 @@ export function SessionSidebar({ collapsed = false }: { collapsed?: boolean }) {
             </button>
           </div>
 
-          <div className="pm-rail-list-shell">
+          <div
+            className="pm-rail-list-shell"
+            data-fade-top={edgeFade.top || undefined}
+            data-fade-bottom={edgeFade.bottom || undefined}
+          >
             <div ref={listRef} className="pm-chat-sessions-list">
               {sessionId && (
                 <div
@@ -243,20 +247,6 @@ export function SessionSidebar({ collapsed = false }: { collapsed?: boolean }) {
                 )
               })}
             </div>
-            <div
-              className={cn(
-                "pm-rail-edge-fade pm-rail-edge-fade--top",
-                edgeFade.top && "is-visible",
-              )}
-              aria-hidden
-            />
-            <div
-              className={cn(
-                "pm-rail-edge-fade pm-rail-edge-fade--bottom",
-                edgeFade.bottom && "is-visible",
-              )}
-              aria-hidden
-            />
           </div>
         </div>
       </aside>

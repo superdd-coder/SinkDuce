@@ -1556,7 +1556,8 @@
     "liveCaptionsMeta": "实时字幕",
     "autoScroll": "自动滚动",
     "panel": "侧栏",
-    "building": "生成中…",
+    "building": "正在准备章节…",
+    "studioDisplayFailed": "暂时无法显示这场会议。",
     "browse": "浏览",
     "streamingWatch": "正在流式输出 — 点击查看",
     "ingestedOpen": "已入库 · 打开章节",
@@ -2455,7 +2456,7 @@
     "roleSaved": "角色已保存",
     "roleDeleted": "角色已删除",
     "rulesSaved": "权限规则已保存",
-    "rulesHint": "会议 / 热词 / 人物三份名单。每份的「读取」档决定谁能访问该模块，其余档位是进去之后能做什么。Owner 与 Admin 始终拥有全部权限，所以不出现在任何名单里——下面的勾选是给「其他角色」的。知识库级别的权限在各自库的设置里配置。",
+    "rulesHint": "选择角色，设置它在会议、热词和人物中的权限。查看权限决定能否访问，其他权限决定可执行的操作。Owner 和 Admin 始终拥有全部权限。知识库的权限在各自库的设置里配置。",
     "cardDesc": "创建角色并分配权限；知识库级别的权限在各自的库设置里配置。",
     "manage": "管理",
     "module": {
@@ -2474,6 +2475,9 @@
       "localOnly": "仅限本机"
     },
     "rule": "权限",
+    "rulesRole": "按角色筛选规则",
+    "compareRoles": "对照角色",
+    "noRuleRoles": "暂无可配置规则的角色",
     "domain": {
       "meeting": "会议",
       "hot_words": "热词",

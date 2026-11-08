@@ -1556,7 +1556,8 @@
     "liveCaptionsMeta": "live captions",
     "autoScroll": "auto-scroll",
     "panel": "Panel",
-    "building": "Building…",
+    "building": "Preparing sections…",
+    "studioDisplayFailed": "Could not display this meeting.",
     "browse": "Browse",
     "streamingWatch": "Streaming — click to watch",
     "ingestedOpen": "Ingested · open section",
@@ -2455,7 +2456,7 @@
     "roleSaved": "Role saved",
     "roleDeleted": "Role deleted",
     "rulesSaved": "Permission rules saved",
-    "rulesHint": "Three lists: meetings / hot words / people. The Read tier of each decides who can access that module; other tiers decide what they can do inside. Owner and Admin always hold every permission, so they never appear in any list — the ticks below are for the other roles. Collection-level permissions live in each collection's own settings.",
+    "rulesHint": "Choose a role to set its meeting, hot word, and people permissions. Read grants access, and the other permissions control what the role can do. Owner and Admin always have full access. Manage collection permissions in each collection’s settings.",
     "cardDesc": "Create roles and assign permissions. Collection-level permissions live in each collection's own settings.",
     "manage": "Manage",
     "module": {
@@ -2474,6 +2475,9 @@
       "localOnly": "Local only"
     },
     "rule": "Permission",
+    "rulesRole": "Filter rules by role",
+    "compareRoles": "Compare roles",
+    "noRuleRoles": "No roles with configurable rules",
     "domain": {
       "meeting": "Meetings",
       "hot_words": "Hot words",

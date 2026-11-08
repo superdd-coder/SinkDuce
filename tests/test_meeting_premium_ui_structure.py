@@ -155,7 +155,8 @@ def test_meeting_list_uses_rail_and_compact_new():
     assert "pm-meeting-rail-new" not in src
     # Scroll edge fades at top/bottom of list
     assert "pm-rail-list-shell" in src
-    assert "pm-rail-edge-fade" in src
+    assert "data-fade-top={edgeFade.top || undefined}" in src
+    assert "data-fade-bottom={edgeFade.bottom || undefined}" in src
     assert "useScrollEdgeFade" in src
     # Uniform row height: 2-line title box (not 1-line vs 2-line jump)
     assert ".pm-meeting-rail .pm-chat-sess-name" in css

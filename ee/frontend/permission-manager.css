@@ -7,7 +7,9 @@
 }
 
 .pm-permissions-tabs { flex: 1; min-height: 0; gap: 14px; }
-.pm-permissions-tabs > [role="tablist"] { align-self: flex-start; flex: 0 0 auto; }
+.pm-permissions-toolbar { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; }
+.pm-permissions-toolbar > [role="tablist"] { flex: none; }
+.pm-permissions-rule-filter { flex: 0 1 240px; min-width: 0; }
 .pm-permissions-tab { min-height: 0; }
 
 .pm-permissions-roles {
@@ -117,15 +119,23 @@
 .pm-permissions-check svg { position: absolute; opacity: 0; pointer-events: none; }
 :is(.pm-permissions-role, .pm-permissions-check input):focus-visible { outline: 2px solid var(--sd-focus); outline-offset: 2px; }
 
-.pm-permissions-rules { padding: 0 14px 12px; border-radius: var(--sd-radius-card); background: var(--sd-surface-raised); }
-.pm-permissions-matrix { width: 100%; border-collapse: separate; border-spacing: 0; font: var(--type-ui); }
-.pm-permissions-matrix thead { position: sticky; top: 0; z-index: 1; background: var(--sd-surface-overlay); }
+.pm-permissions-rules {
+  /* The sticky header needs an opaque surface that matches the card. */
+  --pm-permissions-rules-surface: #fdfdfd;
+  padding: 0 14px 12px;
+  border-radius: var(--sd-radius-card);
+  background-color: var(--pm-permissions-rules-surface);
+}
+.dark .pm-permissions-rules { --pm-permissions-rules-surface: var(--sd-surface-raised); }
+.pm-permissions-matrix { width: 100%; table-layout: fixed; border-collapse: separate; border-spacing: 0; font: var(--type-ui); }
+.pm-permissions-matrix thead { position: sticky; top: 0; z-index: 1; background-color: var(--pm-permissions-rules-surface); }
 .pm-permissions-matrix th, .pm-permissions-matrix td { padding: 7px 12px; }
-.pm-permissions-matrix thead th { min-width: 88px; max-width: 148px; padding-block: 12px; color: var(--sd-muted); font: var(--type-label); overflow-wrap: anywhere; }
-.pm-permissions-matrix thead th:first-child { width: 100%; min-width: 215px; text-align: start; }
+.pm-permissions-matrix thead th { padding-block: 12px; color: var(--sd-muted); font: var(--type-label); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.pm-permissions-matrix thead th:first-child { text-align: start; }
+.pm-permissions-matrix thead th:not(:first-child) { width: clamp(68px, 15vw, 132px); }
 .pm-permissions-domain th { padding-top: 15px; color: var(--sd-ink); font: 550 14px/1.45 var(--type-font-ui); text-align: start; }
 .pm-permissions-matrix tbody + tbody .pm-permissions-domain th { padding-top: 20px; }
-.pm-permissions-rule th { color: var(--sd-text); font: 500 13px/1.4 var(--type-font-ui); text-align: start; border-radius: 10px 0 0 10px; }
+.pm-permissions-rule th { color: var(--sd-text); font: 500 13px/1.4 var(--type-font-ui); text-align: start; border-radius: 10px 0 0 10px; overflow-wrap: anywhere; }
 .pm-permissions-rule th small { display: block; margin-top: 2px; color: var(--sd-muted); font: var(--type-label); }
 .pm-permissions-rule td { text-align: center; }
 .pm-permissions-rule td:last-child { border-radius: 0 10px 10px 0; }
@@ -145,4 +155,7 @@
   .pm-permissions-role-list { display: flex; gap: 4px; }
   .pm-permissions-role { width: auto; min-width: 76px; }
   .pm-permissions-role + .pm-permissions-role { margin-top: 0; }
+  .pm-permissions-rules { padding-inline: 8px; }
+  .pm-permissions-matrix th, .pm-permissions-matrix td { padding-inline: 5px; }
+  .pm-permissions-matrix thead th:not(:first-child) { width: clamp(42px, 13vw, 70px); }
 }
