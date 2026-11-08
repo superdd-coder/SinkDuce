@@ -124,8 +124,7 @@
 }
 :is(.pm-settings-model-row, .pm-rail-row, .pm-all-files-row, .pm-files-list-row, .pm-chat-chunk-card,
     .pm-chat-source-row.is-kb, .pm-meeting-add-section-bp-item):hover { background: var(--sd-hover); box-shadow: none; }
-.pm-meeting-section-card:hover:not(:disabled):not(.is-active):not(.is-pending) { background: var(--sd-hover); }
-.pm-meeting-section-card.is-streaming { background: var(--sd-field); box-shadow: none; }
+.pm-meeting-section-card:hover:not(:disabled):not(.is-active) { background: var(--sd-hover); }
 .pm-chat-source-row.is-kb { box-shadow: none; }
 .pm-meeting-todos-row.is-on:hover:not(.is-done) { background: var(--sd-selected-hover) !important; box-shadow: none !important; }
 

@@ -116,6 +116,7 @@ export function MeetingQcFab({
   className?: string
 }) {
   const t = useT()
+  const launcherLabel = t(open ? "meeting.closeQuickQa" : "library.openQuickQa")
   const [hintVisible, setHintVisible] = useState(false)
   const [hintExiting, setHintExiting] = useState(false)
   const [hintMessage, setHintMessage] = useState(() => t(HINT_KEYS[0]))
@@ -178,9 +179,10 @@ export function MeetingQcFab({
           ref={btnRef}
           type="button"
           onClick={open ? onClose : onOpen}
-          className="relative ease-out quick-chat-btn pm-meeting-qc-fab-btn"
-          style={{ color: "var(--pm-green, #1A5E3D)", background: "transparent" }}
-          aria-label={open ? t("meeting.closeQuickQa") : t("library.openQuickQa")}
+          className="relative quick-chat-btn"
+          aria-label={launcherLabel}
+          title={launcherLabel}
+          aria-expanded={open}
         >
           <LogoMark className="qc-logo" flowing={open} />
         </button>

@@ -156,6 +156,7 @@
 }
 .sd-navigation {
   --sd-nav-width: 72px;
+  --sd-nav-close-delay: 0ms;
   --sd-label-opacity: 0;
   --sd-label-visibility: hidden;
   position: absolute;
@@ -170,7 +171,9 @@
   box-shadow: var(--sd-shadow-panel);
   backdrop-filter: blur(28px) saturate(1.05);
   -webkit-backdrop-filter: blur(28px) saturate(1.05);
-  transition: width 220ms cubic-bezier(.2,.8,.2,1), box-shadow 220ms ease;
+  transition:
+    width 220ms cubic-bezier(.2,.8,.2,1) var(--sd-nav-close-delay),
+    box-shadow 220ms ease var(--sd-nav-close-delay);
 }
 .sd-nav-brand { display: flex; align-items: center; gap: 9px; padding: 0 8px; height: 36px; min-height: 36px; margin-bottom: 35px; overflow: hidden; white-space: nowrap; }
 .sd-nav-brand>img { width: 32px; height: 32px; flex: 0 0 32px; object-fit: contain; }
@@ -191,7 +194,7 @@
 .sd-nav-item:focus-visible { outline: 2px solid var(--sd-focus); outline-offset: -2px; }
 .sd-nav-brand>span, .sd-nav-label {
   flex-shrink: 0; opacity: var(--sd-label-opacity); visibility: var(--sd-label-visibility);
-  transition: opacity 140ms ease, visibility 140ms ease;
+  transition: opacity 140ms ease var(--sd-nav-close-delay), visibility 140ms ease var(--sd-nav-close-delay);
 }
 .sd-nav-bottom { margin-top: auto; padding-top: 16px; display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
 .sd-nav-source { min-width: 0; }
@@ -208,6 +211,9 @@ button.sd-nav-version:hover { background: var(--sd-surface-raised); }
 .sd-navigation:has(:focus-visible), .sd-navigation:has([data-source-menu-open="true"]) { --sd-nav-width: 204px; --sd-label-opacity: 1; --sd-label-visibility: visible; box-shadow: var(--sd-shadow-float); }
 @media (hover: hover) and (pointer: fine) {
   .sd-navigation:hover { --sd-nav-width: 204px; --sd-label-opacity: 1; --sd-label-visibility: visible; box-shadow: var(--sd-shadow-float); }
+  .sd-navigation:not(:hover, :has(:focus-visible, [data-source-menu-open="true"])) {
+    --sd-nav-close-delay: 200ms;
+  }
 }
 
 /* Stationary workspace panels sit over the canvas, so tint and grain supply
@@ -290,23 +296,32 @@ button.sd-nav-version:hover { background: var(--sd-surface-raised); }
 [data-slot="tabs-list"][data-variant="pill"]:not(:has([data-slot="tabs-indicator"])) [data-slot="tabs-trigger"][aria-selected="true"] { background: var(--sd-selected) !important; box-shadow: none !important; }
 [data-slot="tabs-list"] [data-slot="tabs-trigger"]:focus-visible { outline: 2px solid var(--sd-focus); outline-offset: -2px; }
 @media (prefers-reduced-motion: reduce) {
-  .sd-navigation, .sd-nav-item, .sd-nav-brand>span, .sd-nav-label { transition: none; }
+  .sd-navigation, .sd-nav-brand>span, .sd-nav-label { transition-duration: 0ms; }
+  .sd-nav-item { transition: none; }
 }
 
 /* The chat stage has separate clipping and shadow wrappers; tint only the inner plane. */
 .sd-shell .pm-chat-stage { box-shadow: none; }
 .sd-shell .pm-chat-stage-head { background: transparent; }
-/* Fade the scrolling content itself. A white overlay below the transparent
- * title used to make the title look like a separate grey strip. */
+/* Fade the scroll content against the existing surface material. */
 .sd-shell .pm-chat-edge-fade { display: none; }
-.sd-shell .pm-chat-thread {
-  --sd-chat-fade-top: 0px;
-  --sd-chat-fade-bottom: 0px;
-  mask-image: linear-gradient(to bottom, transparent, #000 var(--sd-chat-fade-top), #000 calc(100% - var(--sd-chat-fade-bottom)), transparent);
-  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--sd-chat-fade-top), #000 calc(100% - var(--sd-chat-fade-bottom)), transparent);
+.sd-shell :is(.pm-chat-thread, .pm-rail-list-shell) {
+  --sd-scroll-fade-top: 0px;
+  --sd-scroll-fade-bottom: 0px;
+  --sd-scroll-mask: linear-gradient(
+    to bottom,
+    transparent,
+    #000 var(--sd-scroll-fade-top),
+    #000 calc(100% - var(--sd-scroll-fade-bottom)),
+    transparent
+  );
+  mask-image: var(--sd-scroll-mask);
+  -webkit-mask-image: var(--sd-scroll-mask);
 }
-.sd-shell .pm-chat-thread[data-fade-top] { --sd-chat-fade-top: 36px; }
-.sd-shell .pm-chat-thread[data-fade-bottom] { --sd-chat-fade-bottom: 72px; }
+.sd-shell .pm-chat-thread[data-fade-top] { --sd-scroll-fade-top: 36px; }
+.sd-shell .pm-chat-thread[data-fade-bottom] { --sd-scroll-fade-bottom: 72px; }
+.sd-shell .pm-rail-list-shell[data-fade-top] { --sd-scroll-fade-top: 28px; }
+.sd-shell .pm-rail-list-shell[data-fade-bottom] { --sd-scroll-fade-bottom: 32px; }
 body.pm-dnd-active .sd-navigation::after {
   content: ""; position: absolute; inset: 0; z-index: 40; border-radius: inherit;
   background: color-mix(in srgb, var(--pm-ink) 30%, transparent); pointer-events: none;

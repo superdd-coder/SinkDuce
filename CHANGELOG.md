@@ -4,6 +4,16 @@ Kept newest-first. CI extracts the section matching the release tag into
 `latest.json → notes` (shown in the desktop update dialog), so headings must
 stay in the exact `## vX.Y.Z` form.
 
+## v1.7.2
+
+- 修复会议摘要流式输出结束时可能出现的白屏，更新生成中的占位卡片和分段按钮。
+- 权限规则支持按角色切换和搜索，切换时保留未保存的勾选，最多可并排对照三个角色。
+- 左侧导航在鼠标移开后延迟 0.2 秒收起，改善列表滚动边缘的渐隐效果和会议快捷对话入口的悬停反馈。
+
+- Fix a possible blank screen when a meeting summary finishes streaming, and refresh generation placeholders and section buttons.
+- Filter permission rules by role, search long role lists, and retain pending edits when switching. Compare roles side by side when there are up to three.
+- Add a 200 ms delay before the navigation rail collapses, smooth list scroll fades, and improve hover feedback for Meeting Quick Chat.
+
 ## v1.7.1
 
 - 更新 macOS 的 Dock 与菜单栏图标，并统一窗口标题栏和工作区背景。

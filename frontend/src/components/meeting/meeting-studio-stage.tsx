@@ -1,4 +1,4 @@
-import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from "react"
+import { Component, type Dispatch, type ErrorInfo, type MutableRefObject, type ReactNode, type RefObject, type SetStateAction } from "react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { canOperateMeeting } from "@/lib/meeting-perms"
@@ -125,7 +125,58 @@ export interface MeetingStudioStageProps {
   quickChatOpen: boolean
 }
 
-export function MeetingStudioStage(p: MeetingStudioStageProps) {
+type StudioBoundaryProps = {
+  meetingId: string
+  message: string
+  retryLabel: string
+  clearSectionRail: () => void
+  children: ReactNode
+}
+
+class MeetingStudioBoundary extends Component<StudioBoundaryProps, { meetingId: string; failed: boolean }> {
+  state = { meetingId: this.props.meetingId, failed: false }
+
+  static getDerivedStateFromProps(props: StudioBoundaryProps, state: { meetingId: string }) {
+    return props.meetingId === state.meetingId ? null : { meetingId: props.meetingId, failed: false }
+  }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    this.props.clearSectionRail()
+    console.error("Meeting studio could not render", error, info.componentStack)
+  }
+
+  render() {
+    if (!this.state.failed) return this.props.children
+    return (
+      <div className="pm-meeting-empty pm-meeting-empty--span flex-col gap-3">
+        <p role="alert">{this.props.message}</p>
+        <Button variant="secondary" size="sm" onClick={() => this.setState({ failed: false })}>
+          {this.props.retryLabel}
+        </Button>
+      </div>
+    )
+  }
+}
+
+export function MeetingStudioStage(props: MeetingStudioStageProps) {
+  const t = useT()
+  return (
+    <MeetingStudioBoundary
+      meetingId={props.meeting.id}
+      message={t("meeting.studioDisplayFailed")}
+      retryLabel={t("common.retry")}
+      clearSectionRail={() => props.setSectionRailModel(null)}
+    >
+      <MeetingStudioContent {...props} />
+    </MeetingStudioBoundary>
+  )
+}
+
+function MeetingStudioContent(p: MeetingStudioStageProps) {
   const t = useT()
   const {
     meeting,
@@ -554,32 +605,31 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                             >
                               <div
                                 ref={sectionRailCardRef}
-                                className={cn(
-                                  "pm-meeting-section-rail-card",
-                                  sectionRailModel?.thinking && "sk-thinking-flow",
-                                )}
+                                className="pm-meeting-section-rail-card"
                               >
                                 <div className="pm-meeting-section-rail-head">
-                                  <span className="pm-meeting-section-rail-title">
-                                    {sectionRailModel?.thinking ? t("meeting.building") : t("meeting.browse")}
-                                  </span>
-                                  <button
+                                  {sectionRailModel?.thinking ? (
+                                    <span className="pm-meeting-generation-status" role="status">
+                                      {t("meeting.building")}
+                                    </span>
+                                  ) : (
+                                    <span className="pm-meeting-section-rail-title">{t("meeting.browse")}</span>
+                                  )}
+                                  <Button
                                     type="button"
-                                    className="pm-meeting-section-rail-add"
+                                    variant="secondary"
+                                    size="icon-sm"
                                     disabled={!!sectionRailModel?.busy || !!sectionRailModel?.thinking}
                                     title={t("meeting.addSection")}
                                     aria-label={t("meeting.addSection")}
                                     onClick={() => sectionRailActionsRef.current?.openAddSection()}
                                   >
-                                    <Plus className="size-3.5" />
-                                    <span>{t("common.add")}</span>
-                                  </button>
+                                    <Plus aria-hidden />
+                                  </Button>
                                 </div>
                                 <div
-                                  className={cn(
-                                    "pm-meeting-section-rail-list",
-                                    sectionRailModel?.thinking && "is-building",
-                                  )}
+                                  className="pm-meeting-section-rail-list"
+                                  aria-busy={sectionRailModel?.thinking}
                                   onScroll={hideSectionTip}
                                 >
                                   {/* Sliding focus pill — moves between General / sections */}
@@ -596,37 +646,20 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                                       aria-hidden
                                     />
                                   ) : null}
-                                  {/* Building: only solid skeleton fence — never show real General/sections underneath */}
                                   {sectionRailModel?.thinking ? (
-                                    <div className="pm-meeting-section-fence-overlay" aria-hidden>
-                                      <div className="pm-meeting-section-fence-line" />
-                                      <div className="pm-meeting-section-fence-line" />
-                                      <div className="pm-meeting-section-fence-line" />
-                                      <div className="pm-meeting-section-fence-line" />
+                                    <div className="pm-meeting-generation-lines pm-meeting-generation-lines--rail" aria-hidden>
+                                      <span />
+                                      <span />
+                                      <span />
+                                      <span />
                                     </div>
                                   ) : !sectionRailModel || sectionRailModel.items.length === 0 ? (
                                     <p className="pm-meeting-section-rail-empty">{t("meeting.noSections")}</p>
                                   ) : (
                                     sectionRailModel.items.map((item) => {
-                                      if (item.kind === "skeleton") {
-                                        return (
-                                          <div
-                                            key={item.id}
-                                            className="pm-meeting-section-card is-skeleton"
-                                            aria-hidden
-                                          >
-                                            <span
-                                              className="pm-meeting-section-skel"
-                                              style={{ width: `${52 + (item.id.charCodeAt(3) % 3) * 14}%` }}
-                                            />
-                                          </div>
-                                        )
-                                      }
-
                                       const isNav = item.kind === "general" || item.kind === "section"
                                       const isPick = item.kind === "blueprint"
                                       const isCustom = item.kind === "custom"
-                                      const isEarly = item.kind === "early"
                                       /** md on disk OR live gen/stream — can open */
                                       const isReady = isNav && item.ready === true
                                       /** Tokens flowing (open to watch stream) */
@@ -677,7 +710,7 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                                               isStreaming && "is-streaming",
                                               isGenerating && "is-pending",
                                               isIngested && "is-ingested",
-                                              (isEarly || (item.kind === "blueprint" && !item.selected)) && "is-preview",
+                                              item.kind === "blueprint" && !item.selected && "is-preview",
                                               isCustom && "is-custom",
                                               isCustom && item.selected === false && "is-preview",
                                             )}
@@ -798,17 +831,14 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                                   {/* Breakdown sits under the last list item (not a separate footer bar) */}
                                   {sectionRailModel?.canBreakdown && (
                                     <div className="pm-meeting-section-rail-breakdown-wrap">
-                                      <button
+                                      <Button
                                         type="button"
-                                        className={cn(
-                                          "pm-meeting-section-rail-breakdown",
-                                          sectionRailModel.busy && "sk-thinking-flow",
-                                        )}
+                                        className="w-full"
                                         disabled={sectionRailModel.busy}
                                         onClick={() => sectionRailActionsRef.current?.breakdown()}
                                       >
                                         {sectionRailModel.busy ? t("meeting.extracting") : t("meeting.breakdown")}
-                                      </button>
+                                      </Button>
                                     </div>
                                   )}
                                 </div>

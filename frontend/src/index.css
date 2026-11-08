@@ -1752,64 +1752,9 @@ li.pm-toast[data-sonner-toast] {
   animation: sk-flow-orbit 3.2s linear infinite;
 }
 
-/* ── AI-COMP-060 · thinking state · full-body green flow ── */
-/* Matches the "Reasoning over 18 chunks…" pill: soft blurred green glow
-   sweeps across the entire interior, plus a sharp 1px accent line rides
-   the bottom edge. Two layers, same animation, different visual weights. */
 @keyframes sk-green-flow {
   0%   { background-position: 100% 50%; }
   100% { background-position: -100% 50%; }
-}
-.sk-thinking-flow {
-  position: relative;
-  overflow: hidden;
-  background: oklch(0.38 0.08 160 / 0.06);
-  border: 1px solid oklch(0.38 0.08 160 / 0.18);
-}
-/* layer 1 · soft blurred green glow wash */
-.sk-thinking-flow::before {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  border-radius: inherit;
-  background: linear-gradient(90deg,
-    transparent 0%,
-    oklch(0.38 0.08 160 / 0.50) 50%,
-    transparent 100%);
-  background-size: 200% 100%;
-  animation: sk-green-flow 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-  z-index: 0;
-  opacity: 0.35;
-  filter: blur(6px);
-  pointer-events: none;
-}
-/* layer 2 · full perimeter flowing border (not bottom-only) */
-.sk-thinking-flow::after {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  border-radius: inherit;
-  border: 1.5px solid transparent;
-  background: linear-gradient(
-      90deg,
-      transparent 20%,
-      var(--ze-green, #1a5e3d) 50%,
-      transparent 80%
-    )
-    border-box;
-  -webkit-mask:
-    linear-gradient(#fff 0 0) padding-box,
-    linear-gradient(#fff 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  background-size: 300% 100%;
-  animation: sk-green-flow 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-  z-index: 2;
-  pointer-events: none;
-}
-.sk-thinking-flow > * {
-  position: relative;
-  z-index: 1;
 }
 /* Full-border flowing variant — for textarea generation state */
 .sk-flow-full {
@@ -7738,12 +7683,7 @@ button.pm-rail-new:hover:not(:disabled) {
   color: var(--pm-green, #1a5e3d);
 }
 
-/*
- * Shared left-rail list shell + scroll edge fades
- * (Collections · Chat Sessions · Meeting list).
- * Soft dissolve when content leaves the scroll viewport — matches
- * .pm-chat-edge-fade language on float cream surface.
- */
+/* Shared left-rail scroll layout (Collections · Chat Sessions · Meetings). */
 .pm-rail-list-shell {
   position: relative;
   flex: 1 1 0;
@@ -7759,6 +7699,7 @@ button.pm-rail-new:hover:not(:disabled) {
   flex: 1 1 0;
   min-height: 0;
 }
+/* Scroll-edge overlays for inner panels with their own solid background. */
 .pm-rail-edge-fade {
   /* Override with --pm-edge-fade-color: #ffffff on white panel shells */
   --pm-edge-fade-color: var(--pm-float, #fdfbf7);
@@ -20046,10 +19987,14 @@ button.pm-files-row-edit {
   padding: 0;
   margin: 0;
   border: none;
+  border-radius: 50%;
   background: transparent;
+  cursor: pointer;
   line-height: 0;
   filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.12));
-  transition: filter 0.3s ease;
+  transition:
+    transform 220ms var(--pm-ease),
+    filter 220ms var(--pm-ease);
 }
 /* The mark renders 60px inside a 40px box — keep hover alive across the
    whole visible orb (plus bob travel) so the flow never stutters. */
@@ -20065,7 +20010,16 @@ button.pm-files-row-edit {
 }
 
 .quick-chat-btn:hover {
-  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.18));
+  transform: translateY(-3px) scale(1.08);
+  filter: drop-shadow(0 7px 7px rgba(20, 58, 36, 0.26));
+}
+.quick-chat-btn:active {
+  transform: scale(0.96);
+  filter: drop-shadow(0 1px 3px rgba(20, 58, 36, 0.18));
+}
+.quick-chat-btn:focus-visible {
+  outline: 2px solid var(--sd-focus);
+  outline-offset: 3px;
 }
 
 /* Bubble + diamond column stack; shared bob */
@@ -20080,29 +20034,11 @@ button.pm-files-row-edit {
   pointer-events: none;
   transform: translateY(-100%);
 }
-.pm-qc-fab-park .quick-chat-btn {
-  cursor: pointer;
-  border-radius: 12px;
-  transform: translateY(0) scale(1);
-  transition: transform 220ms var(--pm-ease), filter 220ms var(--pm-ease);
-}
 .pm-qc-fab-park .quick-chat-btn::after { inset: -2px; }
-.pm-qc-fab-park .quick-chat-btn:hover {
-  transform: translateY(-3px) scale(1.08);
-  filter: drop-shadow(0 7px 7px rgba(20, 58, 36, 0.26));
-}
-.pm-qc-fab-park .quick-chat-btn:active {
-  transform: translateY(0) scale(0.96);
-  filter: drop-shadow(0 1px 3px rgba(20, 58, 36, 0.18));
-}
-.pm-qc-fab-park .quick-chat-btn:focus-visible {
-  outline: 2px solid var(--pm-green);
-  outline-offset: 3px;
-}
 @media (prefers-reduced-motion: reduce) {
-  .pm-qc-fab-park .quick-chat-btn { transition: none; }
-  .pm-qc-fab-park .quick-chat-btn:hover,
-  .pm-qc-fab-park .quick-chat-btn:active { transform: none; }
+  .quick-chat-btn { transition: none; }
+  .quick-chat-btn:hover,
+  .quick-chat-btn:active { transform: none; }
   .pm-qc-launcher-hint-slot .pm-qc-launcher-hint { animation: none !important; }
 }
 
@@ -25024,56 +24960,52 @@ button.pm-files-row-edit {
   background: transparent;
   box-shadow: none;
   border: none;
-  isolation: isolate; /* sk-thinking-flow ::before z-index */
 }
-/* Section list while Building — opaque fence covers real menu items */
-.pm-meeting-section-rail-card.sk-thinking-flow {
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--pm-float, #fdfbf7) 70%, #ffffff);
-  border: 1px solid oklch(0.38 0.08 160 / 0.16);
+
+/* Meeting generation — neutral, static placeholders with a compact status. */
+.pm-meeting-generation-card {
+  display: grid;
+  gap: 16px;
+  max-width: 42rem;
+  padding: 18px 20px 22px;
+  border-radius: var(--sd-radius-card);
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--sd-surface-raised) 64%, var(--sd-canvas)),
+    color-mix(in srgb, var(--sd-surface) 42%, var(--sd-canvas))
+  );
+  box-shadow: var(--sd-shadow-panel);
 }
-.pm-meeting-section-rail-list {
-  position: relative;
-}
-.pm-meeting-section-rail-list.is-building {
-  /* Room for 4 skeleton rows while Building (no real items underneath) */
-  min-height: 168px;
-}
-/* Full cover while generating — fully opaque, no bleed-through */
-.pm-meeting-section-fence-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 6;
+.pm-meeting-generation-status {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 8px;
-  padding: 10px 8px;
-  box-sizing: border-box;
-  border-radius: 10px;
-  background: #ffffff;
-  pointer-events: auto;
+  font: 450 12px/1.4 var(--type-font-ui);
+  color: var(--sd-muted);
 }
-.pm-meeting-section-fence-overlay .pm-meeting-section-fence-line {
-  height: 34px;
-  border-radius: 10px;
-  background: oklch(0.38 0.08 160 / 0.10);
-  animation: pulse 1.4s ease-in-out infinite;
+.pm-meeting-generation-status > svg {
+  color: var(--sd-brand);
 }
-.pm-meeting-section-fence-overlay .pm-meeting-section-fence-line:nth-child(1) {
-  width: 72%;
-  animation-delay: 0s;
+.pm-meeting-generation-lines {
+  display: grid;
+  gap: 10px;
 }
-.pm-meeting-section-fence-overlay .pm-meeting-section-fence-line:nth-child(2) {
-  width: 88%;
-  animation-delay: 0.15s;
+.pm-meeting-generation-lines > span {
+  height: 8px;
+  width: 92%;
+  border-radius: var(--sd-radius-pill);
+  background: color-mix(in srgb, var(--sd-ink) 7%, transparent);
 }
-.pm-meeting-section-fence-overlay .pm-meeting-section-fence-line:nth-child(3) {
-  width: 64%;
-  animation-delay: 0.3s;
+.pm-meeting-generation-lines > span:nth-child(2) { width: 78%; }
+.pm-meeting-generation-lines > span:nth-child(3) { width: 86%; }
+.pm-meeting-generation-lines > span:nth-child(4) { width: 51%; }
+.pm-meeting-generation-lines--rail {
+  width: min(100%, 15rem);
+  padding: 10px 6px;
+  gap: 18px;
 }
-.pm-meeting-section-fence-overlay .pm-meeting-section-fence-line:nth-child(4) {
-  width: 80%;
-  animation-delay: 0.45s;
+.pm-meeting-generation-lines--rail > span {
+  height: 10px;
 }
 
 .pm-meeting-section-rail-head {
@@ -25091,34 +25023,6 @@ button.pm-files-row-edit {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--pm-muted, #6a706a);
-}
-
-.pm-meeting-section-rail-add {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  flex-shrink: 0;
-  height: 24px;
-  padding: 0 8px;
-  border: none;
-  border-radius: 999px;
-  cursor: pointer;
-  font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff, system-ui, sans-serif));
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--pm-green, #1a5e3d);
-  background: var(--pm-green-soft, rgba(26, 94, 61, 0.10));
-  transition:
-    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
-    opacity 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
-}
-.pm-meeting-section-rail-add:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 16%, transparent);
-}
-.pm-meeting-section-rail-add:disabled {
-  opacity: 0.45;
-  cursor: default;
 }
 
 .pm-meeting-section-rail-list {
@@ -25201,30 +25105,18 @@ button.pm-files-row-edit {
   background: color-mix(in srgb, var(--pm-ink, #121410) 3.5%, transparent);
   color: var(--pm-ink, #121410);
 }
-/* Pending: not generated — muted, dashed edge, not clickable */
+/* Pending and streaming use the status mark instead of a frame. */
 .pm-meeting-section-card.is-pending {
-  cursor: default;
   opacity: 1;
   color: var(--pm-muted, #6a706a);
   background: transparent;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pm-ink, #121410) 10%, transparent);
-  /* dashed via background mask on inset ring is hard; use outline */
-  outline: 1px dashed color-mix(in srgb, var(--pm-faint, #969c96) 55%, transparent);
-  outline-offset: -1px;
 }
 .pm-meeting-section-card.is-pending:disabled {
-  opacity: 1; /* keep readable; don't grey out further */
+  cursor: default;
 }
 /* Streaming: openable while tokens flow */
-.pm-meeting-section-card.is-streaming {
-  cursor: pointer;
-  color: var(--pm-green, #1a5e3d);
-  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 6%, transparent);
-  outline: none;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pm-green, #1a5e3d) 22%, transparent);
-}
-.pm-meeting-section-card.is-streaming:hover:not(.is-active) {
-  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 10%, transparent);
+.pm-meeting-section-card.is-streaming:not(.is-active) {
+  background: var(--sd-field);
 }
 .pm-meeting-section-card.is-preview {
   cursor: default;
@@ -25263,12 +25155,6 @@ button.pm-files-row-edit {
 }
 .pm-meeting-section-card-status.is-streaming {
   background: var(--pm-green, #1a5e3d);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pm-green, #1a5e3d) 22%, transparent);
-  animation: pm-meeting-section-stream-pulse 1.2s ease-in-out infinite;
-}
-@keyframes pm-meeting-section-stream-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.65; transform: scale(0.92); }
 }
 .pm-meeting-section-card-badge {
   flex-shrink: 0;
@@ -25298,21 +25184,10 @@ button.pm-files-row-edit {
 .pm-meeting-section-card.is-active .pm-meeting-section-card-ingested {
   background: color-mix(in srgb, var(--pm-green, #1a5e3d) 16%, transparent);
 }
-@media (prefers-reduced-motion: reduce) {
-  .pm-meeting-section-card-status.is-streaming {
-    animation: none;
-  }
-}
 /* Description: hover tip under whole Sections block (not inline) */
 .pm-meeting-section-card.is-picked {
   background: var(--pm-green-soft, rgba(26, 94, 61, 0.10));
   color: var(--pm-green, #1a5e3d);
-}
-.pm-meeting-section-card.is-skeleton {
-  cursor: default;
-  pointer-events: none;
-  min-height: 34px;
-  justify-content: center;
 }
 .pm-meeting-section-card-dot {
   flex-shrink: 0;
@@ -25372,13 +25247,6 @@ button.pm-files-row-edit {
 .pm-meeting-section-card .pm-meeting-section-card-name {
   flex: 1 1 auto;
 }
-.pm-meeting-section-skel {
-  display: block;
-  height: 10px;
-  border-radius: 6px;
-  background: oklch(0.38 0.08 160 / 0.12);
-  animation: pulse 1.4s ease-in-out infinite;
-}
 /* Breakdown under last section list item (scrolls with the list) */
 .pm-meeting-section-rail-breakdown-wrap {
   flex-shrink: 0;
@@ -25388,27 +25256,6 @@ button.pm-files-row-edit {
   margin-top: 4px;
   box-sizing: border-box;
 }
-.pm-meeting-section-rail-breakdown {
-  width: 100%;
-  height: 30px;
-  border: none;
-  border-radius: 999px;
-  cursor: pointer;
-  font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff, system-ui, sans-serif));
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: #fff;
-  background: var(--pm-green, #1a5e3d);
-  box-shadow: 0 1px 2px rgba(18, 20, 16, 0.08);
-}
-.pm-meeting-section-rail-breakdown:hover:not(:disabled) {
-  background: var(--pm-green-deep, #0f4a2d);
-}
-.pm-meeting-section-rail-breakdown:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-
 /*
  * Add Section dialog — premium silk form on canvas float
  */
@@ -25545,29 +25392,6 @@ button.pm-files-row-edit {
 .pm-meeting-add-section-req {
   margin-left: 3px;
   color: var(--pm-green, #1a5e3d);
-}
-.pm-meeting-add-section-ai {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 9px;
-  border: none;
-  border-radius: 999px;
-  cursor: pointer;
-  font: var(--pm-t-label, 400 10px/1.2 var(--pm-ff, system-ui, sans-serif));
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--pm-green, #1a5e3d);
-  background: var(--pm-green-soft, rgba(26, 94, 61, 0.10));
-  transition: background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
-}
-.pm-meeting-add-section-ai:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 16%, transparent);
-}
-.pm-meeting-add-section-ai:disabled {
-  opacity: 0.55;
-  cursor: default;
 }
 .pm-meeting-add-section-input {
   height: 38px !important;
@@ -25995,25 +25819,10 @@ button.pm-files-row-edit {
   overflow: visible;
   background: transparent;
 }
-.pm-meeting-qc-fab-host .quick-chat-btn,
-.pm-meeting-qc-fab-host .pm-meeting-qc-fab-btn {
-  width: 40px;
-  height: 40px;
-  background: transparent !important;
-  filter: none !important;
-  box-shadow: none !important;
+.pm-meeting-qc-fab-host .quick-chat-btn:not(:hover, :active) {
+  filter: none;
 }
-.pm-meeting-qc-fab-host .quick-chat-btn:hover,
-.pm-meeting-qc-fab-host .pm-meeting-qc-fab-btn:hover {
-  filter: none !important;
-  background: transparent !important;
-}
-/* Idle: same hover flow language as Collection (.quick-chat-btn global also applies) */
-.pm-meeting-qc-fab-host .quick-chat-btn .qc-logo {
-  width: 60px;
-  max-width: none;
-  flex-shrink: 0;
-  height: auto;
+.pm-meeting-qc-fab-host .qc-logo {
   filter: drop-shadow(0 1px 2px rgba(18, 20, 16, 0.12));
 }
 .pm-meeting-qc-fab-host .qc-float-group {
@@ -28185,17 +27994,6 @@ button.pm-files-row-edit {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Summary generation fence — air from content-card edges (not flush) */
-.pm-meeting-fence-pad {
-  padding: 16px 28px 28px;
-  box-sizing: border-box;
-  width: 100%;
-  min-width: 0;
-}
-.pm-meeting-fence-card {
-  width: 100%;
-  box-sizing: border-box;
-}
 .pm-meeting-stream-md {
   position: relative;
   min-height: 4rem;

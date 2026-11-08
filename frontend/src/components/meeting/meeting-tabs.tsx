@@ -128,7 +128,7 @@ export type SectionRailItem = {
   id: string
   label: string
   hint?: string
-  kind: "general" | "section" | "blueprint" | "custom" | "early" | "skeleton"
+  kind: "general" | "section" | "blueprint" | "custom"
   /** Multi-select (pre-extract blueprint / custom) */
   selected?: boolean
   /** Currently viewed summary section */
@@ -168,30 +168,19 @@ export type SectionRailActions = {
   breakdown: () => void
 }
 
-// MarkdownViewer lives in summary-markdown-viewer.tsx (shared with note editor)
-
-// ── Thinking skeleton (shown while LLM is generating) ─────────────
-
-function ThinkingSkeleton() {
+function SummaryPlaceholder({ label, children }: { label: string; children?: ReactNode }) {
   return (
-    <div className="pm-meeting-fence-pad">
-      <div className="sk-thinking-flow pm-meeting-fence-card rounded-[var(--pm-r,16px)] p-6 pt-10 space-y-4">
-        {/* Title line */}
-        <div className="h-6 w-1/3 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.12)" }} />
-        {/* Content lines */}
-        <div className="space-y-3 pt-2">
-          <div className="h-3 w-full rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.1s" }} />
-          <div className="h-3 w-5/6 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.3s" }} />
-          <div className="h-3 w-4/6 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.5s" }} />
-          <div className="h-3 w-full rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.2s" }} />
-          <div className="h-3 w-3/6 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.6s" }} />
-        </div>
-        {/* Subtitle */}
-        <div className="h-4 w-1/4 rounded animate-pulse pt-2" style={{ background: "oklch(0.38 0.08 160 / 0.1)", animationDelay: "0.4s" }} />
-        <div className="space-y-3 pt-1">
-          <div className="h-3 w-full rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.7s" }} />
-          <div className="h-3 w-2/3 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.9s" }} />
-        </div>
+    <div className="pm-meeting-generation-card">
+      <div className="pm-meeting-generation-status" role="status">
+        <Loader2 className="size-3.5 shrink-0 motion-safe:animate-spin" aria-hidden />
+        {label}
+      </div>
+      {children}
+      <div className="pm-meeting-generation-lines" aria-hidden>
+        <span />
+        <span />
+        <span />
+        <span />
       </div>
     </div>
   )
@@ -1173,12 +1162,12 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
         className={cn(
           "pm-meeting-ingest-pill",
           portalIngest && "pm-meeting-ingest-pill--toolbar",
-          ingesting && "sk-thinking-flow",
           topButtonIsActive && "is-active",
           displaySuggestion && !ingesting && "is-suggest",
         )}
       >
         <span className="relative z-10 flex items-center justify-center gap-1 min-w-0 w-full px-0.5">
+          {ingesting && <Loader2 className="size-3 shrink-0 motion-safe:animate-spin" aria-hidden />}
           {needsReingest && !ingesting ? (
             <RefreshCw className="size-2.5 shrink-0 opacity-50" strokeWidth={2} aria-label={t("meeting.updateAvailable")} />
           ) : null}
@@ -1699,7 +1688,10 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
   )
 })
 
-// ── Main component ────────────────────────────────────────────────
+// Keep the rail effect stable when older meetings omit these fields.
+const EMPTY_TABS: MeetingTab[] = []
+const EMPTY_BLUEPRINT: NonNullable<Meeting["blueprint"]> = []
+const EMPTY_SPEAKER_NAMES: Record<string, string> = {}
 
 export function MeetingTabs({
   meetingId, meeting, notesContent, onNotesChange,
@@ -1724,8 +1716,8 @@ export function MeetingTabs({
   hostTranscriptInParent = true,
 }: Props) {
   const t = useT()
-  const tabs = meeting.tabs ?? []
-  const speakerNames: Record<string, string> = meeting.speaker_names ?? {}
+  const tabs = meeting.tabs ?? EMPTY_TABS
+  const speakerNames = meeting.speaker_names ?? EMPTY_SPEAKER_NAMES
 
   // ── Blueprint SSE streaming ──────────────────────────────
   // Stable callback ref for auto-fetch when streaming completed while user was away
@@ -1768,7 +1760,7 @@ export function MeetingTabs({
   // Use meeting.blueprint when available; fall back to early-completion streaming data
   const blueprint = (meeting.blueprint && meeting.blueprint.length > 0)
     ? meeting.blueprint
-    : (bpStream.earlyBlueprint ?? [])
+    : (bpStream.earlyBlueprint ?? EMPTY_BLUEPRINT)
 
   const wasStreamingRef = useRef(false)
 
@@ -2655,6 +2647,7 @@ export function MeetingTabs({
   const hasTranscript = transcriptSegments.length > 0 || !!meeting.transcript_path
   const hasBlueprint = blueprint.length > 0
   const hasSections = tabs.some((t) => t.type === "section")
+  const hasStreamingSummary = !!bpStream.streamingMd
 
   /** Dynamically compute sequential label: T1, T2, ... based on section tab order.
    *  Includes generating tabs so labels don't shift when generation completes. */
@@ -2675,7 +2668,7 @@ export function MeetingTabs({
   // ── Top-right Section rail model (full feature parity with old toolbar card) ──
   useEffect(() => {
     if (!onSectionRailModelChange) return
-    // Thinking = any live / server summary gen — keep General + fence skeletons visible
+    // Keep the rail in its preparing state until the summary and blueprint are ready.
     const thinking =
       bpStream.blueprintGenState !== "idle" ||
       bpStream.summaryGenState !== "idle" ||
@@ -2701,7 +2694,7 @@ export function MeetingTabs({
           ((pendingAction?.type === "summarize" ||
             pendingAction?.type === "re_summarize" ||
             meeting.processing_state === "summarizing") &&
-            !bpStream.streamingMd))
+            !hasStreamingSummary))
       items.push({
         id: "tab_general",
         label: t("meeting.general"),
@@ -2762,23 +2755,6 @@ export function MeetingTabs({
           selected: selectedBlueprintIds.has(b.blueprint_id),
         })
       }
-    } else if (thinking) {
-      const early = (bpStream.earlyBlueprint ?? [])
-        .filter((b) => b.tab_name && b.tab_name.toLowerCase() !== "other")
-      if (early.length > 0) {
-        early.forEach((b, i) => {
-          items.push({
-            id: `early:${i}`,
-            label: b.tab_name,
-            hint: b.tab_description || undefined,
-            kind: "early",
-          })
-        })
-      } else {
-        ;[1, 2, 3].forEach((i) => {
-          items.push({ id: `sk:${i}`, label: "", kind: "skeleton" })
-        })
-      }
     }
 
     // Custom receipts render pre-breakdown even without a blueprint —
@@ -2814,7 +2790,6 @@ export function MeetingTabs({
     bpStream.blueprintGenState,
     bpStream.summaryGenState,
     bpStream.isStreaming,
-    bpStream.earlyBlueprint,
     hasSections,
     hasBlueprint,
     hasSummary,
@@ -2828,7 +2803,7 @@ export function MeetingTabs({
     pendingAction,
     meetingId,
     sectionStreamTick,
-    bpStream.streamingMd,
+    hasStreamingSummary,
     ingestingTabs,
   ])
 
@@ -2904,7 +2879,7 @@ export function MeetingTabs({
     !isGeneral &&
     (isTabGenerating ||
       sectionLive ||
-      loadingTabs.has(selectedSummaryId)) &&
+      (loadingTabs.has(selectedSummaryId) && !tabMdContents[selectedSummaryId])) &&
     !sectionStream.streamingMd
 
   // ── Summary translation view ─────────────────────────────
@@ -2952,7 +2927,9 @@ export function MeetingTabs({
             <TabsTrigger value="notes">{t("common.notes")}</TabsTrigger>
           </TabsList>
         </Tabs>
-        {busy && <Loader2 className="size-3.5 animate-spin text-[var(--pm-faint)] shrink-0" />}
+        {busy && (mainTab !== "summary" || (!generalWaitingTokens && !sectionWaitingTokens)) && (
+          <Loader2 className="size-3.5 shrink-0 motion-safe:animate-spin text-[var(--pm-faint)]" aria-hidden />
+        )}
 
         {mainTab === "summary" && (hasBlueprint || tabs.some(t => t.tab_id === "tab_general" && t.md_file_path)) && (
           <div className="pm-meeting-tabs-actions">
@@ -2967,19 +2944,14 @@ export function MeetingTabs({
             {isGeneral && (
               <Button
                 type="button"
-                variant={busy ? "secondary" : "ghost"}
+                variant="ghost"
                 size="sm"
-                className={cn(busy && "sk-thinking-flow")}
                 disabled={busy || ingestingTabs.size > 0}
                 onClick={() => setReSummarizeOpen(true)}
                 title={t("meeting.reSummarizeAction")}
               >
-                {busy ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : (
-                  <RefreshCw className="size-3.5" />
-                )}
-                {busy ? t("meeting.summarizing") : t("meeting.reSummarizeAction")}
+                <RefreshCw className="size-3.5" aria-hidden />
+                {t("meeting.reSummarizeAction")}
               </Button>
             )}
             <MeetingSummaryExport meetingId={meetingId} tabId={selectedSummaryId} language={activeLang}
@@ -3001,9 +2973,9 @@ export function MeetingTabs({
               <>
                 <Button
                   type="button"
-                  variant={isTabGenerating ? "secondary" : "ghost"}
+                  variant="ghost"
                   size="sm"
-                  className={cn("shrink-0", isTabGenerating && "sk-thinking-flow")}
+                  className="shrink-0"
                   disabled={isTabGenerating || ingestingTabs.has(selectedSummaryId) || busy}
                   onClick={() => {
                     if (selectedTab.allocated_file_id) {
@@ -3015,12 +2987,8 @@ export function MeetingTabs({
                   title={t("meeting.reGenerateSection")}
                   aria-label={t("meeting.reGenerateSection")}
                 >
-                  {isTabGenerating ? (
-                    <Loader2 className="size-3.5 animate-spin mr-1" />
-                  ) : (
-                    <Sparkles className="size-3.5 mr-1" />
-                  )}
-                  {isTabGenerating ? t("meeting.generating") : t("meeting.reGenerate")}
+                  <Sparkles className="size-3.5 mr-1" aria-hidden />
+                  {t("meeting.reGenerate")}
                 </Button>
                 <Button
                   type="button"
@@ -3073,70 +3041,40 @@ export function MeetingTabs({
           )}
         >
           {(() => {
-            /* Summary generating: always fence / stream — never empty "No content yet"
-             * even when early blueprint already landed (hasBlueprint=true).
-             * Do NOT gate on bare streamingMd after isStreaming ends — that kept
-             * ReactMarkdown (no speaker/sentence chips) until a full page refresh. */
+            /* Use the same reading inset while waiting for the first token. */
             if (generalWaitingTokens) {
               return (
-                  <div className="pm-meeting-fence-pad">
-                    <div className="sk-thinking-flow pm-meeting-fence-card rounded-[var(--pm-r,16px)] p-5 space-y-4 min-h-[200px]">
-                      <div className="flex items-center gap-2">
-                        <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--ze-green)" }} />
-                        <span className="pm-label">{t("fileMgmt.generatingSummary")}</span>
-                      </div>
-                      {bpStream.thinkingText ? (
-                        <details className="mb-2" open>
-                          <summary className="text-xs text-muted-foreground cursor-pointer select-none">
-                            {t("meeting.thinkingEllipsis")}
-                          </summary>
-                          <p className="text-xs text-muted-foreground/60 mt-2 leading-relaxed whitespace-pre-wrap t-mono-family max-h-32 overflow-auto">
-                            {bpStream.thinkingText}
-                          </p>
-                        </details>
-                      ) : null}
-                      {[1, 2, 3, 4, 5].map((i) => (
-                        <div
-                          key={`sum-sk-${i}`}
-                          className="h-4 rounded animate-pulse"
-                          style={{
-                            background: "oklch(0.38 0.08 160 / 0.12)",
-                            width: `${50 + i * 10}%`,
-                          }}
-                        />
-                      ))}
-                    </div>
-                  </div>
+                <div className="pm-meeting-body-prose">
+                  <SummaryPlaceholder label={t("fileMgmt.generatingSummary")}>
+                    {bpStream.thinkingText && (
+                      <details open>
+                        <summary className="pm-meta cursor-pointer select-none">
+                          {t("meeting.thinkingEllipsis")}
+                        </summary>
+                        <p className="pm-meta mt-2 leading-relaxed whitespace-pre-wrap t-mono-family max-h-32 overflow-auto">
+                          {bpStream.thinkingText}
+                        </p>
+                      </details>
+                    )}
+                  </SummaryPlaceholder>
+                </div>
               )
             }
 
             if (sectionWaitingTokens) {
-              if (isGeneral) return <ThinkingSkeleton />
               return (
-                <div className="flex flex-col min-h-0 overflow-auto">
-                  <div className="px-6 pt-6 pb-3">
-                    <div className="flex items-start gap-2">
-                      <span className="pm-meeting-title shrink-0">
-                        {tabShortLabel(selectedTab!)} {selectedTab?.name}
-                      </span>
-                      <Loader2 className="size-3.5 animate-spin mt-1.5 shrink-0 text-[var(--pm-green)]" />
-                    </div>
-                    {selectedTab?.description && (
-                      <p className="pm-meta leading-relaxed mt-1">{selectedTab.description}</p>
-                    )}
-                  </div>
-                  <div className="pm-meeting-fence-pad flex-1">
-                    <div className="sk-thinking-flow pm-meeting-fence-card rounded-[var(--pm-r,16px)] p-6 pt-10 space-y-4">
-                      <div className="h-6 w-1/3 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.12)" }} />
-                      <div className="space-y-3 pt-2">
-                        <div className="h-3 w-full rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.1s" }} />
-                        <div className="h-3 w-5/6 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.3s" }} />
-                        <div className="h-3 w-4/6 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.5s" }} />
-                        <div className="h-3 w-full rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.2s" }} />
-                        <div className="h-3 w-3/6 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.6s" }} />
+                <div className="pm-meeting-body-prose">
+                  {selectedTab && (
+                    <div className="mb-4">
+                      <div className="pm-meeting-title">
+                        {tabShortLabel(selectedTab)} {selectedTab.name}
                       </div>
+                      {selectedTab.description && (
+                        <p className="pm-meta leading-relaxed mt-1">{selectedTab.description}</p>
+                      )}
                     </div>
-                  </div>
+                  )}
+                  <SummaryPlaceholder label={isTabGenerating || sectionLive ? t("meeting.generating") : t("common.loading")} />
                 </div>
               )
             }
@@ -3389,20 +3327,21 @@ export function MeetingTabs({
                     <label className="pm-meeting-add-section-label" htmlFor="add-section-desc">
                       {t("common.description")}
                     </label>
-                    <button
+                    <Button
                       type="button"
-                      className="pm-meeting-add-section-ai"
+                      variant="secondary"
+                      size="sm"
                       disabled={generatingDesc}
                       onClick={handleGenerateDesc}
                       title={t("meeting.generateFromGeneral")}
                     >
                       {generatingDesc ? (
-                        <Loader2 className="size-3 animate-spin" />
+                        <Loader2 className="motion-safe:animate-spin" aria-hidden />
                       ) : (
-                        <Sparkles className="size-3" />
+                        <Sparkles aria-hidden />
                       )}
-                      <span>{generatingDesc ? t("meeting.writing") : t("meeting.suggest")}</span>
-                    </button>
+                      {generatingDesc ? t("meeting.writing") : t("meeting.suggest")}
+                    </Button>
                   </div>
                   <div
                     className={cn(

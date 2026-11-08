@@ -5,6 +5,7 @@ import { Check, Loader2, Lock, Plus, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import { DropdownSelect } from "@/components/ui/dropdown-select"
 import { Input } from "@/components/ui/input"
 import { HelpHint } from "@/components/shared/help-hint"
 import {
@@ -53,6 +54,8 @@ const DOMAIN_META: Record<string, { tiers: string[] }> = {
   hot_words: { tiers: ["read", "write", "delete"] },
   people: { tiers: ["read", "create", "write", "delete"] },
 }
+const COMPARE_ROLES = "compare"
+const MAX_COMPARED_ROLES = 3
 
 interface PermissionManagerDialogProps {
   open: boolean
@@ -68,6 +71,7 @@ export function PermissionManagerDialog({
 }: PermissionManagerDialogProps) {
   const t = useT()
   const rolesTab = useRef<HTMLButtonElement>(null)
+  const [activeTab, setActiveTab] = useState("roles")
   const [roles, setRoles] = useState<RoleInfo[]>([])
   const [catalogue, setCatalogue] = useState<CapabilityCatalogue | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -78,9 +82,18 @@ export function PermissionManagerDialog({
   const [domainTiers, setDomainTiers] = useState<Record<string, string[]>>({})
   const [implicitRoles, setImplicitRoles] = useState<string[]>([])
   const [domainSaving, setDomainSaving] = useState(false)
+  const [ruleRoleId, setRuleRoleId] = useState(COMPARE_ROLES)
 
   /** 可勾选的角色：隐式角色（owner/admin）永远有每一档，不出现在名单里。 */
   const pickableRoles = roles.filter((r) => !implicitRoles.includes(r.id))
+  const canCompareRoles = pickableRoles.length > 1 && pickableRoles.length <= MAX_COMPARED_ROLES
+  const ruleRole = pickableRoles.find((role) => role.id === ruleRoleId)
+  const comparingRoles = canCompareRoles && !ruleRole
+  const visibleRuleRoles = comparingRoles ? pickableRoles : ruleRole ? [ruleRole] : pickableRoles.slice(0, 1)
+  const ruleRoleOptions = pickableRoles.map((role) => ({ value: role.id, label: role.name }))
+  if (canCompareRoles) {
+    ruleRoleOptions.unshift({ value: COMPARE_ROLES, label: t("permissions.compareRoles") })
+  }
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -200,11 +213,24 @@ export function PermissionManagerDialog({
           </DialogTitle>
         </DialogHeader>
 
-        <Tabs defaultValue="roles" className="pm-permissions-tabs">
-          <TabsList>
-            <TabsTrigger value="roles" ref={rolesTab}>{t("permissions.tabRoles")}</TabsTrigger>
-            <TabsTrigger value="rules">{t("permissions.tabRules")}</TabsTrigger>
-          </TabsList>
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="pm-permissions-tabs">
+          <div className="pm-permissions-toolbar">
+            <TabsList>
+              <TabsTrigger value="roles" ref={rolesTab}>{t("permissions.tabRoles")}</TabsTrigger>
+              <TabsTrigger value="rules">{t("permissions.tabRules")}</TabsTrigger>
+            </TabsList>
+            {activeTab === "rules" && domains && pickableRoles.length > 1 && (
+              <DropdownSelect
+                aria-label={t("permissions.rulesRole")}
+                className="pm-permissions-rule-filter"
+                size="sm"
+                value={comparingRoles ? COMPARE_ROLES : visibleRuleRoles[0].id}
+                options={ruleRoleOptions}
+                disabled={loading || domainSaving}
+                onChange={setRuleRoleId}
+              />
+            )}
+          </div>
 
           <TabsContent value="roles" className="pm-permissions-tab">
             <div className="pm-permissions-roles">
@@ -326,18 +352,23 @@ export function PermissionManagerDialog({
           <TabsContent value="rules" className="pm-permissions-tab">
             <div className="pm-permissions-pane">
               <div className="pm-permissions-scroll pm-permissions-rules">
-                {domains && (
+                {domains && !loading && visibleRuleRoles.length === 0 && (
+                  <p className="pm-permissions-empty py-8" role="status">{t("permissions.noRuleRoles")}</p>
+                )}
+                {domains && visibleRuleRoles.length > 0 && (
                   <table className="pm-permissions-matrix" aria-label={t("permissions.tabRules")}>
                     <thead>
                       <tr>
                         <th scope="col">{t("permissions.rule")}</th>
-                        {pickableRoles.map((role) => <th scope="col" key={role.id}>{role.name}</th>)}
+                        {visibleRuleRoles.map((role) => (
+                          <th scope="col" key={role.id} title={role.name}>{role.name}</th>
+                        ))}
                       </tr>
                     </thead>
                     {Object.entries(DOMAIN_META).map(([domain, meta]) => (
                       <tbody key={domain}>
                         <tr className="pm-permissions-domain">
-                          <th scope="rowgroup" colSpan={pickableRoles.length + 1}>
+                          <th scope="rowgroup" colSpan={visibleRuleRoles.length + 1}>
                             {t(`permissions.domain.${domain}`)}
                           </th>
                         </tr>
@@ -351,7 +382,7 @@ export function PermissionManagerDialog({
                                   <small>{t(`permissions.meetingRuleDetail.${tier}`)}</small>
                                 )}
                               </th>
-                              {pickableRoles.map((role) => (
+                              {visibleRuleRoles.map((role) => (
                                 <td key={role.id}>
                                   <label className="pm-permissions-rule-check">
                                     <PermissionCheck
@@ -372,7 +403,11 @@ export function PermissionManagerDialog({
                 )}
               </div>
               <footer className="pm-permissions-footer">
-                <Button size="lg" disabled={!domains || domainSaving} onClick={() => void handleSaveDomains()}>
+                <Button
+                  size="lg"
+                  disabled={!domains || loading || visibleRuleRoles.length === 0 || domainSaving}
+                  onClick={() => void handleSaveDomains()}
+                >
                   {domainSaving && <Loader2 className="animate-spin" aria-hidden />}
                   {t("common.save")}
                 </Button>
