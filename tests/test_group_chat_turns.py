@@ -46,6 +46,7 @@ def test_group_turn_without_tools_answers_directly():
 
     store = MagicMock()
     store.count_dialogue_turns.return_value = 0
+    store.previous_project_context.return_value = ("", ())
     llm = MagicMock()
     llm._model = "test-model"
     llm._client = MagicMock()

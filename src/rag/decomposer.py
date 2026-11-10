@@ -18,6 +18,8 @@ from src.rag.agent_prompts import (
     DECOMPOSE_USER,
     ROUTE_SYSTEM,
     ROUTE_USER,
+    QA_PROJECT_ROUTE_SYSTEM,
+    QA_PROJECT_ROUTE_USER,
     EVIDENCE_PLAN_SYSTEM,
     EVIDENCE_PLAN_USER,
     SCOPED_DECOMPOSE_SYSTEM,
@@ -82,6 +84,23 @@ class Decomposer:
             cols = []
         logger.info("[Route] q=%r → %s", raw_query[:120], cols if cols else "ALL")
         return cols
+
+    def route_qa_projects(self, raw_query: str, catalog: list) -> list[str]:
+        catalog_text, index_map = self._build_catalog_text(catalog)
+        if not index_map:
+            return []
+        prompt = QA_PROJECT_ROUTE_USER.format(raw_query=raw_query, catalog_text=catalog_text)
+        result = self._llm_json(prompt, QA_PROJECT_ROUTE_SYSTEM)
+        if not isinstance(result, dict):
+            return []
+        if result.get("mode") == "selected":
+            return list(index_map.values())
+        if result.get("mode") != "specific" or not isinstance(result.get("projects"), list):
+            return []
+        numbers = result["projects"]
+        if not numbers or any(type(n) is not int or n not in index_map for n in numbers):
+            return []
+        return list(dict.fromkeys(index_map[n] for n in numbers))
 
     # ── full decomposition ───────────────────────────────────────────
 

@@ -7,12 +7,13 @@ import threading
 import copy
 import html
 from concurrent.futures import as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from src.parsers.image_utils import _IMAGE_BLOCK_RE
 from src.rag.decomposer import AtomicQuery, Decomposer
 from src.rag.aggregator import SubQueryResult
 from src.rag.retriever import RetrievedChunk
+from src.rag.source_scope import is_qa_chat_chunk, qa_chat_projects, qa_chat_scope
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,36 @@ class AgenticQueryResult:
     retained_chunks: list = field(default_factory=list)   # actual context evidence
     trace: list[dict] = field(default_factory=list)
     errors: list[dict] = field(default_factory=list)
+    qa_hits: list[RetrievedChunk] = field(default_factory=list)
+    coverage_complete: bool = False
+
+
+def _subquery_result(aq, targets, fetched, *, qa_enabled):
+    retrieved = list(getattr(fetched, "retrieved_chunks", None) or [])
+    retained = list(fetched.chunks)
+    qa_hits = []
+    retained_info = fetched.retained_info
+    gap_analysis = fetched.gap_analysis
+    errors = list(getattr(fetched, "errors", None) or [])
+    if qa_enabled and any(is_qa_chat_chunk(c) for c in retrieved + retained):
+        grade_error = next((error for error in errors if error.get("stage") == "grade"), None)
+        if grade_error:
+            errors.append({**grade_error, "stage": "qa_grade"})
+        else:
+            qa_hits = [c for c in retained if is_qa_chat_chunk(c)]
+        retrieved = [c for c in retrieved if not is_qa_chat_chunk(c)]
+        retained = [c for c in retained if not is_qa_chat_chunk(c)]
+        # Chat revalidates Q&A before presenting it.
+        retained_info = ""
+        gap_analysis = "Required evidence remains missing." if gap_analysis else ""
+    return SubQueryResult(
+        query=aq.query, retained_chunks=retained, qa_hits=qa_hits,
+        retained_info=retained_info, gap_analysis=gap_analysis,
+        task=aq.task or "", task_query=aq.task_query or "",
+        retrieved_chunks=retrieved, target_collections=targets,
+        trace=list(getattr(fetched, "trace", None) or []),
+        errors=errors,
+    )
 
 
 # ── Inline generate prompt ────────────────────────────────────────────────
@@ -182,15 +213,69 @@ class AgenticQueryService:
                 except Exception:
                     logger.exception("[Agentic] on_step callback raised")
 
-        # ── ① Decompose (one LLM call, skippable) ──────────────────────
-        catalog_entries = self.catalog.get_catalog(
+        qa_projects = qa_chat_projects.get()
+        if qa_projects:
+            requested = collections if collections is not None else qa_projects
+            collections = [project for project in qa_projects if project in requested]
+            if not collections:
+                return AgenticQueryResult(answer=None)
+            include_archived = False
+
+        planning_trace: list[dict] = []
+        fetch_options = dict(
+            original_user_question=original_user_question, top_k=top_k,
+            rerank_enabled=rerank_enabled, rerank_top_k=rerank_top_k,
+            search_mode=search_mode, min_score=min_score,
+            sparse_llm_tokenize=sparse_llm_tokenize,
+            llm_for_sparse=self.llm if sparse_llm_tokenize else None,
+        )
+        probe = None
+        probe_adequate = False
+        planned = False
+        complete = False
+        scoped_first_pass = bool(qa_projects and len(collections) == 1 and preliminary_retrieval and original_user_question)
+        if scoped_first_pass:
+            _emit("aq_start", raw_query[:120], aq_id="scoped", task="")
+            try:
+                fetched = self.variant_fetcher.run(
+                    raw_query, collections=collections, variant_count=0,
+                    grade_query=original_user_question, **fetch_options,
+                    on_step=lambda step, iteration, content, extra=None: _emit(
+                        step, content, aq_id="scoped", iteration=iteration, **(extra or {}),
+                    ),
+                )
+                probe = _subquery_result(
+                    AtomicQuery(query=raw_query, task_query=raw_query), collections, fetched, qa_enabled=True,
+                )
+                has_answer_evidence = bool(probe.retained_chunks) or any(
+                    hit.metadata.get("source_kind") == "qa_reply" for hit in probe.qa_hits
+                )
+                probe_adequate = has_answer_evidence and not fetched.gap_analysis and not probe.errors
+                complete = probe_adequate and not decompose
+                _emit("aq_done", f"{len(fetched.chunks)} chunks", aq_id="scoped",
+                      chunks=len(fetched.chunks), has_gaps=not probe_adequate)
+                planning_trace.append({
+                    "kind": "scoped_mixed_first_pass", "coverage_complete": complete,
+                    "collections": list(collections),
+                })
+            except Exception as exc:
+                logger.warning("[Agentic] scoped mixed search failed (%s)", type(exc).__name__)
+                _emit("aq_done", "failed", aq_id="scoped", chunks=0, has_gaps=True, error=True)
+
+        # ── ① Decompose when the first search leaves a gap ────────────
+        catalog_entries = [] if complete else self.catalog.get_catalog(
             collections, include_archived=include_archived
         )
-        planning_trace: list[dict] = []
-        if decompose:
+        if complete:
+            aqs = []
+        elif decompose:
             _emit("decompose", f"Decomposing: {raw_query[:200]}")
             seed_chunks = []
-            if preliminary_retrieval and isinstance(self.decomposer, Decomposer):
+            if probe and not probe.errors and isinstance(self.decomposer, Decomposer):
+                from src.rag.evidence_planner import select_seed_chunks
+
+                seed_chunks = select_seed_chunks(probe.retrieved_chunks, collections)
+            elif preliminary_retrieval and not scoped_first_pass and isinstance(self.decomposer, Decomposer):
                 from src.rag.evidence_planner import select_seed_chunks
 
                 seed_collections = [
@@ -205,14 +290,15 @@ class AgenticQueryService:
                     _emit("retrieving", "Retrieving preliminary evidence before planning",
                           aq_id="preliminary", iteration=0)
                     try:
-                        preliminary = self.direct_module.retrieve(
-                            raw_query, seed_collections, top_k=top_k,
-                            rerank_enabled=rerank_enabled, rerank_top_k=rerank_top_k,
-                            search_mode=search_mode, min_score=min_score,
-                            sparse_llm_tokenize=sparse_llm_tokenize,
-                            llm_for_sparse=self.llm if sparse_llm_tokenize else None,
-                            generate_answer=False,
-                        )
+                        with qa_chat_scope(()):
+                            preliminary = self.direct_module.retrieve(
+                                raw_query, seed_collections, top_k=top_k,
+                                rerank_enabled=rerank_enabled, rerank_top_k=rerank_top_k,
+                                search_mode=search_mode, min_score=min_score,
+                                sparse_llm_tokenize=sparse_llm_tokenize,
+                                llm_for_sparse=self.llm if sparse_llm_tokenize else None,
+                                generate_answer=False,
+                            )
                         if preliminary.errors:
                             _emit("retrieving", "Preliminary retrieval failed", aq_id="preliminary", error=True)
                             return AgenticQueryResult(
@@ -243,16 +329,17 @@ class AgenticQueryService:
                     aqs = self.decomposer.decompose(
                         raw_query, catalog_entries, original_user_question=original_user_question,
                     )
+                planned = bool(aqs)
             except Exception as e:
                 logger.exception("[Agentic] decompose failed")
                 _emit("decompose", f"Decompose failed: {e}")
-                if seed_chunks:
+                if seed_chunks and not qa_projects:
                     return AgenticQueryResult(answer=None, trace=planning_trace, errors=[{
                         "stage": "evidence_plan", "error": type(e).__name__,
                     }])
                 aqs = [AtomicQuery(query=raw_query)]
 
-            if not aqs:
+            if not aqs and not probe:
                 _emit("decompose", "No retrieval needed — non-retrieval query")
                 return AgenticQueryResult(answer=None, context="", all_chunks=[], trace=planning_trace)
 
@@ -260,11 +347,26 @@ class AgenticQueryService:
         else:
             # Lightweight collection routing only — no task decomposition
             _emit("decompose", f"Routing: {raw_query[:200]}")
-            target_cols = self.decomposer.route_collections(raw_query, catalog_entries)
+            target_cols = list(collections) if qa_projects else self.decomposer.route_collections(raw_query, catalog_entries)
             aqs = [AtomicQuery(query=raw_query, target_collections=target_cols,
                                task="(single)", task_query=raw_query)]
             _emit("decompose", f"Routed to {len(target_cols)} collection(s)"
                   if target_cols else "Routed to all collections")
+        if qa_projects and not complete:
+            # Preserve evidence for every project in scope, including those
+            # that the search planner omitted.
+            aqs = [
+                replace(aq, target_collections=[project])
+                for aq in aqs
+                for project in (aq.target_collections or collections)
+                if project in collections
+            ]
+            planned_projects = {aq.target_collections[0] for aq in aqs}
+            aqs.extend(
+                AtomicQuery(query=raw_query, target_collections=[project], task_query=raw_query)
+                for project in collections if project not in planned_projects
+            )
+
         # emit: step="task_start", task, task_query, aq_count (once per task)
         tasks_seen = set()
         for aq in aqs:
@@ -290,7 +392,11 @@ class AgenticQueryService:
         _fallback_collections = list(collections) if collections else [
             e.id for e in catalog_entries
         ]
-        sq_results: list[SubQueryResult] = []
+        sq_results: list[SubQueryResult] = [probe] if probe else []
+        graded_documents = {
+            (chunk.metadata.get("collection"), chunk.metadata.get("id"))
+            for chunk in probe.retained_chunks
+        } if probe and not probe.errors else set()
         seen_chunk_ids: set[str] = set()
         _lock = threading.Lock()
 
@@ -316,7 +422,10 @@ class AgenticQueryService:
                     aq_item.target_collections if aq_item.target_collections
                     else _fallback_collections
                 )
-                if aq_item.covered_chunks:
+                if aq_item.covered_chunks and (not qa_projects or all(
+                    (chunk.metadata.get("collection"), chunk.metadata.get("id")) in graded_documents
+                    for chunk in aq_item.covered_chunks
+                )):
                     from src.rag.variant_fetcher import VariantFetcherResult
 
                     chunks = copy.deepcopy(aq_item.covered_chunks)
@@ -343,12 +452,7 @@ class AgenticQueryService:
                         aq_item.query,
                         collections=_aq_collections,
                         task_query=aq_item.task_query or "",
-                        original_user_question=original_user_question,
-                        top_k=top_k, rerank_enabled=rerank_enabled,
-                        rerank_top_k=rerank_top_k, search_mode=search_mode,
-                        min_score=min_score,
-                        sparse_llm_tokenize=sparse_llm_tokenize,
-                        llm_for_sparse=self.llm if sparse_llm_tokenize else None,
+                        **fetch_options,
                         # emit: step=retrieving|grading|variant_generation, aq_id, iteration, content
                         on_step=lambda step, iteration, content, extra=None: _emit(
                             step, content, aq_id=f"aq{aq_idx}", iteration=iteration,
@@ -356,14 +460,7 @@ class AgenticQueryService:
                         ),
                     )
                 has_gaps = bool(vf.gap_analysis)
-                sqr = SubQueryResult(
-                    query=aq_item.query, retained_chunks=list(vf.chunks),
-                    retained_info=vf.retained_info, gap_analysis=vf.gap_analysis,
-                    task=aq_item.task or "", task_query=aq_item.task_query or "",
-                    retrieved_chunks=list(getattr(vf, "retrieved_chunks", None) or []),
-                    trace=list(getattr(vf, "trace", None) or []),
-                    errors=list(getattr(vf, "errors", None) or []),
-                )
+                sqr = _subquery_result(aq_item, _aq_collections, vf, qa_enabled=bool(qa_projects))
                 # emit: step="aq_done", aq_id, chunks, has_gaps, content=summary
                 _emit("aq_done", f"{len(vf.chunks)} chunks" + (", has gaps" if has_gaps else ""),
                       aq_id=f"aq{aq_idx}", chunks=len(vf.chunks), has_gaps=has_gaps)
@@ -377,6 +474,7 @@ class AgenticQueryService:
                     query=aq_item.query, retained_chunks=[],
                     retained_info="", gap_analysis="AQ execution failed",
                     task=aq_item.task or "", task_query=aq_item.task_query or "",
+                    target_collections=aq_item.target_collections or _fallback_collections,
                     errors=[{"stage": "atomic_query", "query": aq_item.query,
                              "error": type(exc).__name__}],
                 )
@@ -426,7 +524,9 @@ class AgenticQueryService:
         # ── ③ Final: concat task contexts → Chat LLM synthesizes ──────
         final_answer: str | None = None
         if generate_answer and sq_results:
-            if len(group_answers) == 1:
+            if probe:
+                final_answer = self.aggregator.build_prompt(sq_results, original_query=raw_query)
+            elif len(group_answers) == 1:
                 final_answer = f"<search_results>\n{list(group_answers.values())[0]}\n</search_results>"
             elif len(group_answers) > 1:
                 _emit("synthesize_merge", "Merging task contexts")
@@ -446,7 +546,7 @@ class AgenticQueryService:
         all_chunks: list[RetrievedChunk] = []
         for sq in sq_results:
             source = list(sq.retained_chunks or [])
-            if not source:
+            if not source and not qa_projects:
                 source = list(getattr(sq, "retrieved_chunks", None) or [])
             for c in source:
                 meta = c.metadata if hasattr(c, "metadata") else {}
@@ -488,7 +588,7 @@ class AgenticQueryService:
             "sub_queries": [
                 {
                     "query": sq.query,
-                    "target_collections": aqs[i].target_collections if i < len(aqs) else [],
+                    "target_collections": sq.target_collections,
                     "chunks": [
                         {"id": c.metadata.get("id", ""), "text": c.text[:200]}
                         if hasattr(c, "text") else c
@@ -498,7 +598,7 @@ class AgenticQueryService:
                     "gap_analysis": sq.gap_analysis,
                     "answer": sq.answer,
                 }
-                for i, sq in enumerate(sq_results)
+                for sq in sq_results
             ],
         }]
 
@@ -525,6 +625,13 @@ class AgenticQueryService:
                     len(all_chunks),
                 )
 
+        # A scoped grade only judges its candidates. With planning enabled,
+        # every planned need must also have supporting evidence before Chat
+        # closes further search for the turn.
+        coverage_complete = complete or (probe_adequate and planned and all(
+            (sq.retained_chunks or sq.qa_hits) and not sq.gap_analysis and not sq.errors
+            for sq in sq_results
+        ))
         return AgenticQueryResult(
             answer=final_answer, context=context,
             all_chunks=all_chunks, tasks=task_details,
@@ -532,4 +639,6 @@ class AgenticQueryService:
             candidate_chunks=candidate_chunks, retained_chunks=retained_chunks,
             trace=planning_trace + [event for sq in sq_results for event in sq.trace],
             errors=[event for sq in sq_results for event in sq.errors],
+            qa_hits=[hit for sq in sq_results for hit in sq.qa_hits],
+            coverage_complete=coverage_complete,
         )

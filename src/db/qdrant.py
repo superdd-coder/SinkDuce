@@ -257,6 +257,27 @@ class QdrantManager:
             for r in results.points
         ]
 
+    def search_qa(
+        self, collection: str, query_vector: list[float], point_ids: list[str], top_k: int
+    ) -> list[dict]:
+        """Search only the Q&A points authorized by the current SQLite projection."""
+        if not point_ids:
+            return []
+        from qdrant_client.models import HasIdCondition, MatchAny
+        from src.rag.source_scope import QA_CHAT_KINDS
+
+        results = self.client.query_points(
+            collection_name=collection,
+            query=query_vector,
+            limit=top_k,
+            with_payload=False,
+            query_filter=Filter(must=[
+                HasIdCondition(has_id=point_ids),
+                FieldCondition(key="source_kind", match=MatchAny(any=list(QA_CHAT_KINDS))),
+            ]),
+        )
+        return [{"id": str(point.id), "score": point.score} for point in results.points]
+
     def delete_points(self, collection: str, ids: list[str]) -> None:
         self.client.delete(collection_name=collection, points_selector=ids)
 
@@ -300,8 +321,7 @@ class QdrantManager:
         from src.rag.source_scope import source_filter
         # Index maintenance must rebuild the entire vocabulary. Retrieval callers
         # retain the scoped default and never expose this switch as user input.
-        if not include_qa_materials:
-            scroll_filter = source_filter(scroll_filter)
+        scroll_filter = source_filter(scroll_filter, include_qa_materials=include_qa_materials)
         points, next_offset = self.client.scroll(
             collection_name=collection,
             scroll_filter=scroll_filter,

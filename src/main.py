@@ -110,6 +110,10 @@ async def lifespan(app: FastAPI):
     task_manager.register_handler("meeting_extract", meeting_extract_handler)
     task_manager.register_handler("meeting_transcript_index", meeting_transcript_index_handler)
 
+    from src.qa.search_index import index_task, watch_pending
+
+    task_manager.register_handler("qa_index", index_task)
+
     from src.meeting.transcription.onnx.threads import configure_host_math_threads
 
     configure_host_math_threads()
@@ -178,12 +182,16 @@ async def lifespan(app: FastAPI):
     # requests can spawn per-session background tasks. Sharing the FastAPI
     # lifespan keeps a single process for HTTP API + MCP.
     from src.mcp.server import session_lifespan as _mcp_lifespan
-    async with _mcp_lifespan():
-        yield
-
-    await _staging_store.stop()
-    await task_manager.stop()
-    stop_sysaudio_watchdog()
+    qa_index_watch = asyncio.create_task(watch_pending())
+    try:
+        async with _mcp_lifespan():
+            yield
+    finally:
+        qa_index_watch.cancel()
+        await asyncio.gather(qa_index_watch, return_exceptions=True)
+        await _staging_store.stop()
+        await task_manager.stop()
+        stop_sysaudio_watchdog()
 
 
 # OpenAPI 文档面（/docs、/openapi.json、/redoc）不在门卫覆盖前缀内——开着

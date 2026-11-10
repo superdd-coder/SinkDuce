@@ -113,13 +113,39 @@ SCHEMA = [
 ]
 
 
+SEARCH_SCHEMA = [
+    """CREATE TABLE IF NOT EXISTS qa_index_jobs (
+        list_id TEXT PRIMARY KEY, generation TEXT NOT NULL, model_key TEXT NOT NULL DEFAULT '',
+        finished INTEGER NOT NULL DEFAULT 0)""",
+    """CREATE TABLE IF NOT EXISTS qa_index_points (
+        point_id TEXT PRIMARY KEY, list_id TEXT NOT NULL, question_id TEXT NOT NULL,
+        column_id TEXT NOT NULL, revision_id TEXT NOT NULL, model_key TEXT NOT NULL,
+        fragment INTEGER NOT NULL, generation TEXT NOT NULL, state TEXT NOT NULL)""",
+    "CREATE INDEX IF NOT EXISTS qa_index_by_list ON qa_index_points(list_id)",
+    """CREATE TABLE IF NOT EXISTS qa_index_vectors (
+        model_key TEXT NOT NULL, digest TEXT NOT NULL, vector BLOB NOT NULL,
+        PRIMARY KEY(model_key,digest))""",
+    """CREATE TABLE IF NOT EXISTS qa_index_vector_owners (
+        list_id TEXT NOT NULL, model_key TEXT NOT NULL, digest TEXT NOT NULL,
+        PRIMARY KEY(list_id,model_key,digest))""",
+]
+
+
+def queue_index(conn, list_id):
+    conn.execute(
+        """INSERT INTO qa_index_jobs(list_id,generation) VALUES(?,?)
+           ON CONFLICT(list_id) DO UPDATE SET generation=excluded.generation,finished=0""",
+        (list_id, new_id()),
+    )
+
+
 @contextmanager
 def connection(collection_id, action="read"):
     conn = _open_db(collection_id)
     try:
         authorize(get_actor(), f"qa.{action}", {"collection_id": collection_id})
         with conn:
-            for sql in SCHEMA:
+            for sql in (*SCHEMA, *SEARCH_SCHEMA):
                 conn.execute(sql)
             conn.execute("INSERT OR IGNORE INTO qa_schema_migrations VALUES(1,?)", (now(),))
         migrate_options(conn)
@@ -181,6 +207,7 @@ def writing(collection_id, list_id, data, event_type):
         conn.execute(
             "UPDATE qa_lists SET revision=revision+1,updated_at=? WHERE id=?", (now(), list_id)
         )
+        queue_index(conn, list_id)
         conn.execute(
             "INSERT INTO qa_events VALUES(?,?,?,?,?,?,?)",
             (

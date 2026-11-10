@@ -147,13 +147,13 @@ export function QaFileSpaceDialog({ collectionId, listId, writable, close: onClo
   </Dialog>
 }
 
-export function QaMaterialPreview({ collectionId, listId, source, sources, onBack, onCollapse, listButton = true }: { collectionId: string; listId: string; source: QaSource; sources?: QaSource[]; onBack: () => void; onCollapse?: () => void; listButton?: boolean }) {
+export function QaMaterialPreview({ collectionId, listId, source, sources, onBack, onCollapse, listButton = true, initialExcerpt = false, backLabel }: { collectionId: string; listId: string; source: QaSource; sources?: QaSource[]; onBack: () => void; onCollapse?: () => void; listButton?: boolean; initialExcerpt?: boolean; backLabel?: string }) {
   const t = useT()
   const contentId = useId()
   const [url, setUrl] = useState<string | null>(null)
   const [error, setError] = useState(false)
   const selection = sources || source
-  const [quotedSelection, setQuotedSelection] = useState<typeof selection | null>(null)
+  const [quotedSelection, setQuotedSelection] = useState<typeof selection | null>(initialExcerpt ? selection : null)
   const excerpts = groupQaSources(sources || [source]).find(group => group.source.kind === source.kind && group.source.file_id === source.file_id && group.source.version_id === source.version_id)?.sources.filter(s => s.excerpt.trim()) || []
   const showExcerpts = excerpts.length > 0 && quotedSelection === selection
   useEffect(() => {
@@ -164,7 +164,7 @@ export function QaMaterialPreview({ collectionId, listId, source, sources, onBac
     }).catch(() => { if (!controller.signal.aborted) setError(true) })
     return () => { controller.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl) }
   }, [collectionId, listId, source])
-  return <section className="qa-material-preview pm-rail-card"><header>{onCollapse && <Button variant="ghost" size="icon-sm" aria-label={t("qa.collapseDetail")} title={t("qa.collapseDetail")} onClick={onCollapse}><PanelLeftClose /></Button>}{!listButton && <Button autoFocus size="sm" variant="ghost" onClick={onBack}><ArrowLeft />{t("qa.backMaterials")}</Button>}<span title={source.filename}>{source.filename || t("qa.sourceFile")}</span>{listButton && <Button size="icon-sm" variant="ghost" aria-label={t("qa.questionList")} onClick={onBack}><List /></Button>}</header>
+  return <section className="qa-material-preview pm-rail-card"><header>{onCollapse && <Button variant="ghost" size="icon-sm" aria-label={t("qa.collapseDetail")} title={t("qa.collapseDetail")} onClick={onCollapse}><PanelLeftClose /></Button>}{!listButton && <Button autoFocus size="sm" variant="ghost" onClick={onBack}><ArrowLeft />{backLabel || t("qa.backMaterials")}</Button>}<span title={source.filename}>{source.filename || t("qa.sourceFile")}</span>{listButton && <Button size="icon-sm" variant="ghost" aria-label={t("qa.questionList")} onClick={onBack}><List /></Button>}</header>
     <div className="qa-source-preview-body" id={contentId}>
       <div className="qa-source-file-view" hidden={showExcerpts} inert={showExcerpts} aria-hidden={showExcerpts}>
         {error ? <div className="qa-empty" role="alert">{t("qa.sourceUnavailable")}</div> : url ? <RawFileViewer url={url} filename={source.filename} initialPage={source.page_number} className="flex-1 min-h-0" tools="download-search" /> : <div className="qa-empty" role="status">{t("fileMgmt.loadingPreview")}</div>}

@@ -67,6 +67,7 @@ def remove(collection, lid, data):
             ]
             for table, scope in scopes:
                 conn.execute(f"DELETE FROM {table} WHERE {scope}", (lid,))
+            store.queue_index(conn, lid)
             if conn.execute("PRAGMA foreign_key_check").fetchone():
                 store.fail("delete_integrity_error", 500)
             # Move assets reversibly until the database transaction commits.

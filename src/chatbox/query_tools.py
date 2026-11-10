@@ -93,7 +93,7 @@ SEARCH_KNOWLEDGE_BASE_TOOL = _fn(
     "search_knowledge_base",
     (
         f"{_SEARCH_FIRST} "
-        "Search ingested document chunks across the private knowledge base.\n\n"
+        "Search project documents and Q&A across the private knowledge base.\n\n"
         "PLANNING:\n"
         "1. Vague/ambiguous question → clarify first.\n"
         "2. Chitchat / common knowledge → answer without tools.\n"
@@ -128,8 +128,9 @@ SEARCH_KNOWLEDGE_BASE_TOOL = _fn(
             "type": "boolean",
             "default": True,
             "description": (
-                "TRUE to pack multiple independent search targets into one call "
-                "(parallel decompose). FALSE for a single focused search."
+                "Use TRUE (default) to check coverage and plan any missing searches. "
+                "Use FALSE for a straightforward lookup of one named fact. "
+                "Use planning for explanations, comparisons, multiple conditions, and conflicting versions."
             ),
         },
         "include_archived": {
@@ -430,8 +431,8 @@ STRUCTURE_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "list_collections",
         (
             "List all collections (id, name, points_count, catalog). "
-            "Call when you need a collection **ID** or do not know which "
-            "collection to use. Not a content search."
+            "Use for an explicit project inventory or to resolve an ID for a separate structure tool. "
+            "search_knowledge_base already routes factual searches using the project catalog."
         ),
         {},
     ),

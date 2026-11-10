@@ -92,6 +92,13 @@ class SessionStore:
                 FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS qa_source_snapshots (
+                session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                id TEXT NOT NULL,
+                snapshot TEXT NOT NULL,
+                PRIMARY KEY(session_id,id)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_messages_session
                 ON messages(session_id, created_at);
             """
@@ -282,6 +289,21 @@ class SessionStore:
             logger.info("Deleted session %s", session_id)
         return deleted
 
+    def save_qa_snapshot(self, session_id: str, snapshot_id: str, snapshot: dict) -> None:
+        with self._lock, self._get_conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO qa_source_snapshots VALUES(?,?,?)",
+                (session_id, snapshot_id, json.dumps(snapshot, ensure_ascii=False)),
+            )
+
+    def get_qa_snapshot(self, session_id: str, snapshot_id: str) -> dict | None:
+        with self._lock:
+            row = self._get_conn().execute(
+                "SELECT snapshot FROM qa_source_snapshots WHERE session_id=? AND id=?",
+                (session_id, snapshot_id),
+            ).fetchone()
+        return json.loads(row[0]) if row else None
+
     # ── message CRUD ───────────────────────────────────────────────
 
     def add_message(
@@ -401,6 +423,26 @@ class SessionStore:
         """
         del scan_limit  # noqa: F841 — accepted for backward-compatible kwargs
         return self.get_messages(session_id, limit=max_dialogue)
+
+    def previous_project_context(self, session_id: str) -> tuple[str, tuple[str, ...]]:
+        """Read the preceding user question and its established Q&A projects."""
+        with self._lock:
+            conn = self._get_conn()
+            user = conn.execute(
+                """SELECT content,created_at FROM messages WHERE session_id=? AND role='user'
+                   ORDER BY created_at DESC,rowid DESC LIMIT 1""",
+                (session_id,),
+            ).fetchone()
+            if user is None:
+                return "", ()
+            answer = conn.execute(
+                """SELECT metadata FROM messages WHERE session_id=? AND role='assistant' AND created_at>=?
+                   ORDER BY created_at DESC,rowid DESC LIMIT 1""",
+                (session_id, user["created_at"]),
+            ).fetchone()
+        meta = json.loads(answer["metadata"]) if answer and answer["metadata"] else {}
+        projects = meta.get("qa_projects", [])
+        return user["content"], tuple(p for p in projects if isinstance(p, str)) if isinstance(projects, list) else ()
 
     def count_messages(self, session_id: str, exclude_system: bool = False) -> int:
         """Count total messages in a session.

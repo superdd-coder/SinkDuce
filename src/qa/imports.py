@@ -794,6 +794,7 @@ def commit(collection, lid, iid, plan_revision):
                 "UPDATE qa_lists SET revision=revision+1,updated_at=? WHERE id=?",
                 (store.now(), lid),
             )
+            store.queue_index(conn, lid)
             conn.execute(
                 "UPDATE qa_imports SET committed_version_id=?,plan_json=? WHERE id=?",
                 (vid, json.dumps(plan, ensure_ascii=False), iid),

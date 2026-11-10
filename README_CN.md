@@ -35,7 +35,7 @@ LLM、Embedding 与语音转写既可使用云端 API，也可接入 **本地模
 
 ### macOS（Apple Silicon）
 
-1. 下载 **[SinkDuce v1.7.2（Apple Silicon）](https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/SinkDuce-macos-arm64-v1.7.2.dmg)**（[SHA-256 校验文件](https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/SinkDuce-macos-arm64-v1.7.2.dmg.sha256)）。
+1. 下载 **[SinkDuce v1.7.3（Apple Silicon）](https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/SinkDuce-macos-arm64-v1.7.3.dmg)**（[SHA-256 校验文件](https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/SinkDuce-macos-arm64-v1.7.3.dmg.sha256)）。
 2. 打开磁盘映像，把 **SinkDuce** 拖进 Applications。
 3. 应用采用 ad-hoc 签名，尚未经 Apple 公证。如果 macOS 拦截，请在**系统设置 → 隐私与安全性 → 仍要打开**中允许并确认。
 4. 升级后请 **Cmd+Q 再开**——点红灯只是藏到菜单栏。

@@ -43,6 +43,7 @@ class ChatStreamHandler:
         note_changes: list[dict] = []
         report_changes: list[dict] = []
         citations: list[dict] = []
+        qa_projects: set[str] = set()
         saw_done = False
         try:
             async for event in self._agent.chat_stream(
@@ -64,6 +65,12 @@ class ChatStreamHandler:
                     merge_report_changes(report_changes, event["report_changes"])
                 if isinstance(event.get("citations"), list):
                     citations = event["citations"]
+                    for record in citations:
+                        source = record.get("source") if isinstance(record, dict) else None
+                        if isinstance(source, dict) and source.get("qa_snapshot_id"):
+                            project = source.get("collection")
+                            if isinstance(project, str):
+                                qa_projects.add(project)
                 try:
                     payload = json.dumps(event, ensure_ascii=False, default=str, allow_nan=False)
                 except (TypeError, ValueError) as e:
@@ -101,6 +108,7 @@ class ChatStreamHandler:
                         **({"note_changes": note_changes} if note_changes else {}),
                         **({"citations": citations} if citations else {}),
                         **({"report_changes": report_changes} if report_changes else {}),
+                        **({"qa_projects": sorted(qa_projects)} if qa_projects else {}),
                     )
                 except Exception:
                     logger.exception(
