@@ -4,6 +4,16 @@ Kept newest-first. CI extracts the section matching the release tag into
 `latest.json → notes` (shown in the desktop update dialog), so headings must
 stay in the exact `## vX.Y.Z` form.
 
+## v1.7.4
+
+- 在同一个 Q&A 导入窗口检查 Excel 区域、行列类别和匹配结果。更新清单时，左右对照问题和每轮回复，可直接更改匹配。
+- 新版缺少的回复默认留在历史中，可选择带入新版。待核对项更醒目，同一轮回复的两侧可一起展开全文。
+- 切换列类别时可连续编辑，修改按顺序保存。修复 Q&A 弹窗透底、分组序号重复和部分导入无法确认的问题。
+
+- Review the Excel range, row and column roles, and matches in one Q&A import dialog. Compare questions and each reply round side by side and adjust matches directly.
+- Keep replies missing from the new workbook in history, with an option to carry them forward. Spot items that need review and expand both replies in a comparison together.
+- Change column roles while edits save in order. Fix translucent Q&A dialogs, repeated group numbers, and imports blocked by obsolete review prompts.
+
 ## v1.7.3
 
 - Chat 可检索所选项目最新版 Q&A 的问题和回复。问答和文档一起重排和评分，命中后按问题汇总整帖。

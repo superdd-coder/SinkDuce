@@ -6,7 +6,13 @@ from collections import Counter
 from copy import deepcopy
 
 from . import excel, metadata, service, store
-from .workbook_reader import classify_rows, header_role, validate_question_parents
+from .workbook_reader import (
+    classify_rows,
+    header_role,
+    number_header_columns,
+    section_semantic_columns,
+    validate_question_parents,
+)
 
 
 def normalize(value):
@@ -30,8 +36,34 @@ def get_plan(conn, lid, iid):
     result = json.loads(row["plan_json"])
     result["committed_version_id"] = row["committed_version_id"]
     if not result["committed_version_id"] and not result.get("cancelled"):
+        choices = result.get("content_choices", {})
+        for item in (result.get("review") or {}).get("conflicts", []):
+            if item["kind"] == "structure":
+                choices.pop(item["id"], None)
+        _restore_plan_section_titles(result)
         resolve_empty_rounds(conn, lid, result)
     return result
+
+
+def _restore_plan_section_titles(plan):
+    number = plan["mapping"].get("number")
+    ordinal_columns = number_header_columns(plan["headers"]) - {number}
+    if not ordinal_columns:
+        return
+    table = plan.get("table_rows", [])
+    first_col = (plan.get("region") or {}).get("start_column", 1) - 1
+    titles = {}
+    for row in table:
+        if row["kind"] != "section":
+            continue
+        values = row["values"]
+        nonempty = [i for i in range(first_col, len(values)) if values[i].strip()]
+        if ordinal_columns.intersection(nonempty):
+            columns = section_semantic_columns(row, nonempty, number, ordinal_columns) or nonempty
+            titles[row["key"]] = " · ".join(values[i] for i in columns)
+    for row in (*plan["rows"], *table):
+        if row.get("group_key") in titles:
+            row["group"] = titles[row["group_key"]]
 
 
 def resolve_empty_rounds(conn, lid, plan):
@@ -52,6 +84,11 @@ def review_plan(conn, lid, plan, *, strict=False):
         from .import_merge import evaluate
 
         plan["review"] = evaluate(conn, lid, plan, strict=strict)["review"]
+        if not strict and plan.get("content_choices"):
+            valid = {item["id"] for item in plan["review"]["conflicts"]}
+            plan["content_choices"] = {
+                key: value for key, value in plan["content_choices"].items() if key in valid
+            }
         plan["stale"] = store.get_list(conn, lid)["revision"] != plan["base_revision"]
     return plan
 
@@ -308,6 +345,7 @@ def update(collection, lid, iid, payload):
             for key in (
                 "content_choices",
                 "blank_columns",
+                "retained_replies",
                 "retained_questions",
                 "removed_questions",
             ):
@@ -327,14 +365,27 @@ def update(collection, lid, iid, payload):
 
             same_sheet = parsed["sheet"] == plan["sheet"]
             same_roles = same_sheet and role_signature(mapping) == role_signature(plan["mapping"])
+            same_question_column = mapping["question"] == plan["mapping"]["question"]
+            changed_replies = set(mapping["replies"]) ^ set(plan["mapping"]["replies"])
             previous_sources = {row["key"]: row for row in plan.get("table_rows", plan["rows"])}
             present_keys = {row["key"] for row in parsed["rows"]}
+            same_source_rows = {
+                row["key"]
+                for row in parsed["rows"]
+                if same_sheet
+                and row["key"] in previous_sources
+                and row["values"] == previous_sources[row["key"]]["values"]
+            }
+            # Keep row decisions when a column edit doesn't change that row's
+            # question or populated reply inputs.
             unchanged = {
                 row["key"]
                 for row in parsed["rows"]
-                if same_roles
-                and row["key"] in previous_sources
-                and row["values"] == previous_sources[row["key"]]["values"]
+                if same_question_column
+                and row["key"] in same_source_rows
+                and not any(
+                    row["values"][i].strip() for i in changed_replies if i < len(row["values"])
+                )
             }
             if same_roles:
                 parsed["mapping_confirmed"] = plan.get("mapping_confirmed", plan["mapping_valid"])
@@ -431,7 +482,9 @@ def update(collection, lid, iid, payload):
             safe_questions = {
                 row["key"]
                 for row in rebuilt["rows"]
-                if row["key"] in unchanged and previous_text.get(row["key"]) == row["text"]
+                if not changed_replies
+                and row["key"] in unchanged
+                and previous_text.get(row["key"]) == row["text"]
             }
             for key in safe_questions:
                 if plan["matches"].get(key):
@@ -444,7 +497,9 @@ def update(collection, lid, iid, payload):
                 }
             )
             # A column-wide clear choice must not grow to include unreviewed question rows.
-            clear_scope_safe = all(row["key"] in safe_questions for row in rebuilt["rows"])
+            clear_scope_safe = same_roles and all(
+                row["key"] in safe_questions for row in rebuilt["rows"]
+            )
             plan["blank_columns"] = [
                 key
                 for key in plan.get("blank_columns", [])
@@ -486,7 +541,13 @@ def update(collection, lid, iid, payload):
         active_targets = set(plan["matches"].values())
         for key in ("retained_questions", "removed_questions"):
             plan[key] = [qid for qid in plan.get(key, []) if qid not in active_targets]
-        for key in ("content_choices", "blank_columns", "retained_questions", "removed_questions"):
+        for key in (
+            "content_choices",
+            "blank_columns",
+            "retained_replies",
+            "retained_questions",
+            "removed_questions",
+        ):
             if key in payload:
                 plan[key] = payload[key]
         resolve_empty_rounds(conn, lid, plan)
@@ -586,6 +647,8 @@ def commit(collection, lid, iid, plan_revision):
                     "UPDATE qa_version_columns SET included=1,absent_since=NULL WHERE version_id=? AND column_id=?",
                     (vid, cid),
                 )
+            for qid, cid in merged["archived_cells"]:
+                service._save_reply(conn, v, qid, cid, "")
             old_meta = metadata.read(conn, vid)
             previous_outline = deepcopy(old_meta.get("outline", []))
             source_outline = deepcopy(
@@ -603,7 +666,13 @@ def commit(collection, lid, iid, plan_revision):
                     (label, pos, vid, cid),
                 )
                 column_ids[index] = cid
-            for pos, cid in enumerate(reading_order(list(column_ids.values()), previous_columns)):
+            active_order = [column_ids[index] for index in sorted(column_ids)]
+            active_order.extend(
+                cid
+                for cid in previous_columns
+                if cid in merged["kept_column_ids"] and cid not in column_ids.values()
+            )
+            for pos, cid in enumerate(reading_order(active_order, previous_columns)):
                 conn.execute(
                     "UPDATE qa_version_columns SET position=? WHERE version_id=? AND column_id=?",
                     (pos, vid, cid),
@@ -726,35 +795,22 @@ def commit(collection, lid, iid, plan_revision):
             outline.from_plan(
                 meta, plan, {row["key"]: row["committed_question_id"] for row in plan["rows"]}
             )
-            if merged.get("keep_structure"):
-                imported_outline = meta["outline"]
-                incoming_by_id = {item["id"]: item for item in imported_outline}
-                kept = []
-                for item in previous_outline:
-                    # Keep local semantic structure, with this file's current bindings.
-                    bindings = {
-                        k: value
-                        for k, value in incoming_by_id.get(item["id"], {}).items()
-                        if k in ("source_rows", "source_values", "text_column", "text_columns")
-                    }
-                    kept.append(
-                        {
-                            **item,
-                            "source_rows": [],
-                            "source_values": [],
-                            "text_columns": [],
-                            **bindings,
-                        }
-                    )
-                known = {item["id"] for item in kept}
-                source_ids = {item["id"] for item in source_outline}
-                kept.extend(
-                    item
-                    for item in imported_outline
-                    if item["id"] not in known
-                    and (item["kind"] == "question" or item["id"] not in source_ids)
-                )
-                meta["outline"] = kept
+            # Source order is authoritative, but a note unchanged in Excel can
+            # still have a local edit or deletion of its own.
+            source_notes = {
+                item["id"]: item["text"] for item in source_outline if item["kind"] == "note"
+            }
+            local_notes = {
+                item["id"]: item["text"] for item in previous_outline if item["kind"] == "note"
+            }
+            notes_merged = []
+            for item in meta["outline"]:
+                if item["kind"] == "note" and source_notes.get(item["id"]) == item["text"]:
+                    if item["id"] not in local_notes:
+                        continue
+                    item = {**item, "text": local_notes[item["id"]]}
+                notes_merged.append(item)
+            meta["outline"] = notes_merged
             present = {item["id"] for item in meta["outline"]}
             for item in previous_outline:
                 if (

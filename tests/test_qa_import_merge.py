@@ -121,7 +121,7 @@ def test_matched_local_removal_stays_removed_but_file_omission_can_return(qa, so
     [
         ("", "  \t", (0, 0, 0)),
         ("", "Inspect each morning.", (0, 0, 1)),
-        ("Inspect each morning.", "", (1, 0, 0)),
+        ("Inspect each morning.", "", (0, 0, 0)),
         ("Inspect each morning.", "Inspect at closing.", (0, 1, 0)),
     ],
 )
@@ -159,13 +159,14 @@ def test_reply_three_way_matrix(qa, local, remote, expected, conflict):
         )
 
 
-def test_blank_keeps_existing_without_advancing_the_observed_external_value(qa):
+def test_explicitly_carried_reply_preserves_the_earlier_external_baseline(qa):
     data, qid, cid = question(qa)
     record(data, qid, cid)
     data = mutate(
         qa, data, f"/questions/{qid}/replies/{cid}", {"body": "Inspect each afternoon."}, "put"
     )
     plan = incoming(data, qid, cid, "")
+    plan["retained_replies"] = {cid: [qid]}
     untouched = copy.deepcopy(plan)
     result = evaluate(data, plan)
     assert result["rows"]["2"]["replies"]["1"] == "Inspect each afternoon."
@@ -286,13 +287,16 @@ def test_missing_locally_created_and_edited_questions_are_omitted_by_default(qa)
     assert qid in evaluate(data, plan)["kept_question_ids"]
 
 
-def test_preserved_columns_exclude_initial_boilerplate_and_previously_omitted_columns(qa):
+def test_missing_columns_are_only_included_when_a_reply_is_carried(qa):
     data = create(qa)
     plan = incoming(data, "new", "new", "A reply.")
     assert evaluate(data, plan)["kept_column_ids"] == []
     data, qid, cid = question(qa)
     extra = data["columns"][1]["id"]
     plan = incoming(data, qid, cid)
+    assert evaluate(data, plan)["kept_column_ids"] == [cid]
+    data = mutate(qa, data, f"/questions/{qid}/replies/{extra}", {"body": "A separate room note."}, "put")
+    plan["retained_replies"] = {extra: [qid]}
     assert set(evaluate(data, plan)["kept_column_ids"]) == {cid, extra}
     data = mutate(qa, data, f"/columns/{extra}", {"included": False}, "patch")
     assert evaluate(data, plan)["kept_column_ids"] == [cid]
@@ -405,15 +409,8 @@ def test_read_decoration_ignores_stale_choices_but_authoritative_merge_rejects_t
             import_merge.evaluate(conn, data["id"], plan)
 
 
-@pytest.mark.parametrize(
-    "local_change,remote_change,conflict,keep",
-    [
-        (True, False, False, True),
-        (False, True, False, False),
-        (True, True, True, True),
-    ],
-)
-def test_structure_order_three_way(qa, local_change, remote_change, conflict, keep):
+@pytest.mark.parametrize("local_change,remote_change", [(True, False), (False, True), (True, True)])
+def test_structure_changes_do_not_block_import(qa, local_change, remote_change):
     from src.qa import metadata, store
 
     data, qid, cid = question(qa)
@@ -448,12 +445,7 @@ def test_structure_order_three_way(qa, local_change, remote_change, conflict, ke
     if remote_change:
         plan["rows"].reverse()
     result = evaluate(data, plan)
-    structure = [item for item in result["review"]["conflicts"] if item["kind"] == "structure"]
-    assert bool(structure) is conflict
-    assert result["keep_structure"] is keep
-    if structure:
-        plan["content_choices"] = {structure[0]["id"]: "incoming"}
-        assert evaluate(data, plan)["keep_structure"] is False
+    assert result["review"]["conflicts"] == []
 
 
 def test_missing_question_protection_distinguishes_imported_outline_positions_from_local_group_moves(

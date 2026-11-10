@@ -7,6 +7,8 @@ import { SoftMenu, MenuCheck } from "./menu"
 export type DropdownSelectOption = {
   value: string
   label: string
+  detail?: string
+  disabled?: boolean
   /**
    * Visual mark only (e.g. green status dot) — no text badge.
    * Used by Recall Evaluate for collections that already have test cases.
@@ -20,7 +22,7 @@ interface DropdownSelectProps {
   "aria-labelledby"?: string
   value: string
   onChange: (value: string) => void
-  options: DropdownSelectOption[]
+  options: DropdownSelectOption[] | (() => DropdownSelectOption[])
   placeholder?: string
   disabled?: boolean
   className?: string
@@ -39,11 +41,15 @@ interface DropdownSelectProps {
   chevron?: boolean
   /** Optional icon before the label (kept when a tag pill needs its mark). */
   leading?: ReactNode
+  valueContent?: ReactNode
+  menuClassName?: string
+  searchable?: boolean
 }
 
 /** Shared soft-glass listbox; keyboard focus and the selected value are distinct. */
 export function DropdownSelect({ id, "aria-label": ariaLabel, "aria-labelledby": ariaLabelledBy,
   value, onChange, options, placeholder, disabled, className, size = "default", menuZIndex, chevron, leading,
+  valueContent, menuClassName, searchable,
 }: DropdownSelectProps) {
   const t = useT(), generatedId = useId()
   const [open, setOpen] = useState(false)
@@ -51,9 +57,10 @@ export function DropdownSelect({ id, "aria-label": ariaLabel, "aria-labelledby":
   const triggerRef = useRef<HTMLButtonElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const isTag = size === "tag"
-  const selected = options.find(option => option.value === value)
-  const filtered = options.filter(option => `${option.label} ${option.value}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
-  const searchable = options.length > 8 || query.length > 0
+  const choices = typeof options === "function" ? open ? options() : [] : options
+  const selected = choices.find(option => option.value === value)
+  const filtered = choices.filter(option => `${option.label} ${option.detail || ""} ${option.value}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+  const showSearch = searchable || choices.length > 8 || query.length > 0
   const close = () => setOpen(false)
   const choose = (next: string) => { onChange(next); close(); triggerRef.current?.focus({ preventScroll: true }) }
   return <div className={cn("relative", isTag && "pm-select--tag", className)}>
@@ -66,12 +73,12 @@ export function DropdownSelect({ id, "aria-label": ariaLabel, "aria-labelledby":
         size === "sm" && "pm-select-trigger--sm", size === "default" && "pm-select-trigger--md",
         isTag && "pm-select-trigger--tag", open && "is-open", disabled && "is-disabled")}>
       {leading}
-      <span className={cn("pm-select-trigger-label min-w-0 truncate", isTag ? "text-center" : "text-left", !value && "is-placeholder")}>{selected?.label || placeholder || t("menus.choose")}</span>
+      {valueContent || <span className={cn("pm-select-trigger-label min-w-0 truncate", isTag ? "text-center" : "text-left", !value && "is-placeholder")}>{selected?.label || placeholder || t("menus.choose")}</span>}
       {selected?.indicator && <span className="pm-select-opt-mark shrink-0" title="Has test cases" />}
       {(!isTag || chevron) && <ChevronDown className={cn("pm-select-chev shrink-0 h-3.5 w-3.5", open && "is-open")} strokeWidth={1.75} />}
     </button>
     <SoftMenu open={open && !disabled} portal anchorRef={triggerRef} matchAnchorWidth={!isTag} align={isTag ? "end" : "start"}
-      onClose={close} autoFocus className={cn("pm-select-menu sd-select-menu", isTag && "pm-select-menu--tag")}
+      onClose={close} autoFocus className={cn("pm-select-menu sd-select-menu", isTag && "pm-select-menu--tag", menuClassName)}
       style={{ zIndex: menuZIndex ?? 450 }} role="presentation"
       onBlur={event => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget) && !triggerRef.current?.contains(event.relatedTarget)) close() }}
       onKeyDown={event => {
@@ -82,15 +89,17 @@ export function DropdownSelect({ id, "aria-label": ariaLabel, "aria-labelledby":
           requestAnimationFrame(() => searchRef.current?.focus())
         }
       }}>
-      {searchable && <label className="sd-menu-search sd-select-search"><Search size={15} aria-hidden /><input ref={searchRef}
+      {showSearch && <label className="sd-menu-search sd-select-search"><Search size={15} aria-hidden /><input ref={searchRef}
         value={query} onChange={event => setQuery(event.target.value)} aria-label={t("menus.search")} placeholder={t("menus.search")} />
         {query && <button type="button" className="sd-menu-icon-button" aria-label={t("menus.clearSearch")} onClick={() => { setQuery(""); searchRef.current?.focus() }}><X size={13} /></button>}
       </label>}
       <div id={`${generatedId}-options`} role="listbox" aria-label={ariaLabel || selected?.label || placeholder} aria-labelledby={ariaLabelledBy} className="sd-select-options" data-menu-list>
-        {!filtered.length ? <div className="sd-menu-empty">{t(options.length ? "common.noMatches" : "common.noOptions")}</div>
+        {!filtered.length ? <div className="sd-menu-empty">{t(choices.length ? "common.noMatches" : "common.noOptions")}</div>
           : filtered.map(option => <button key={option.value} type="button" role="option" aria-selected={value === option.value}
-            className={cn("pm-select-opt", value === option.value && "is-on")} title={option.label} onClick={() => choose(option.value)}>
-            <span className="pm-select-opt-label min-w-0 truncate">{option.label}</span>
+            disabled={option.disabled} className={cn("pm-select-opt", value === option.value && "is-on")} title={option.label} onClick={() => choose(option.value)}>
+            {option.detail ? <span className="pm-select-opt-copy min-w-0"><span className="pm-select-opt-label">{option.label}</span>
+              <span className="pm-select-opt-detail">{option.detail}</span></span>
+              : <span className="pm-select-opt-label min-w-0 truncate">{option.label}</span>}
             {option.indicator && <span className="pm-select-opt-mark" title="Has test cases" />}
             <MenuCheck checked={value === option.value} />
           </button>)}

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises"
 import { test } from "node:test"
 import * as React from "react"
 import ts from "typescript"
-import type { QaImportPlan } from "../src/api/qa.ts"
+import type { QaImportContext, QaImportPlan } from "../src/api/qa.ts"
 
 type Element = React.ReactElement<Record<string, unknown>>
 function elements(node: unknown): Element[] {
@@ -35,6 +35,7 @@ function deferred<T>() {
 async function harness(initial: QaImportPlan, options: {
   save?: (plan: QaImportPlan) => Promise<QaImportPlan>;
   analyze?: (plan: QaImportPlan) => Promise<QaImportPlan>;
+  loadList?: () => Promise<QaImportContext>;
 } = {}) {
   const key = `__qa_import_followup_${Math.random()}`
   const globals = globalThis as unknown as Record<string, unknown>
@@ -63,6 +64,7 @@ async function harness(initial: QaImportPlan, options: {
         column_matches: { ...plan.column_matches, "1": "column-response" },
       }
     },
+    getQaImportContext: options.loadList,
   }
   globals[key] = runtime
   const data = (source: string) => `data:text/javascript,${encodeURIComponent(source)}`
@@ -76,7 +78,7 @@ async function harness(initial: QaImportPlan, options: {
     "./qa-import-review": stubs("QaImportReview"),
     "./qa-import-submit": stubs("QaImportSubmit"),
     "./qa-import-table": stubs("QaImportTable"),
-    "./qa-controls": stubs("QaField", "QaToggle"),
+    "./qa-controls": stubs("QaActionMenu", "QaMenuItem", "QaField", "QaToggle"),
     "@/components/ui/button": stubs("Button"),
     "@/components/ui/dialog": stubs("Dialog", "DialogContent", "DialogHeader", "DialogTitle"),
     "@/components/ui/dropdown-select": stubs("DropdownSelect"),
@@ -85,7 +87,7 @@ async function harness(initial: QaImportPlan, options: {
     "@/lib/qa-download": stubs("saveQaDownload"),
     "@/stores/app-store": data("export const useAppStore=select=>select({qaDrafts:{}})"),
     "@/i18n/use-t": data("export const useT=()=>key=>key"),
-    "@/api/client": data(["analyzeQaImport", "cancelQaImport", "createQaImportList", "commitQaImport", "exportQaFile", "getQaTemplates", "getQaExports", "downloadQaExport", "patchQaImport", "uploadQaImport"].map(name => `export const ${name}=(...args)=>globalThis[${JSON.stringify(key)}].${name}?.(...args);`).join("\n")),
+    "@/api/client": data(["analyzeQaImport", "cancelQaImport", "createQaImportList", "commitQaImport", "exportQaFile", "getQaTemplates", "getQaExports", "downloadQaExport", "getQaImportContext", "patchQaImport", "uploadQaImport"].map(name => `export const ${name}=(...args)=>globalThis[${JSON.stringify(key)}].${name}?.(...args);`).join("\n")),
   }
   const source = await readFile(new URL("../src/components/qa/qa-exchange.tsx", import.meta.url), "utf8")
   const compiled = ts.transpileModule(source, { compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText
@@ -103,12 +105,18 @@ async function harness(initial: QaImportPlan, options: {
       assert.ok(review)
       const submit = tree.find(element => typeof element.type === "function" && element.type.name === "QaImportSubmit")
       assert.ok(submit)
+      const table = tree.find(element => typeof element.type === "function" && element.type.name === "QaImportTable")
+      assert.ok(table)
       return {
         plan: review.props.plan as QaImportPlan,
+        list: review.props.list as QaImportContext,
         busy: review.props.busy, submitBusy: submit.props.busy,
+        columnMapping: (table.props.columnMapping || (table.props.plan as QaImportPlan).mapping) as QaImportPlan["mapping"],
+        columnsBusy: table.props.columnsBusy ?? table.props.busy,
+        onRole: table.props.onRole as (index: number, role: string) => void,
         onRecheck: submit.props.onRecheck as () => void,
         onReview: submit.props.onReview as () => void,
-        reviewRef: review.props.reviewRef as { current: { querySelector: (selector: string) => unknown; scrollTo: () => void; focus: () => void } | null },
+        reviewRef: review.props.reviewRef as { current: { focusDecision: () => void } | null },
         onQuestion: review.props.onQuestion as (key: string, target: string) => void,
         onColumn: review.props.onColumn as (key: string, target: string) => void,
         onMerge: review.props.onMerge as (changes: Partial<QaImportPlan>) => void,
@@ -119,6 +127,83 @@ async function harness(initial: QaImportPlan, options: {
     dispose() { delete globals[key] },
   }
 }
+
+test("column roles stay editable while the latest changes save in revision order", async () => {
+  const first = deferred<QaImportPlan>(), second = deferred<QaImportPlan>()
+  const h = await harness(pendingPlan(), {
+    save: next => next.plan_revision === 4 ? first.promise : second.promise,
+  })
+  try {
+    h.render().onRole(1, "extra")
+    await h.flush()
+    assert.deepEqual(Object.keys(h.payloads[0]), ["mapping"], "one save is enough for an acknowledged plan")
+    const pending = h.render()
+    assert.equal(pending.columnsBusy, false)
+    assert.equal(pending.submitBusy, true)
+    assert.deepEqual(pending.columnMapping.extras, [1])
+    pending.onRole(2, "status")
+    pending.onRole(1, "number")
+    assert.equal(h.saved.length, 1)
+    assert.equal(h.render().columnMapping.number, 1)
+    assert.equal(h.render().columnMapping.status, 2)
+
+    first.resolve({ ...h.saved[0], plan_revision: 5 })
+    await h.flush()
+    assert.equal(h.saved.length, 2)
+    assert.equal(h.saved[1].plan_revision, 5)
+    assert.equal(h.saved[1].mapping.number, 1)
+    assert.equal(h.saved[1].mapping.status, 2)
+    assert.equal(h.render().columnsBusy, false)
+    assert.equal(h.render().submitBusy, true)
+
+    second.resolve({ ...h.saved[1], plan_revision: 6 })
+    await h.flush()
+    assert.equal(h.render().plan.plan_revision, 6)
+    assert.equal(h.render().submitBusy, false)
+    assert.equal(h.analyzed.length, 0, "manual column edits do not wait for an AI run")
+  } finally { h.dispose() }
+})
+
+test("a failed column save restores the acknowledged roles and lets the user retry", async () => {
+  const plan = pendingPlan()
+  let failed = false
+  const h = await harness(plan, {
+    save: async next => {
+      if (!failed) { failed = true; throw new Error("save unavailable") }
+      return { ...next, plan_revision: next.plan_revision + 1 }
+    },
+  })
+  try {
+    h.render().onRole(1, "extra")
+    await h.flush()
+    const settled = h.render()
+    assert.deepEqual(settled.columnMapping, plan.mapping)
+    assert.equal(settled.columnsBusy, false)
+    assert.equal(settled.submitBusy, false)
+    assert.equal(settled.alerts[0]?.props.children, "qa.importPreview.columnSaveFailed")
+
+    settled.onRole(1, "extra")
+    await h.flush()
+    assert.deepEqual(h.render().columnMapping.extras, [1])
+    assert.equal(h.render().alerts.length, 0)
+    assert.equal(h.analyzed.length, 0)
+  } finally { h.dispose() }
+})
+
+test("changing a column saves unsent identity choices before rebuilding the mapping", async () => {
+  const h = await harness({ ...pendingPlan(), mapping_valid: false })
+  try {
+    h.render().onQuestion("2", "question-access")
+    assert.equal(h.saved.length, 0)
+    h.render().onRole(1, "extra")
+    await h.flush()
+    assert.equal(h.saved.length, 2)
+    assert.equal(h.payloads[0].matches && h.saved[0].matches["2"], "question-access")
+    assert.equal(h.saved[1].plan_revision, 5)
+    assert.deepEqual(h.saved[1].mapping.extras, [1])
+    assert.equal(h.analyzed.length, 0)
+  } finally { h.dispose() }
+})
 
 test("each identity choice saves immediately and only the final question triggers pending column analysis", async () => {
   const h = await harness(pendingPlan())
@@ -244,6 +329,27 @@ test("resolved reply columns are saved without analysis and the server's refresh
   } finally { h.dispose() }
 })
 
+test("choosing an occupied old round transfers it across the whole import and frees its previous match", async () => {
+  const plan = pendingPlan()
+  plan.matches = { "2": "question-access", "3": "question-inspection" }
+  plan.headers.push("Final response")
+  plan.mapping.replies.push(3)
+  for (const row of plan.rows) row.values.push("A new note.")
+  plan.column_matches = { "1": "old-k", "2": "old-m", "3": "new" }
+  const h = await harness(plan)
+  try {
+    h.render().onColumn("1", "old-m")
+    await h.flush()
+    assert.equal(h.saved.length, 1)
+    assert.deepEqual(h.saved[0].column_matches, { "1": "old-m", "2": "new", "3": "new" })
+    h.render().onColumn("3", "old-k")
+    await h.flush()
+    assert.equal(h.saved.length, 2)
+    assert.deepEqual(h.saved[1].column_matches, { "1": "old-m", "2": "new", "3": "old-k" })
+    assert.equal(h.analyzed.length, 0)
+  } finally { h.dispose() }
+})
+
 test("unavailable automatic analysis retains the saved choices and revision for manual review", async () => {
   const plan = pendingPlan()
   plan.matches["2"] = "question-access"
@@ -314,18 +420,34 @@ test("rechecking a stale plan rebases the current identities without reuploading
 })
 
 
-test("review action focuses and scrolls to a decision instead of restarting at the summary", async () => {
+test("review action opens the review's next decision", async () => {
   const h = await harness(pendingPlan())
   try {
     const events: string[] = []
-    const target = { focus: () => events.push("focus decision"), scrollIntoView: () => events.push("scroll to decision") }
     const view = h.render()
-    view.reviewRef.current = {
-      querySelector: selector => selector === "[data-qa-import-decision]" ? target : null,
-      scrollTo: () => events.push("scroll to start"),
-      focus: () => events.push("focus summary"),
-    }
+    view.reviewRef.current = { focusDecision: () => events.push("focus decision") }
     view.onReview()
-    assert.deepEqual(events, ["focus decision", "scroll to decision"])
+    assert.deepEqual(events, ["focus decision"])
+  } finally { h.dispose() }
+})
+
+test("rechecking loads the rebased current list before the paired preview becomes editable", async () => {
+  const plan = { ...pendingPlan(), stale: true }
+  const refreshed: QaImportContext = { id: "list-a", title: "Updated workshop register", revision: 3, columns: [], questions: [] }
+  const result = deferred<QaImportContext>()
+  const h = await harness(plan, {
+    save: async saved => ({ ...saved, stale: false, base_revision: 3, plan_revision: 5 }),
+    loadList: () => result.promise,
+  })
+  try {
+    h.render().onRecheck()
+    await h.flush()
+    assert.equal(h.render().plan.plan_revision, 5)
+    assert.equal(h.render().plan.stale, true)
+    result.resolve(refreshed)
+    await h.flush()
+    assert.equal(h.render().plan.stale, false)
+    assert.deepEqual(h.render().list, refreshed)
+    assert.equal(h.analyzed.length, 0)
   } finally { h.dispose() }
 })

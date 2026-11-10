@@ -1,20 +1,20 @@
 import { useQaModal } from "./use-qa-modal"
 import { QaWorkbookUpload } from "./qa-workbook-upload"
-import { QaImportReview } from "./qa-import-review"
+import { QaImportReview, type QaImportReviewHandle } from "./qa-import-review"
 import { QaImportSubmit } from "./qa-import-submit"
-import { QaImportTable } from "./qa-import-table"
-import { canConfirmQaFields, changeColumnRole, qaParentCandidates } from "@/lib/qa-import-mapping"
+import { QaImportTable, type QaImportTableHandle } from "./qa-import-table"
+import { canConfirmQaFields, changeColumnRole, columnRole, excelColumn, qaParentCandidates } from "@/lib/qa-import-mapping"
 import { saveQaDownload } from "@/lib/qa-download"
 import { useEffect, useRef, useState } from "react"
-import { Download, FileSpreadsheet } from "lucide-react"
+import { Download, FileSpreadsheet, LoaderCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { DropdownSelect } from "@/components/ui/dropdown-select"
-import { QaField, QaToggle } from "./qa-controls"
+import { QaActionMenu, QaField, QaMenuItem, QaToggle } from "./qa-controls"
 import { Input } from "@/components/ui/input"
 import { useAppStore } from "@/stores/app-store"
 import { useT } from "@/i18n/use-t"
-import { analyzeQaImport, cancelQaImport, createQaImportList, commitQaImport, exportQaFile, getQaTemplates, getQaExports, downloadQaExport, patchQaImport, uploadQaImport, type QaExportRecord, type QaImportContext, type QaImportPlan, type QaImportMergeChanges, type QaListDetail } from "@/api/client"
+import { analyzeQaImport, cancelQaImport, createQaImportList, commitQaImport, exportQaFile, getQaTemplates, getQaExports, downloadQaExport, getQaImportContext, patchQaImport, uploadQaImport, type QaExportRecord, type QaImportContext, type QaImportPlan, type QaImportMergeChanges, type QaListDetail } from "@/api/client"
 import "./qa-exchange-refinement.css"
 
 export function QaExchange({ collectionId, list: existingList, mode, close: onClosed, onImported, resume, onTemplate }: { collectionId: string; list: QaListDetail | null; mode: "import" | "export"; close: () => void; onImported: (list: QaListDetail) => void; resume?: { list: QaImportContext; plan: QaImportPlan }; onTemplate?: () => void }) {
@@ -24,16 +24,20 @@ export function QaExchange({ collectionId, list: existingList, mode, close: onCl
   const [list, setList] = useState<QaImportContext | null>(resume?.list || existingList)
   const [exports, setExports] = useState<QaExportRecord[]>([])
   const [busy, setBusy] = useState(false)
+  const [committing, setCommitting] = useState(false)
   const busyRef = useRef(false)
   const [error, setError] = useState("")
   const [plan, setPlan] = useState<QaImportPlan | null>(resume?.plan || null)
   const planRef = useRef(plan)
-  const [step, setStep] = useState<"mapping" | "review">("review")
-  const reviewRef = useRef<HTMLDivElement>(null)
+  const acknowledgedPlan = useRef(plan)
+  const [columnMapping, setColumnMapping] = useState<QaImportPlan["mapping"] | null>(null)
+  const columnMappingRef = useRef(columnMapping)
+  const reviewRef = useRef<QaImportReviewHandle>(null)
+  const tableRef = useRef<QaImportTableHandle>(null)
+  const [cancelConfirm, setCancelConfirm] = useState(false)
 
   const [headerRow, setHeaderRow] = useState(resume?.plan.header_row || 1)
   const [region, setRegion] = useState(resume?.plan.region || { start_column: 1, end_column: 1, header_end_row: 1, end_row: 1 })
-  const [sheet, setSheet] = useState(resume?.plan.sheet || "")
   const [options, setOptions] = useState({ include_number: true, include_status: false, include_type: false, resequence: false })
 
   useEffect(() => {
@@ -45,20 +49,21 @@ export function QaExchange({ collectionId, list: existingList, mode, close: onCl
     getQaExports(collectionId, existingList.id).then(setExports).catch(() => {})
   }, [collectionId, existingList, mode])
 
-  function acceptPlan(next: QaImportPlan) {
+  function acceptPlan(next: QaImportPlan, saved = true) {
+    if (saved) acknowledgedPlan.current = next
     planRef.current = next
-    setPlan(next); setHeaderRow(next.header_row); setSheet(next.sheet)
+    setPlan(next); setHeaderRow(next.header_row)
     setRegion(next.region || { start_column: 1, end_column: next.headers.length, header_end_row: next.header_row, end_row: Number(next.rows.at(-1)?.key || next.header_row) })
   }
-  async function run(work: () => Promise<void>) {
+  async function run(work: () => Promise<void>, fallbackError = "qa.failed") {
     if (busyRef.current) return
     busyRef.current = true
     setBusy(true); setError("")
     try { await work() } catch (e) {
       const message = e instanceof Error ? e.message : ""
-      const code = ["stale_import", "duplicate_identity_assignment", "unresolved_match", "unresolved_content", "formula_without_cached_value", "parse_limit_exceeded", "invalid_mapping", "invalid_parent", "question_required", "empty_workbook", "unsupported_layout_change", "source_unavailable"].find(k => message.includes(k))
-      if (code === "stale_import" && planRef.current) acceptPlan({ ...planRef.current, stale: true })
-      setError(t(code ? `qa.importError.${code}` : "qa.failed"))
+      const code = ["stale_import", "duplicate_identity_assignment", "unresolved_match", "unresolved_content", "formula_without_cached_value", "parse_limit_exceeded", "invalid_mapping", "invalid_header", "invalid_sheet", "invalid_parent", "question_required", "empty_workbook", "unsupported_layout_change", "source_unavailable"].find(k => message.includes(k))
+      if (code === "stale_import" && planRef.current) acceptPlan({ ...planRef.current, stale: true }, false)
+      setError(t(code ? `qa.importError.${code}` : fallbackError))
     } finally { busyRef.current = false; setBusy(false) }
   }
   const unresolved = plan ? [...Object.values(plan.matches), ...Object.values(plan.column_matches)].filter(v => !v).length : 0
@@ -76,12 +81,27 @@ export function QaExchange({ collectionId, list: existingList, mode, close: onCl
   function chooseIdentity(kind: "matches" | "column_matches", key: string, value: string) {
     const current = planRef.current
     if (!current || !list || busyRef.current || current.stale || current[kind][key] === value) return
-    const next = { ...current, [kind]: { ...current[kind], [key]: value }, content_choices: {}, blank_columns: [] }
-    acceptPlan(next)
+    const assignments = { ...current[kind], [key]: value }
+    const changed = new Set([key])
+    if (kind === "column_matches" && value !== "new") {
+      for (const [other, target] of Object.entries(current.column_matches)) {
+        if (other === key || target !== value) continue
+        assignments[other] = "new"
+        changed.add(other)
+      }
+    }
+    const contentChoices = Object.fromEntries((current.review?.conflicts || []).flatMap(item => {
+      const affected = kind === "matches" ? changed.has(item.row_key)
+        : item.kind === "reply" && changed.has(item.column_key || "")
+      const choice = current.content_choices?.[item.id] || item.choice
+      return choice && !affected && item.kind !== "structure" ? [[item.id, choice]] : []
+    }))
+    const next = { ...current, [kind]: assignments, content_choices: contentChoices, blank_columns: [] }
+    acceptPlan(next, false)
     if (!validIdentityState(next)) return
     void run(async () => {
       const saved = await patchQaImport(collectionId, list.id, next, {
-        matches: next.matches, column_matches: next.column_matches, content_choices: {}, blank_columns: [],
+        matches: next.matches, column_matches: next.column_matches, content_choices: next.content_choices, blank_columns: [],
       })
       acceptPlan(saved)
       if (!saved.stale && validIdentityState(saved) &&
@@ -100,26 +120,50 @@ export function QaExchange({ collectionId, list: existingList, mode, close: onCl
       matches: current.matches, column_matches: current.column_matches, ...changes,
     })))
   }
-  const sourceUnresolved = plan?.table_rows?.filter(row => row.kind === "review").length || 0
-  function focusReview() {
-    const review = reviewRef.current
-    const target = review?.querySelector<HTMLElement>("[data-qa-import-decision]")
-    if (target) {
-      target.focus({ preventScroll: true })
-      target.scrollIntoView({ block: "nearest" })
-    } else {
-      review?.scrollTo({ top: 0 })
-      review?.focus({ preventScroll: true })
-    }
+  function changeRole(index: number, role: string) {
+    const current = planRef.current
+    const pending = columnMappingRef.current
+    if (!current || !list || current.stale || (busyRef.current && !pending)) return
+    const mapping = pending || current.mapping
+    if (columnRole(mapping, index) === role) return
+    const changed = changeColumnRole({ ...current, mapping }, index, role)
+    columnMappingRef.current = changed
+    setColumnMapping(changed)
+    if (pending) return
+
+    void run(async () => {
+      try {
+        let saved = current
+        if (saved !== acknowledgedPlan.current) {
+          saved = await patchQaImport(collectionId, list.id, current, {
+            matches: current.matches, column_matches: current.column_matches,
+            content_choices: current.content_choices, blank_columns: current.blank_columns,
+          })
+          acceptPlan(saved)
+        }
+        // Each request uses the last acknowledged revision. Edits made while it
+        // is in flight collapse into the next complete mapping.
+        while (columnMappingRef.current && !saved.stale) {
+          const target = columnMappingRef.current
+          saved = await patchQaImport(collectionId, list.id, saved, { mapping: target })
+          acceptPlan(saved)
+          if (columnMappingRef.current === target) break
+        }
+      } finally {
+        columnMappingRef.current = null
+        setColumnMapping(null)
+      }
+    }, "qa.importPreview.columnSaveFailed")
   }
-  async function adjustStructure(changes: Record<string, unknown>, analyze = true) {
+  const sourceUnresolved = plan?.table_rows?.filter(row => row.kind === "review").length || 0
+  async function adjustStructure(changes: Record<string, unknown>) {
     if (!plan || !list) return
     // Save local identity choices before a structural edit rebuilds the plan.
     const saved = await patchQaImport(collectionId, list.id, plan, { matches: plan.matches, column_matches: plan.column_matches })
     acceptPlan(saved)
     const adjusted = await patchQaImport(collectionId, list.id, saved, changes)
     acceptPlan(adjusted)
-    if (analyze && adjusted.mapping_valid) acceptPlan(await analyzeQaImport(collectionId, list.id, adjusted).catch(() => adjusted))
+    if (adjusted.mapping_valid) acceptPlan(await analyzeQaImport(collectionId, list.id, adjusted).catch(() => adjusted))
   }
   async function adjustRows(changes: Record<string, string>) {
     if (!plan || !list) return
@@ -127,19 +171,38 @@ export function QaExchange({ collectionId, list: existingList, mode, close: onCl
       const previous = qaParentCandidates(plan, key).filter(row => Number(row.key) < Number(key)).at(-1)?.key || ""
       return [key, kind === "child" ? previous : ""]
     }))
-    await adjustStructure({ row_actions: changes, parents }, step === "review")
+    await adjustStructure({ row_actions: changes, parents })
+  }
+  function focusReview() {
+    if (!plan?.mapping_valid || sourceUnresolved) {
+      tableRef.current?.focusRow(plan?.table_rows?.find(row => row.kind === "review")?.key || "")
+    } else {
+      reviewRef.current?.focusDecision()
+    }
   }
 
   const exportedColumns = existingList?.columns.filter(column => column.included).map(column => column.label).join(" · ")
+  const reviewing = mode === "import" && !!plan
+  const firstReview = reviewing && list?.questions.length === 0
+  const locked = busy || !!plan?.stale
+  const displayedRegion = plan?.region
 
   return <Dialog open={open} onOpenChangeComplete={onOpenChangeComplete} onOpenChange={open => { if (!open && !busy) close() }}>
-    <DialogContent className={`qa-dialog qa-exchange-dialog ${mode === "import" && plan ? step === "review" ? "qa-exchange-review" : "qa-exchange-wide" : "qa-exchange-compact"}`}>
+    <DialogContent className={`qa-dialog qa-exchange-dialog ${reviewing ? "qa-exchange-review" : "qa-exchange-compact"}`}>
       <DialogHeader>
-        <DialogTitle>{t(mode === "export" ? "qa.export" : plan ? step === "mapping" ? "qa.review.sourceSettings" : "qa.confirmImport" : "qa.import")}</DialogTitle>
-        {mode === "import" && plan && <p className="qa-exchange-file" title={plan.filename}>{plan.filename}</p>}
+        <DialogTitle>{t(mode === "export" ? "qa.export" : !plan ? "qa.import" :
+          firstReview ? "qa.importPreview.firstTitle" : "qa.importPreview.updateTitle")}</DialogTitle>
+        {mode === "import" && plan && <div className="qa-import-file-line">
+          <FileSpreadsheet size={14} aria-hidden /><p className="qa-exchange-file" title={plan.filename}>{plan.filename}</p>
+        </div>}
+        {mode === "import" && plan && <div className="qa-import-header-actions">
+          <QaActionMenu label={t("qa.importPreview.more")} disabled={busy}>
+            <QaMenuItem destructive onClick={() => setCancelConfirm(true)}>{t("qa.cancelImport")}</QaMenuItem>
+          </QaActionMenu>
+        </div>}
       </DialogHeader>
       {hasDrafts && <p className="qa-notice">{t(mode === "import" ? "qa.importDraftNotice" : "qa.exportDraftNotice")}</p>}
-      {error && <div className="qa-notice" role="alert">{error}</div>}
+      {error && !reviewing && <div className="qa-notice" role="alert">{error}</div>}
       {mode === "export" && existingList ? <>
         <div className="qa-exchange-export-summary">
           <span className="qa-exchange-file-icon" aria-hidden><FileSpreadsheet /></span>
@@ -161,51 +224,80 @@ export function QaExchange({ collectionId, list: existingList, mode, close: onCl
         const uploaded = await uploadQaImport(collectionId, target, file)
         acceptPlan(uploaded)
         const analyzed = await analyzeQaImport(collectionId, target.id, uploaded).catch(() => uploaded)
-        acceptPlan(analyzed); setStep("review")
-      })} /> : step === "mapping" ? <>
-        <div className="qa-import-source">
-          <QaField label={t("qa.sheet")}><DropdownSelect aria-label={t("qa.sheet")} value={sheet} onChange={value => { setSheet(value); void run(async () => acceptPlan(await patchQaImport(collectionId, list.id, plan, { sheet: value }))) }} disabled={busy} options={plan.sheets.map(value => ({ value, label: value }))} /></QaField>
-          <QaField label={t("qa.headerRow")}><Input type="number" value={headerRow} min={1} max={2020} disabled={busy} onChange={e => { const value = Number(e.target.value); setHeaderRow(value); setRegion(r => ({ ...r, header_end_row: Math.max(value, r.header_end_row) })) }} /></QaField>
-          <Button size="sm" variant="secondary" disabled={busy} onClick={() => run(async () => acceptPlan(await patchQaImport(collectionId, list.id, plan, { sheet, header_row: headerRow, region })))}>{t("qa.refreshPreview")}</Button>
+        acceptPlan(analyzed)
+      })} /> : <div className="qa-import-body" aria-busy={busy && !columnMapping}>
+        <section className="qa-import-sheet" aria-label={t("qa.tablePreview")}>
+          <div className="qa-import-sheet-bar">
+            <DropdownSelect size="sm" aria-label={t("qa.sheet")} value={plan.sheet} menuClassName="qa-exchange-menu"
+              onChange={value => { if (value !== plan.sheet) void run(() => adjustStructure({ sheet: value })) }}
+              disabled={locked} options={plan.sheets.map(value => ({ value, label: value }))} />
+            {displayedRegion && <span className="qa-sheet-range">{excelColumn(displayedRegion.start_column - 1)}{plan.header_row}:{excelColumn(displayedRegion.end_column - 1)}{displayedRegion.end_row}</span>}
+            <span className="qa-meta">{t("qa.headerRow")} {plan.header_row}{displayedRegion && displayedRegion.header_end_row > plan.header_row && `–${displayedRegion.header_end_row}`}</span>
+            {plan.mapping_confirmed === false && canConfirmQaFields(plan) && <Button size="sm" variant="outline" disabled={locked}
+              onClick={() => run(() => adjustStructure({ mapping: plan.mapping }))}>{t("qa.confirmFields")}</Button>}
+            {columnMapping && <span className="qa-import-save-status qa-meta" role="status">
+              <LoaderCircle size={13} className="animate-spin" aria-hidden />{t("qa.importPreview.savingColumns")}
+            </span>}
+          </div>
+          <details className="qa-region-settings">
+            <summary>{t("qa.adjustRegion")}</summary>
+            <div>
+              <QaField label={t("qa.headerRow")}><Input type="number" value={headerRow} min={1} max={2020} disabled={locked}
+                onChange={event => { const value = Number(event.target.value); setHeaderRow(value); setRegion(current => ({ ...current, header_end_row: Math.max(value, current.header_end_row) })) }} /></QaField>
+              {(["start_column", "end_column", "header_end_row", "end_row"] as const).map(key => <QaField key={key} label={t(`qa.region.${key}`)}>
+                <Input type="number" min={1} max={key.includes("column") ? 100 : 2020} value={region[key]} disabled={locked}
+                  onChange={event => { const value = Number(event.target.value); setRegion(current => ({ ...current, [key]: value })) }} />
+              </QaField>)}
+              <Button size="sm" variant="secondary" disabled={locked} onClick={() => run(() => adjustStructure({ header_row: headerRow, region }))}>{t("qa.applyRecognition")}</Button>
+            </div>
+          </details>
+          <QaImportTable plan={plan} busy={locked} tableRef={tableRef} onRole={changeRole}
+            columnMapping={columnMapping || plan.mapping} columnsBusy={!!plan.stale || (busy && !columnMapping)}
+            onRow={(key, kind) => { void run(() => adjustRows({ [key]: kind })) }}
+            onParent={(key, parent) => { void run(() => adjustStructure({ parents: { [key]: parent } })) }} />
+        </section>
+        <QaImportReview plan={plan} list={list} busy={locked} duplicate={duplicate} reviewRef={reviewRef} onQuestion={choose} onColumn={chooseColumn} onMerge={chooseMerge}
+          onLocate={key => tableRef.current?.focusRow(key)} />
+      </div>}
+      {error && reviewing && <div className="qa-notice" role="alert">{error}</div>}
+      {mode === "import" && plan && list && <div className="qa-import-footer">{cancelConfirm ? <>
+        <span className="qa-meta">{t("qa.importPreview.confirmCancel")}</span>
+        <div className="qa-import-primary">
+          <Button variant="ghost" size="sm" disabled={busy} onClick={() => setCancelConfirm(false)}>{t("qa.importPreview.continueReview")}</Button>
+          <Button variant="destructive" size="sm" disabled={busy} onClick={() => run(async () => { await cancelQaImport(collectionId, list.id, plan); close() })}>{t("qa.cancelImport")}</Button>
         </div>
-        <details className="qa-region-settings"><summary>{t("qa.adjustRegion")}</summary><div>
-          {(["start_column", "end_column", "header_end_row", "end_row"] as const).map(key => <QaField key={key} label={t(`qa.region.${key}`)}><Input type="number" min={1} max={key.includes("column") ? 100 : 2020} value={region[key]} disabled={busy} onChange={e => setRegion(r => ({ ...r, [key]: Number(e.target.value) }))} /></QaField>)}
-        </div></details>
-        {plan.ai_status !== "ready" && <p className="qa-meta">{t("qa.structureFallback")}</p>}
-        <QaImportTable plan={plan} busy={busy} onRole={(index, role) => { void run(() => adjustStructure({ mapping: changeColumnRole(plan, index, role) }, false)) }} onRow={(key, kind) => { void run(() => adjustRows({ [key]: kind })) }} onParent={(key, parent) => { void run(() => adjustStructure({ parents: { [key]: parent } }, false)) }} />
-        {!plan.mapping_valid && <p className="qa-meta" role="status">{t("qa.resolveRows")}</p>}
       </> : <>
-        <QaImportReview plan={plan} list={list} busy={busy || !!plan.stale} duplicate={duplicate} reviewRef={reviewRef} onQuestion={choose} onColumn={chooseColumn} onMerge={chooseMerge} onAdjust={() => setStep("mapping")}
-          onRows={changes => { void run(() => adjustRows(changes)) }}
-          onRole={(index, role) => { void run(() => adjustStructure({ mapping: changeColumnRole(plan, index, role) })) }}
-          onParent={(key, parent) => { void run(() => adjustStructure({ parents: { [key]: parent } })) }} />
-      </>}
-      {mode === "import" && plan && list && <div className="qa-import-footer">
         <div className="qa-import-secondary">
           <Button variant="ghost" size="sm" disabled={busy} onClick={() => run(async () => { await patchQaImport(collectionId, list.id, plan, { matches: plan.matches, column_matches: plan.column_matches }); close() })}>{t("qa.continueLater")}</Button>
-          <Button variant="link" size="sm" disabled={busy} onClick={() => run(async () => { await cancelQaImport(collectionId, list.id, plan); close() })}>{t("qa.cancelImport")}</Button>
         </div>
         <div className="qa-import-primary">
-          {step === "mapping" ? <Button size="sm" disabled={busy} onClick={() => run(async () => {
-            if (!canConfirmQaFields(plan)) { setStep("review"); return }
-            const mapped = await patchQaImport(collectionId, list.id, plan, { mapping: plan.mapping })
-            acceptPlan(mapped); if (!mapped.mapping_valid) return; const analyzed = await analyzeQaImport(collectionId, list.id, mapped).catch(() => mapped); acceptPlan(analyzed); setStep("review")
-          })}>{t(busy ? "qa.processing" : "qa.review.backToReview")}</Button> : <>
-            {!plan.stale && (unresolved > 0 || sourceUnresolved > 0) && <Button variant="link" size="sm" disabled={busy} onClick={() => run(async () => {
+            {!plan.stale && (sourceUnresolved > 0 || (plan.mapping_valid && unresolved > 0)) && <Button variant="link" size="sm" disabled={busy} onClick={() => run(async () => {
               const saved = await patchQaImport(collectionId, list.id, plan, { matches: plan.matches, column_matches: plan.column_matches })
               acceptPlan(saved); acceptPlan(await analyzeQaImport(collectionId, list.id, saved))
             })}>{t("qa.retryRecognition")}</Button>}
-            <QaImportSubmit plan={plan} busy={busy} duplicate={duplicate} onReview={focusReview} onAdjust={() => setStep("mapping")} onRecheck={() => run(async () => {
+            <QaImportSubmit plan={plan} busy={busy} committing={committing} duplicate={duplicate} onReview={focusReview} onAdjust={focusReview} onRecheck={() => run(async () => {
               const current = planRef.current
               if (!current) return
-              acceptPlan(await patchQaImport(collectionId, list.id, current, { rebase: true, matches: current.matches, column_matches: current.column_matches }))
+              const rebased = await patchQaImport(collectionId, list.id, current, { rebase: true, matches: current.matches, column_matches: current.column_matches })
+              if (rebased.base_revision === list.revision) {
+                acceptPlan(rebased)
+                return
+              }
+              acceptPlan({ ...rebased, stale: true })
+              const refreshed = await getQaImportContext(collectionId, list.id)
+              setList(refreshed)
+              acceptPlan(refreshed.revision === rebased.base_revision ? rebased : { ...rebased, stale: true })
             })} onImport={() => run(async () => {
-              const updated = await patchQaImport(collectionId, list.id, plan, { matches: plan.matches, column_matches: plan.column_matches })
-              acceptPlan(updated); onImported(await commitQaImport(collectionId, list.id, updated)); close()
+              setCommitting(true)
+              try {
+                const updated = await patchQaImport(collectionId, list.id, plan, { matches: plan.matches, column_matches: plan.column_matches })
+                acceptPlan(updated)
+                onImported(await commitQaImport(collectionId, list.id, updated))
+                close()
+              } finally { setCommitting(false) }
             })} />
-          </>}
         </div>
-      </div>}
+      </>}</div>}
     </DialogContent>
   </Dialog>
 }

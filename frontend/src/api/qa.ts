@@ -9,7 +9,7 @@ export interface QaOption { id: string; label: string; color: string }
 export interface QaOptions { statuses: QaOption[]; types: QaOption[] }
 export interface QaExtraField { id: string; label: string; value: string | number | boolean | null; kind: string }
 export interface QaVersion { id: string; number: number; state: "working" | "frozen"; created_at: string }
-export interface QaColumn { id: string; label: string; included: boolean; position: number; absent_since: number | null }
+export interface QaColumn { id: string; label: string; included: boolean; position: number; absent_since: number | null; source_column?: number }
 export interface QaReply { sources: QaSource[]; column_id: string; label: string; body: string; included: boolean; modified: boolean; historical_body: string; cleared_since: number | null; absent_since: number | null; text_revision_id: string }
 export interface QaQuestion { display_number?: string; type_origin?: "default" | "ai" | "manual"; fields?: QaExtraField[]; group?: string; group_id?: string; parent_id?: string; summary: string; reply_summary: string; id: string; text: string; included: boolean; position: number; status: QaStatus; type: QaType; external_number: string; updated_at: string; absent_since: number | null; replies: QaReply[]; latest_reply: string }
 export interface QaListSummary { id: string; title: string; revision: number; archived: boolean; question_count: number; version_number: number; updated_at: string }
@@ -41,22 +41,27 @@ export interface QaImportContentReview {
   conflicts: QaImportConflict[]; unresolved: number;
   missing_questions: { id: string; text: string; kept: boolean; reason: "local_changes" | "draft" | "not_in_file" }[];
   kept_columns: { id: string; label: string }[];
+  preview?: Record<string, { text?: string; replies?: Record<string, string>; included?: boolean }>;
   counts: { kept_replies: number; updated_replies: number; new_replies: number; conflicts: number; cleared_replies?: number; blank_kept?: number };
 }
 export interface QaImportMergeChanges {
   content_choices?: Record<string, QaImportContentChoice>;
   blank_columns?: string[]; retained_questions?: string[]; removed_questions?: string[];
+  retained_replies?: Record<string, string[]>;
 }
 export interface QaImportPlan {
   review?: QaImportContentReview; stale?: boolean;
   content_choices?: Record<string, QaImportContentChoice>;
   blank_columns?: string[]; retained_questions?: string[]; removed_questions?: string[];
+  retained_replies?: Record<string, string[]>;
   region?: QaRegion; row_actions?: Record<string, string>; parents?: Record<string, string>; structure_status?: string; analysis_complete?: boolean;
   candidates?: { sheet: string; header_row: number; start_column: number; end_column: number }[];
   table_rows?: { key: string; values: string[]; kind: string; group?: string; group_key?: string; parent_key?: string }[];
-  mapping_valid: boolean; ai_status: string; suggestions?: Record<string, { target: string; reason: string }>;
+  header_values?: string[][];
+  preview?: { row: number; values: string[] }[];
+  mapping_valid: boolean; mapping_confirmed?: boolean; ai_status: string; suggestions?: Record<string, { target: string; reason: string }>;
   id: string; filename: string; plan_revision: number; base_revision: number; sheets: string[]; sheet: string; header_row: number;
-  headers: string[]; rows: { key: string; values: string[]; text: string; group?: string; group_key?: string }[];
+  headers: string[]; rows: { key: string; values: string[]; text: string; group?: string; group_key?: string; formatted_values?: Record<string, string> }[];
   mapping: QaMapping;
   matches: Record<string, string | null>; column_matches: Record<string, string | null>;
 }

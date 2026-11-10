@@ -103,6 +103,17 @@ test("tables in Q&A excerpts retain their column widths inside a horizontal scro
   assert.match(table, /(?:^|;)\s*width:\s*max-content/, "the table must size its columns from its contents")
 })
 
+test("Q&A history, file and source dialogs use the same opaque surface", async () => {
+  const css = await readFile(new URL("../src/components/qa/qa.css", import.meta.url), "utf8")
+  const rule = css.match(/\.pm-dialog\.sd-dialog:is\(([^)]+)\)\[data-slot="dialog-content"\]\s*\{([^}]+)\}/)
+  assert.ok(rule, "shared surface for Q&A dialogs")
+  assert.deepEqual(new Set(rule[1].split(",").map(selector => selector.trim())), new Set([
+    ".qa-dialog", ".qa-file-space-dialog", ".qa-citation-dialog",
+  ]))
+  assert.match(rule[2], /background:[^;]+,\s*var\(--sd-canvas\)\s*!important/)
+  assert.match(rule[2], /backdrop-filter:\s*none/)
+})
+
 test("missing requested evidence names the material and keeps older proposals compatible", async () => {
   const { QaEvidenceNotice } = await server.ssrLoadModule("/src/components/qa/qa-reply-editor.tsx")
   const named = renderToStaticMarkup(createElement(QaEvidenceNotice, {
@@ -186,8 +197,11 @@ test("import review presents source columns horizontally with a role control ben
   assert.match(html, /<table/)
   assert.match(html, /<thead/)
   assert.match(html, /<tbody/)
-  assert.match(html, /Coordinator/)
-  assert.match(html, /Additional field/)
+  const heading = html.match(/<thead>[\s\S]*?<\/thead>/)?.[0]
+  assert.ok(heading)
+  assert.match(heading, />Coordinator<\/span>[\s\S]*?aria-label="Coordinator · Column role"[^>]*>[\s\S]*?>Additional field<\/span>/)
+  assert.doesNotMatch(heading, /class="qa-sheet-index"/)
+  assert.doesNotMatch(html, /data-source-row="2"/)
   assert.match(html, /Desk team/)
   assert.doesNotMatch(html, /<select/)
 })
@@ -226,27 +240,20 @@ test("recognized preview shows joined question text and independent notes, witho
   assert.doesNotMatch(html, /Repeated heading/)
 })
 
-test("import decisions name the destination reply column without comparing arbitrary example replies", async () => {
+test("collapsed comparisons keep the saved and incoming reply text in the expanded question", async () => {
   const { QaImportReview } = await server.ssrLoadModule("/src/components/qa/qa-import-review.tsx")
   const plan = {
     mapping: { question: 0, replies: [1] }, headers: ["Question", "Inspection response"],
     rows: [{ key: "2", text: "Describe the nursery entrance.", values: ["Describe the nursery entrance.", "Use the east gate."] }],
-    matches: { "2": "q1" }, column_matches: { "1": null }, table_rows: [],
-    mapping_valid: true, ai_status: "ready", structure_status: "ready",
+    matches: { "2": "q1" }, column_matches: { "1": null }, table_rows: [], mapping_valid: true,
   }
-  const list = { ...data, title: "Garden register", columns: [{ id: "c1", label: "Earlier response", included: true }], questions: [{ ...question, text: "Describe the nursery entrance.", replies: [{ ...reply, body: "Use the north gate." }] }] }
-  const html = renderToStaticMarkup(createElement(QaImportReview, { plan, list, busy: false, onQuestion() {}, onColumn() {}, onAdjust() {} }))
-  assert.match(html, /Create a new reply column/)
-  assert.match(html, /Write into “Earlier response”/)
-  assert.doesNotMatch(html, /Use the north gate\.|Compare replies to the same question/)
-  assert.match(html, /Earlier response/)
-  assert.ok(html.indexOf("Create a new reply column") < html.indexOf("Preview imported content"))
-  assert.equal((html.match(/<details\b/g) || []).length, 1)
-  assert.doesNotMatch(html, /<details[^>]* open/)
-  assert.doesNotMatch(html, />All matches</)
+  const list = { ...data, columns: [{ id: "c1", label: "Earlier response", included: true }], questions: [{ ...question, text: "Describe the nursery entrance.", replies: [{ ...reply, body: "Use the north gate." }] }] }
+  const html = renderToStaticMarkup(createElement(QaImportReview, { plan, list, busy: false, onQuestion() {}, onColumn() {} }))
+  assert.match(html, /aria-label="Expand question"/)
+  assert.doesNotMatch(html, /Use the north gate|Use the east gate|Example from/)
 })
 
-test("recognized question links are outcomes with an optional edit action rather than a form of dropdowns", async () => {
+test("old question is an editable left-side match and removed questions follow incoming ones", async () => {
   const { QaImportReview } = await server.ssrLoadModule("/src/components/qa/qa-import-review.tsx")
   const plan = {
     mapping: { question: 0, replies: [] }, headers: ["Question"],
@@ -260,49 +267,21 @@ test("recognized question links are outcomes with an optional edit action rather
     { id: "q2", included: true, text: "Confirm the inspection interval.", replies: [] },
   ] }
   const html = renderToStaticMarkup(createElement(QaImportReview, { plan, list, busy: false, onQuestion() {}, onColumn() {}, onAdjust() {} }))
-  assert.match(html, /Continue existing/)
-  assert.match(html, /Add new/)
-  assert.match(html, /Not in this file/)
-  assert.match(html, /Cabinet access/)
+  assert.match(html, /data-qa-import-outcome="matched"/)
+  assert.match(html, /data-qa-import-outcome="added"/)
+  assert.match(html, /data-qa-import-outcome="old"/)
+  assert.match(html, /Describe the cabinet entrance\./)
   assert.match(html, /Describe cabinet access\./)
-  assert.match(html, />Change</)
-  assert.doesNotMatch(html, /aria-haspopup="listbox"|Update:|qa-confirmed-row/)
+  assert.match(html, /aria-label="Change the question connection for Excel row 2"/)
+  assert.match(html, /class="[^"]*qa-import-question-select[\s\S]*aria-haspopup="listbox"[\s\S]*Describe the cabinet entrance/)
+  assert.match(html, />New question<|>Leaves this version</)
+  assert.ok(html.indexOf('data-qa-import-group="added"') < html.indexOf('data-qa-import-group="old"'))
   assert.doesNotMatch(html, /<details[^>]* open/)
 })
 
-test("an empty incoming reply column explains clearing without borrowing another question's reply", async () => {
-  const { QaImportReview } = await server.ssrLoadModule("/src/components/qa/qa-import-review.tsx")
-  const plan = {
-    mapping: { question: 0, replies: [1] }, headers: ["Question", "Response"],
-    rows: [{ key: "2", text: "Describe cabinet access.", values: ["Describe cabinet access.", ""] }],
-    matches: { "2": "q1" }, column_matches: { "1": null }, table_rows: [], mapping_valid: true,
-  }
-  const list = { ...data, title: "Museum register", columns: [{ id: "c1", label: "Earlier response", included: true }], questions: [
-    { ...question, text: "Describe cabinet access.", replies: [{ ...reply, body: "Use the staff entrance." }] },
-    { id: "q2", text: "Confirm the inspection interval.", included: true, replies: [{ ...reply, body: "Unrelated inspection note." }] },
-  ] }
-  const html = renderToStaticMarkup(createElement(QaImportReview, { plan, list, busy: false, onQuestion() {}, onColumn() {}, onAdjust() {} }))
-  assert.match(html, /This column is empty/)
-  assert.match(html, /1 existing reply will become blank/)
-  assert.doesNotMatch(html, /Unrelated inspection note|Use the staff entrance|Example from/)
-})
 
-test("even an automatically linked reply column discloses cleared replies and absent old columns", async () => {
-  const { QaImportReview } = await server.ssrLoadModule("/src/components/qa/qa-import-review.tsx")
-  const plan = {
-    mapping: { question: 0, replies: [1] }, headers: ["Question", "Response"],
-    rows: [{ key: "2", text: "Describe cabinet access.", values: ["Describe cabinet access.", ""] }],
-    matches: { "2": "q1" }, column_matches: { "1": "c1" }, table_rows: [], mapping_valid: true,
-  }
-  const list = { ...data, title: "Museum register", columns: [
-    { id: "c1", label: "Response", included: true }, { id: "c2", label: "Inspection follow-up", included: true },
-  ], questions: [{ ...question, text: "Describe cabinet access.", replies: [{ ...reply, body: "Use the staff entrance." }] }] }
-  const html = renderToStaticMarkup(createElement(QaImportReview, { plan, list, busy: false, onQuestion() {}, onColumn() {}, onAdjust() {} }))
-  assert.match(html, /1 existing reply will become blank/)
-  assert.match(html, /Reply columns not in this version/)
-  assert.match(html, /Inspection follow-up/)
-  assert.doesNotMatch(html, /aria-haspopup="listbox"/)
-})
+
+
 
 const unresolvedSourcePlan = {
   mapping: { question: 1, replies: [2], extras: [0], status: 3 },
@@ -315,20 +294,18 @@ const unresolvedSourcePlan = {
   matches: { "2": "new" }, column_matches: { "2": "new" }, mapping_valid: false,
 }
 
-test("unresolved source rows are actionable without opening advanced settings", async () => {
-  const { QaImportReview } = await server.ssrLoadModule("/src/components/qa/qa-import-review.tsx")
-  const html = renderToStaticMarkup(createElement(QaImportReview, {
-    plan: unresolvedSourcePlan, list: { ...data, title: "Garden register", columns: [] }, busy: false,
-    onQuestion() {}, onColumn() {}, onAdjust() {}, onRows() {}, onRole() {}, onParent() {},
+test("the source grid keeps unresolved rows visible alongside classified rows", async () => {
+  const { QaImportTable } = await server.ssrLoadModule("/src/components/qa/qa-import-table.tsx")
+  const html = renderToStaticMarkup(createElement(QaImportTable, {
+    plan: { ...unresolvedSourcePlan, header_row: 1, region: { start_column: 1, end_column: 4, header_end_row: 1, end_row: 5 } },
+    busy: false, onRow() {}, onRole() {}, onParent() {},
   }))
-  assert.match(html, /1 row needs a purpose/)
   assert.match(html, /When is the pond inspected\?/)
   assert.match(html, /Every morning\./)
   assert.match(html, /<table/)
-  assert.match(html, /<th[^>]*>[\s\S]*Response/)
   assert.match(html, /aria-label="Row 3 purpose"/)
-  assert.match(html, />Treat all as questions</)
-  assert.doesNotMatch(html, /qa-confirmed-decisions|will be omitted/)
+  assert.match(html, /data-row-kind="blank" data-source-row="5"/)
+  assert.match(html, /data-qa-cell="true">Describe the seed room/)
 })
 
 test("blocked import gives an enabled review action and a concrete reason", async () => {
@@ -337,8 +314,8 @@ test("blocked import gives an enabled review action and a concrete reason", asyn
     plan: unresolvedSourcePlan, busy: false, duplicate: false, onReview() {}, onAdjust() {}, onImport() {},
   }))
   assert.match(html, /1 row still needs a purpose before import/)
-  assert.match(html, />Review 1 row</)
-  assert.doesNotMatch(html, /disabled=""/)
+  assert.match(html, />Review pending items</)
+  assert.match(html, /disabled=""[^>]*>Confirm import</)
 })
 
 test("result preview retains column labels and separates replies from question text", async () => {
@@ -353,7 +330,7 @@ test("result preview retains column labels and separates replies from question t
 test("a subquestion waiting for a parent keeps the parent chooser visible", async () => {
   const { QaImportTable } = await server.ssrLoadModule("/src/components/qa/qa-import-table.tsx")
   const plan = { ...unresolvedSourcePlan, row_actions: { "3": "child" }, parents: { "3": "" } }
-  const html = renderToStaticMarkup(createElement(QaImportTable, { plan, busy: false, initialReviewOnly: true, onRow() {}, onRole() {}, onParent() {} }))
+  const html = renderToStaticMarkup(createElement(QaImportTable, { plan, busy: false, onRow() {}, onRole() {}, onParent() {} }))
   assert.match(html, /aria-label="Parent question"/)
   assert.match(html, /Subquestion/)
 })
@@ -363,8 +340,8 @@ test("ready plans import directly, while a busy plan cannot be submitted again",
   const plan = { ...unresolvedSourcePlan, mapping_valid: true, table_rows: unresolvedSourcePlan.table_rows.slice(0, 1) }
   const props = { plan, duplicate: false, onReview() {}, onAdjust() {}, onImport() {} }
   const ready = renderToStaticMarkup(createElement(QaImportSubmit, { ...props, busy: false }))
-  assert.match(ready, />Import 1 questions</)
+  assert.match(ready, />Confirm import</)
   assert.doesNotMatch(ready, /disabled=""|role="status"/)
-  const busy = renderToStaticMarkup(createElement(QaImportSubmit, { ...props, busy: true }))
-  assert.match(busy, /disabled=""/)
+  const busy = renderToStaticMarkup(createElement(QaImportSubmit, { ...props, busy: true, committing: true }))
+  assert.match(busy, /disabled=""[\s\S]*Importing…/)
 })
