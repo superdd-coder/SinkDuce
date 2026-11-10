@@ -49,6 +49,30 @@ def header_role(value):
     return "extra"
 
 
+def number_header_columns(headers):
+    return {i for i, label in enumerate(headers) if header_role(label) == "number"}
+
+
+def section_title_columns(values, columns, ordinal_columns):
+    """Separate a heading's text from ordinals in their own numbered cells."""
+    labels = [
+        i
+        for i in columns
+        if not (i in ordinal_columns and re.fullmatch(r"\d+(?:\.\d+)*[.)]?", values[i].strip()))
+    ]
+    return labels or columns
+
+
+def section_semantic_columns(row, nonempty, number_column, ordinal_columns):
+    typed = row.get("typed")
+    semantic = [
+        i
+        for i in nonempty
+        if i != number_column and (not typed or typed[i].get("kind") not in ("date", "n"))
+    ]
+    return section_title_columns(row["values"], semantic, ordinal_columns)
+
+
 def _load(blob):
     if len(blob) > MAX_UPLOAD:
         fail("parse_limit_exceeded", 413)
@@ -298,6 +322,10 @@ def read_workbook(blob, sheet=None, header_row=None, region=None):
             "header_row": header_row,
             "region": region,
             "headers": headers,
+            "header_values": [
+                [text(values.cell(r, c).value) for c in range(1, last_col + 1)]
+                for r in range(header_row, region["header_end_row"] + 1)
+            ],
             "rows": rows,
             "preview": preview,
             "candidates": candidates,
@@ -505,6 +533,7 @@ def classify_rows(parsed, mapping, actions=None, parents=None):
     group_key = ""
     group_fields = {}
     start = parsed.get("region", {}).get("start_column", 1) - 1
+    ordinal_columns = number_header_columns(parsed["headers"])
     group_col = mapping.get("group")
     column_label = column_key = bold_group = ""
     group_values = {}
@@ -518,12 +547,7 @@ def classify_rows(parsed, mapping, actions=None, parents=None):
         content = vals[mapping["question"]].strip()
         nonempty = [i for i in range(start, len(vals)) if vals[i].strip()]
         reply_content = any(vals[i].strip() for i in mapping["replies"])
-        semantic = [
-            i
-            for i in nonempty
-            if i != mapping.get("number")
-            and row.get("typed", [{}] * len(vals))[i].get("kind") not in ("date", "n")
-        ]
+        semantic = section_semantic_columns(row, nonempty, mapping.get("number"), ordinal_columns)
         wide = any(a == d == r and e - b >= 2 for a, b, d, e in row.get("merges", []))
         repeated = sum(
             bool(h.strip()) and h.split(" / ")[-1].strip() == v.strip()

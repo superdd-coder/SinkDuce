@@ -28,6 +28,10 @@ def detail(collection_id, list_id, version_id=None):
             )
         ]
         meta = metadata.read(conn, version_id)
+        source_columns = (meta.get("layout") or {}).get("columns", {})
+        for column in columns:
+            if column["id"] in source_columns:
+                column["source_column"] = source_columns[column["id"]]
         item_index = {i["id"]: i for i in meta["outline"]}
         questions = []
         for row in conn.execute(

@@ -71,7 +71,7 @@ def test_first_import_counts_nonblank_replies_but_preserves_empty_columns(qa):
     ]
 
 
-def test_blank_incoming_and_absent_reply_columns_preserve_current_content(qa):
+def test_blank_cells_and_absent_reply_columns_archive_saved_replies(qa):
     detail = initial(qa)
     question = first_question(detail)
     column = next(item["id"] for item in detail["columns"] if item["label"] == "First response")
@@ -82,9 +82,29 @@ def test_blank_incoming_and_absent_reply_columns_preserve_current_content(qa):
     assert plan["review"]["unresolved"] == 0
     saved = commit(qa, detail, plan)
     current = first_question(saved)
-    assert reply(current, column) == "Use the supervised entrance."
-    assert reply(current, other) == "The spare key is registered."
-    assert next(item for item in saved["columns"] if item["id"] == other)["included"]
+    assert reply(current, column) == ""
+    assert not next(item for item in saved["columns"] if item["id"] == other)["included"]
+    client, base = qa
+    history = client.get(
+        f"{base}/lists/{detail['id']}", params={"version_id": detail["version"]["id"]}
+    ).json()
+    assert reply(first_question(history), column) == "Use the supervised entrance."
+    assert reply(first_question(history), other) == "The spare key is registered."
+
+
+def test_carrying_selected_old_replies_does_not_carry_other_cells_in_the_column(qa):
+    detail = initial(qa)
+    first, second = detail["questions"]
+    columns = {item["label"]: item["id"] for item in detail["columns"]}
+    mapped, absent = columns["First response"], columns["Inspection follow-up"]
+    plan = upload(
+        qa, detail, [["Question", "First response"], [first["text"], ""], [second["text"], ""]]
+    )
+    plan = patch(qa, detail, plan, retained_replies={mapped: [first["id"]], absent: [second["id"]]})
+    saved = commit(qa, detail, plan)
+    first, second = saved["questions"]
+    assert [reply(first, mapped), reply(first, absent)] == ["Use the supervised entrance.", ""]
+    assert [reply(second, mapped), reply(second, absent)] == ["", "The desk confirms the schedule."]
 
 
 def test_unchanged_external_text_does_not_erase_local_edits_on_repeated_imports(qa):
@@ -160,7 +180,7 @@ def test_explicit_blank_overwrite_is_scoped_to_one_column_and_validated(qa):
         )
     saved = commit(qa, detail, plan)
     assert reply(first_question(saved), column) == ""
-    assert next(item for item in saved["columns"] if item["label"] == "Inspection follow-up")[
+    assert not next(item for item in saved["columns"] if item["label"] == "Inspection follow-up")[
         "included"
     ]
 
@@ -258,7 +278,7 @@ def test_stale_preview_can_recheck_the_saved_upload_without_erasing_later_edits(
     assert reply(first_question(saved), column) == "Reserve access with the curator."
 
 
-def test_reimporting_source_keeps_local_question_order_and_edited_notes(qa):
+def test_reimporting_an_unchanged_source_note_keeps_its_local_edit(qa):
     from tests.test_qa_outline import imported, upload_blob, workbook
 
     detail = imported(qa)

@@ -2,6 +2,14 @@ import type { QaImportPlan, QaMapping } from "@/api/client"
 
 const singleRoles = ["question", "number", "status", "type", "group"] as const
 
+export function excelColumn(index: number) {
+  let label = ""
+  for (let column = index + 1; column > 0; column = Math.floor((column - 1) / 26)) {
+    label = String.fromCharCode(65 + (column - 1) % 26) + label
+  }
+  return label
+}
+
 export function columnRole(mapping: QaMapping, index: number) {
   for (const role of singleRoles) if (mapping[role] === index) return role
   return mapping.replies.includes(index) ? "reply" : mapping.ignored?.includes(index) ? "ignore" : "extra"

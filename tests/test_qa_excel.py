@@ -101,6 +101,7 @@ def test_missing_questions_persist_and_return_without_external_ids(qa):
     )
     hidden = next(q for q in d["questions"] if q["id"] == original["Provide the botanical map."])
     assert hidden["included"] is False
+    previous_version = d["version"]["id"]
     d = commit(
         qa,
         d,
@@ -123,28 +124,10 @@ def test_missing_questions_persist_and_return_without_external_ids(qa):
         next(q for q in d["questions"] if q["text"] == "Confirm the aquarium hours.")[
             "latest_reply"
         ]
-        == "Updated"
+        == ""
     )
-    # An incoming blank preserves an existing reply unless the user explicitly clears it.
-    previous_version = d["version"]["id"]
-    plan = upload(
-        qa,
-        d,
-        [
-            ["Question", "Reply"],
-            ["Provide the botanical map.", "Restored"],
-            ["Confirm the aquarium hours.", None],
-        ],
-    )
+    assert next(q for q in d["questions"] if q["id"] == hidden["id"])["latest_reply"] == "Restored"
     client, base = qa
-    cleared = client.patch(
-        f"{base}/lists/{d['id']}/imports/{plan['id']}",
-        json={"plan_revision": plan["plan_revision"], "blank_columns": ["1"]},
-    )
-    assert cleared.status_code == 200, cleared.text
-    assert cleared.json()["review"]["counts"]["cleared_replies"] == 1
-    d = commit(qa, d, cleared.json())
-    assert next(q for q in d["questions"] if q["id"] == original["Confirm the aquarium hours."])["latest_reply"] == ""
     previous = client.get(f"{base}/lists/{d['id']}?version_id={previous_version}").json()
     assert next(q for q in previous["questions"] if q["id"] == original["Confirm the aquarium hours."])["latest_reply"] == "Updated"
 
@@ -188,7 +171,7 @@ def test_import_is_stale_safe_idempotent_and_duplicate_assignment_blocks(qa):
     assert client.get(f"{base}/lists/{d['id']}").json()["revision"] == changed["revision"]
 
 
-def test_column_rename_uses_retained_content_and_keeps_absent_round_in_place(qa):
+def test_column_rename_uses_retained_content_and_archives_the_absent_round(qa):
     d = create(qa)
     rows = [
         ["Question", "First reply", "Middle reply", "Last reply"],
@@ -221,7 +204,7 @@ def test_column_rename_uses_retained_content_and_keeps_absent_round_in_place(qa)
     d = commit(qa, d, plan)
     old_three = [c for c in d["columns"] if c["id"] in ids.values()]
     assert [c["id"] for c in old_three] == list(ids.values())
-    assert old_three[1]["included"] is True
+    assert old_three[1]["included"] is False
     assert next(reply for reply in d["questions"][0]["replies"] if reply["column_id"] == ids["Middle reply"])["body"] == rows[1][2]
 
 

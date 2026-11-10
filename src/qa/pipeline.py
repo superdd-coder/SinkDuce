@@ -455,9 +455,9 @@ def analyze(collection, lid, iid, revision):
         from .column_alignment import align
 
         align(plan, meta, columns, samples, cache, checkpoint)
-    unique_columns = _unique_assignments(plan["column_matches"], plan.get("manual_column_matches", {}))
-    # Independent new rounds preserve old correspondence when a reuse cannot be proven.
-    plan["column_matches"] = {key: value or "new" for key, value in unique_columns.items()}
+    plan["column_matches"] = _unique_assignments(
+        plan["column_matches"], plan.get("manual_column_matches", {})
+    )
     if plan["matches"] != original_matches or plan["column_matches"] != original_columns:
         plan.pop("content_choices", None)
     matched = {target for target in plan["matches"].values() if target and target != "new"}

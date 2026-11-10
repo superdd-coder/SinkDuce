@@ -5,6 +5,12 @@ from copy import deepcopy
 from uuid import NAMESPACE_URL, uuid5
 
 from . import store
+from .workbook_reader import (
+    header_role,
+    number_header_columns,
+    section_semantic_columns,
+    section_title_columns,
+)
 
 
 def descendants(items, item_id):
@@ -20,6 +26,8 @@ def from_plan(meta, plan, identities):
     previous = meta.get("outline", [])
     used, items, group = set(), [], ""
     question_rows = {r["key"]: r for r in plan["rows"]}
+    ordinal_columns = number_header_columns(plan.get("headers", []))
+    number_column = plan["mapping"].get("number")
     old_members, new_members = {}, {}
     for old in previous:
         if old["kind"] == "question" and old.get("group_id"):
@@ -88,17 +96,12 @@ def from_plan(meta, plan, identities):
         else:
             category = "group" if kind == "section" else "note" if kind == "note" else "layout"
             vals = row["values"]
-            semantic = [
-                i
-                for i, v in enumerate(vals)
-                if v
-                and i != plan["mapping"].get("number")
-                and (
-                    category != "group"
-                    or row.get("typed", [{}] * len(vals))[i].get("kind") not in ("n", "date")
-                )
-            ]
-            nonempty = semantic or [i for i, v in enumerate(vals) if v]
+            nonempty = [i for i, v in enumerate(vals) if v]
+            if category == "group":
+                semantic = section_semantic_columns(row, nonempty, number_column, ordinal_columns)
+            else:
+                semantic = [i for i in nonempty if i != number_column]
+            nonempty = semantic or nonempty
             label = "\n".join(vals[i] for i in nonempty)
             iid = source_id(category, label, source_key)
             item = {
@@ -182,6 +185,7 @@ def ensure(conn, vid, meta):
             from_plan(meta, plan, identities)
         else:
             meta["outline"] = []
+    _repair_section_titles(meta)
     known = {i["id"] for i in meta["outline"]}
     for row in conn.execute(
         "SELECT question_id FROM qa_version_questions WHERE version_id=? ORDER BY position", (vid,)
@@ -197,6 +201,46 @@ def ensure(conn, vid, meta):
                 }
             )
     return meta["outline"]
+
+
+def _repair_section_titles(meta):
+    """Recover the source title and its export cells for previously imported groups."""
+    layout = meta.get("layout") or {}
+    fields = layout.get("fields", {})
+    ordinal_columns = {
+        fields[f["id"]]
+        for f in meta.get("fields", [])
+        if f["id"] in fields and header_role(f["label"]) == "number"
+    }
+    if not ordinal_columns:
+        return
+    repaired = {}
+    for source in layout.get("outline", []):
+        if source["kind"] != "group" or not source.get("source_values"):
+            continue
+        values, columns = source["source_values"], source.get("text_columns", [])
+        title_columns = section_title_columns(values, columns, ordinal_columns)
+        if title_columns == columns or source["text"] != "\n".join(values[i] for i in columns):
+            continue
+        before = source["text"]
+        source.update(
+            text="\n".join(values[i] for i in title_columns),
+            text_column=title_columns[0],
+            text_columns=title_columns,
+        )
+        repaired[source["id"]] = before, source
+    if not repaired:
+        return
+    for items in (meta["outline"], meta.get("outline_undo", [])):
+        for item in items:
+            match = repaired.get(item["id"])
+            if not match:
+                continue
+            before, source = match
+            item.update(text_column=source["text_column"], text_columns=source["text_columns"])
+            if item["text"] == before:
+                item["text"] = source["text"]
+    sync_groups(meta)
 
 
 def sync_groups(meta):

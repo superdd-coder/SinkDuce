@@ -341,6 +341,19 @@ def evaluate(conn, lid, plan, *, strict=True):
         key not in allowed_columns for key in blank_columns
     ):
         store.fail("invalid_mapping", 422)
+    active_columns = {cid for cid, column in columns.items() if column["included"]}
+    retained_replies = plan.get("retained_replies", {})
+    if not isinstance(retained_replies, dict) or any(
+        cid not in columns
+        or not isinstance(qids, list)
+        or len(qids) > 2020
+        or any(qid not in questions for qid in qids)
+        for cid, qids in retained_replies.items()
+    ):
+        store.fail("invalid_mapping", 422)
+    retained_replies = {
+        cid: set(qids) for cid, qids in retained_replies.items() if cid in active_columns
+    }
     counts = dict.fromkeys(
         (
             "kept_replies",
@@ -352,7 +365,7 @@ def evaluate(conn, lid, plan, *, strict=True):
         ),
         0,
     )
-    conflicts, effective, regrouped_types = [], {}, set()
+    conflicts, effective, preview, regrouped_types = [], {}, {}, set()
 
     def merge(
         row,
@@ -454,7 +467,9 @@ def evaluate(conn, lid, plan, *, strict=True):
                     default_choice="keep",
                 )
                 result["included"] = inclusion == "Include in this version"
-            result["text"], _ = merge(
+                if not result["included"]:
+                    preview.setdefault(row["key"], {})["included"] = False
+            result["text"], unresolved_question = merge(
                 row,
                 qid,
                 "question",
@@ -463,6 +478,8 @@ def evaluate(conn, lid, plan, *, strict=True):
                 row["text"],
                 baseline.question(qid),
             )
+            if not unresolved_question and result["text"] != row["text"]:
+                preview.setdefault(row["key"], {})["text"] = result["text"]
             group_col = plan["mapping"].get("group")
             if group_col is not None and result["included"]:
                 reset, prune = baseline.regrouped_type(
@@ -483,31 +500,34 @@ def evaluate(conn, lid, plan, *, strict=True):
             local = cell["body"] if cell else ""
             remote = row.get("formatted_values", {}).get(key, row["values"][index])
             old = baseline.reply(qid, cid) if current and cid != "new" else None
-            force = key in blank_columns and _empty(remote)
+            blank = _empty(remote)
+            carry = blank and key not in blank_columns and qid in retained_replies.get(cid, ())
             chosen, unresolved = merge(
                 row,
                 qid,
                 "reply",
                 plan["headers"][index],
                 local,
-                remote,
+                "" if blank else remote,
                 old,
                 key,
-                force=force,
+                force=blank and not carry,
                 cleared=bool(cell and cell.get("historical_revision_id")),
                 target_id=cid,
             )
             result["replies"][key] = chosen
             values[index] = chosen
             typed[index] = {"value": chosen, "kind": "s"}
-            if not _empty(remote) or force:
-                external["replies"][key] = remote
-            elif old is not None:
+            if carry and old is not None:
                 external["replies"][key] = old
+            else:
+                external["replies"][key] = "" if blank else remote
             if unresolved or not result["included"]:
                 continue
             local_empty = _empty(local)
-            if _empty(remote) and not force and not local_empty:
+            if chosen != remote:
+                preview.setdefault(row["key"], {}).setdefault("replies", {})[key] = chosen
+            if carry and not local_empty:
                 counts["blank_kept"] += 1
             if _empty(chosen):
                 if not local_empty:
@@ -611,69 +631,29 @@ def evaluate(conn, lid, plan, *, strict=True):
     if pending:
         kept.update(qid for qid, q in questions.items() if q["included"])
     column_ids = {cid for cid in column_matches.values() if cid and cid != "new"}
-    if questions or drafts:
-        column_ids.update(cid for cid, column in columns.items() if column["included"])
+    # If a saved column is carried forward, only the selected cells become visible.
+    kept_unmapped = {
+        cid: {
+            qid
+            for qid in kept
+            if (qid in retained or qid in retained_replies.get(cid, ()))
+            and not _empty(cells.get(qid, {}).get(cid, {}).get("body"))
+        }
+        for cid in active_columns - column_ids
+    }
+    carried_columns = {cid for cid, qids in kept_unmapped.items() if qids}
+    archived_cells = [
+        (qid, cid)
+        for qid in kept
+        for cid, cell in cells.get(qid, {}).items()
+        if cid in carried_columns and qid not in kept_unmapped[cid] and not _empty(cell["body"])
+    ]
+    column_ids.update(carried_columns)
     retained_columns = [
         {"id": cid, "label": column["label"]}
         for cid, column in columns.items()
         if cid in column_ids and cid not in column_matches.values()
     ]
-    keep_structure = False
-    if not pending and plan.get("mapping_valid", True):
-        from . import outline
-
-        source_outline = (meta.get("layout") or {}).get("outline")
-        preview = deepcopy(meta)
-        preview["outline"] = deepcopy(
-            source_outline if source_outline is not None else meta.get("outline", [])
-        )
-        identities = {
-            row["key"]: matches[row["key"]] if matches[row["key"]] != "new" else "new:" + row["key"]
-            for row in plan.get("rows", [])
-        }
-        outline.from_plan(preview, plan, identities)
-        # Membership decisions handle new/missing questions separately. Compare
-        # order and relationships only for identities occurring on both sides.
-        shared = mapped & {qid for qid, q in questions.items() if q["included"]}
-
-        def semantic(items):
-            return [
-                {
-                    "id": item["id"],
-                    "kind": item["kind"],
-                    "group_id": item.get("group_id", ""),
-                    "parent_id": item.get("parent_id", ""),
-                    **({"text": item.get("text", "")} if item["kind"] != "question" else {}),
-                }
-                for item in items
-                if item["kind"] in ("group", "note")
-                or item["kind"] == "question"
-                and item["id"] in shared
-            ]
-
-        local = semantic(meta.get("outline", []))
-        remote = semantic(preview["outline"])
-        old = semantic(source_outline) if source_outline is not None else None
-        if local != remote and (local or old is not None):
-            chosen, _ = merge(
-                {"key": "structure"}, None, "structure", "Groups and order", local, remote, old
-            )
-            keep_structure = chosen == local
-            if conflicts and conflicts[-1]["kind"] == "structure":
-                names = {qid: q["body"] for qid, q in questions.items()}
-
-                def describe(items):
-                    return "\n".join(
-                        (item.get("text") or names.get(item["id"], item["id"]))[:180]
-                        + (" [subquestion]" if item.get("parent_id") else "")
-                        for item in items
-                    )
-
-                conflicts[-1].update(
-                    current=describe(local),
-                    incoming=describe(remote),
-                    baseline=None if old is None else describe(old),
-                )
     valid_conflicts = {item["id"] for item in conflicts}
     if strict and set(choices) - valid_conflicts:
         store.fail("invalid_mapping", 422)
@@ -684,10 +664,11 @@ def evaluate(conn, lid, plan, *, strict=True):
         "missing_questions": missing_review,
         "kept_columns": retained_columns,
         "counts": counts,
+        "preview": preview,
     }
     return {
         "rows": effective,
-        "keep_structure": keep_structure,
+        "archived_cells": archived_cells,
         "kept_question_ids": [qid for qid in questions if qid in kept],
         "kept_column_ids": [cid for cid in columns if cid in column_ids],
         "regrouped_types": regrouped_types,

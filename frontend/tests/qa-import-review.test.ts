@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { qaImportSummary, qaReplyColumnImpact } from "../src/lib/qa-import-review.ts"
+import { qaImportReplyPairs, qaImportSummary, qaReplyColumnImpact } from "../src/lib/qa-import-review.ts"
 
 type Plan = Parameters<typeof qaImportSummary>[0]
 const plan = (changes: Partial<Plan> = {}): Plan => ({
@@ -8,6 +8,32 @@ const plan = (changes: Partial<Plan> = {}): Plan => ({
   mapping_valid: true, table_rows: [], ...changes,
 })
 const question = (key: string) => ({ key, text: `Question ${key}`, values: [`Question ${key}`] })
+
+test("reply cards follow column identities, preserve blank cells and keep new or old-only rounds on their own side", () => {
+  const source = {
+    headers: ["Question", "Reply", "Reply", "Follow-up"],
+    mapping: { question: 0, replies: [1, 2, 3] },
+    column_matches: { "1": "saved-b", "2": "saved-a", "3": "new" },
+  } as Parameters<typeof qaImportReplyPairs>[0]
+  const columns = [
+    { id: "saved-a", label: "Reply", included: true, position: 0, absent_since: null },
+    { id: "saved-b", label: "Reply", included: true, position: 1, absent_since: null },
+    { id: "saved-c", label: "Workshop note", included: true, position: 2, absent_since: null },
+  ]
+  const current = { replies: [
+    { column_id: "saved-a", body: "Older response A", included: true },
+    { column_id: "saved-b", body: "Older response B", included: true },
+    { column_id: "saved-c", body: "Old note", included: true },
+  ] } as NonNullable<Parameters<typeof qaImportReplyPairs>[2]["current"]>
+  const incoming = { key: "4", text: "Can we borrow brushes?", values: ["Can we borrow brushes?", "", "Incoming", "Bring an apron."], formatted_values: { "2": "**Incoming**" } }
+  const pairs = qaImportReplyPairs(source, columns, { key: "4", group: "matched", current, incoming })
+  assert.deepEqual(pairs.map(pair => [pair.current?.body, pair.incoming?.body]), [
+    ["Older response B", ""], ["Older response A", "**Incoming**"], [undefined, "Bring an apron."], ["Old note", undefined],
+  ])
+  const old = qaImportReplyPairs(source, columns, { key: "old", group: "old", current })
+  assert.equal(old.length, 3)
+  assert.ok(old.every(pair => !pair.incoming && pair.column === undefined))
+})
 
 test("a first import summarizes new questions and reply columns", () => {
   assert.deepEqual(qaImportSummary(plan({

@@ -172,6 +172,7 @@ class ImportPatch(ImportCommit):
     column_matches: dict[str, str | None] | None = None
     content_choices: dict[str, Literal["keep", "incoming"]] | None = None
     blank_columns: list[str] | None = Field(default=None, max_length=100)
+    retained_replies: dict[str, list[str]] | None = Field(default=None, max_length=100)
     retained_questions: list[str] | None = None
     removed_questions: list[str] | None = None
 

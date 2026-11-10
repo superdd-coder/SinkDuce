@@ -175,7 +175,7 @@ def test_duplicate_historical_question_text_stays_ambiguous_even_with_group_and_
     assert all(target is None for target in response.json()["matches"].values())
 
 
-def test_analysis_uses_fresh_identity_for_unproven_reply_columns_and_refreshes_review(qa, monkeypatch):
+def test_analysis_leaves_unproven_reply_columns_for_review(qa, monkeypatch):
     from src.qa import store
     from src.services import services
 
@@ -201,12 +201,12 @@ def test_analysis_uses_fresh_identity_for_unproven_reply_columns_and_refreshes_r
     response = client.post(f"{base}/lists/{data['id']}/imports/{plan['id']}/analyze", json={"plan_revision": plan["plan_revision"]})
     assert response.status_code == 200, response.text
     result = response.json()
-    assert result["column_matches"]["1"] == "new"
+    assert result["column_matches"]["1"] is None
     assert not result.get("content_choices")
     assert result["retained_questions"] == []
     assert result["blank_columns"] == ["1"]
     assert "review" in result
-    assert any(column["id"] == cid for column in result["review"]["kept_columns"])
+    assert result["review"]["kept_columns"] == []
 
 
 def test_manual_question_assignment_survives_an_ai_competitor(qa, monkeypatch):

@@ -1,11 +1,13 @@
 """Display numbering follows the outline, independently of question identity."""
 
+import json
 from io import BytesIO
 
 import openpyxl
 import pytest
 from openpyxl.worksheet.views import Pane
 
+from src.qa import metadata, store
 from tests.test_qa import create, mutate, qa_fixture  # noqa: F401
 from tests.test_qa_excel import commit, upload
 from tests.test_qa_flexible import exported, sample, upload_blob
@@ -139,6 +141,82 @@ def test_group_number_cells_follow_reordered_groups_and_new_questions(qa):
     assert [ws.cell(r, 1).value for r in range(2, 9)] == ["1", "1.1", "1.2", "2", "2.1", "3", "3.1"]
     assert ws["B2"].value == "Potting room" and ws["B5"].value == "Seed room"
     assert ws["B7"].value == "Tool room"
+
+
+def upload_numbered_section(qa, data, *, index_as_extra=False):
+    plan = upload(
+        qa,
+        data,
+        [
+            ["Index", "Title", "Question", "Reply"],
+            ["7", "3D exhibit"],
+            ["7.1", "", "Describe the display stand.", ""],
+        ],
+    )
+    mapping = plan["mapping"]
+    if index_as_extra:
+        mapping = {**mapping, "number": None, "extras": [0, 1]}
+    client, base = qa
+    result = client.patch(
+        f"{base}/lists/{data['id']}/imports/{plan['id']}",
+        json={
+            "plan_revision": plan["plan_revision"],
+            "mapping": mapping,
+            "row_actions": {"2": "section"},
+        },
+    )
+    assert result.status_code == 200, result.text
+    return result.json()
+
+
+def test_followup_group_title_excludes_an_index_recognized_as_an_extra_field(qa):
+    data = create(qa)
+    data = commit(qa, data, upload_numbered_section(qa, data))
+    group_id = data["questions"][0]["group_id"]
+
+    plan = upload_numbered_section(qa, data, index_as_extra=True)
+    assert plan["table_rows"][0]["values"][:2] == ["7", "3D exhibit"]
+    assert plan["rows"][0]["group"] == "3D exhibit"
+    data = commit(qa, data, plan)
+    group = next(item for item in data["outline"] if item["kind"] == "group")
+    assert group["text"] == data["questions"][0]["group"] == "3D exhibit"
+    assert group["id"] == group_id
+
+
+def test_resuming_an_older_import_displays_the_section_title_without_the_index(qa):
+    data = create(qa)
+    plan = upload_numbered_section(qa, data, index_as_extra=True)
+    for row in [plan["rows"][0], plan["table_rows"][1]]:
+        row["group"] = "7 · 3D exhibit"
+    with store.connection("col_qa", "update") as conn, conn:
+        conn.execute("UPDATE qa_imports SET plan_json=? WHERE id=?", (json.dumps(plan), plan["id"]))
+
+    client, base = qa
+    resumed = client.get(f"{base}/lists/{data['id']}/imports/{plan['id']}").json()
+    assert resumed["rows"][0]["group"] == resumed["table_rows"][1]["group"] == "3D exhibit"
+
+
+@pytest.mark.parametrize("renamed", [None, "7 Corners Gallery"])
+def test_saved_group_repairs_source_title_without_discarding_a_local_rename(qa, renamed):
+    data = create(qa)
+    data = commit(qa, data, upload_numbered_section(qa, data, index_as_extra=True))
+    with store.connection("col_qa", "update") as conn, conn:
+        vid = data["version"]["id"]
+        meta = metadata.read(conn, vid)
+        for items in (meta["outline"], meta["layout"]["outline"]):
+            group = next(item for item in items if item["kind"] == "group")
+            group.update(text="7\n3D exhibit", text_columns=[0, 1], text_column=0)
+        if renamed:
+            meta["outline"][0]["text"] = renamed
+        meta["groups"][data["questions"][0]["id"]] = renamed or "7\n3D exhibit"
+        metadata.save(conn, vid, meta)
+
+    client, base = qa
+    data = client.get(f"{base}/lists/{data['id']}").json()
+    group = next(item for item in data["outline"] if item["kind"] == "group")
+    assert group["text"] == data["questions"][0]["group"] == (renamed or "3D exhibit")
+    ws = openpyxl.load_workbook(BytesIO(exported(qa, data))).active
+    assert [ws["A2"].value, ws["B2"].value] == ["7", renamed or "3D exhibit"]
 
 
 @pytest.mark.parametrize("change", ["move", "remove", "split"])

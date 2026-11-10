@@ -1,210 +1,277 @@
-import { useEffect, useRef, useState, type Ref } from "react"
-import { ArrowRight, Check, Plus, Search } from "lucide-react"
-import type { QaImportContext, QaImportMergeChanges, QaImportPlan } from "@/api/client"
+import { useImperativeHandle, useLayoutEffect, useRef, useState, type Ref } from "react"
+import { ChevronRight, CircleAlert, Columns2, FileMinus, Link2, MessagesSquare, Plus, Search } from "lucide-react"
+import type { QaColumn, QaImportConflict, QaImportContentChoice, QaImportContext, QaImportMergeChanges, QaImportPlan } from "@/api/client"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { qaImportSummary, qaReplyColumnImpact } from "@/lib/qa-import-review"
+import { DropdownSelect } from "@/components/ui/dropdown-select"
 import { useT } from "@/i18n/use-t"
-import { QaImportResult } from "./qa-import-result"
-import { QaImportTable } from "./qa-import-table"
-import { QaImportContentReview, QaImportDecidedEdits, QaImportPreservedItems } from "./qa-import-content-review"
+import { excelColumn } from "@/lib/qa-import-mapping"
+import { qaImportCards, qaImportReplyPairs, qaImportSummary, repeatedImportTargets, type QaImportCard, type QaImportReplyPair } from "@/lib/qa-import-review"
+import { currentChoices, QaImportContentReview, QaImportDecidedEdits, QaImportPreservedItems } from "./qa-import-content-review"
+import { QaImportComparison } from "./qa-import-comparison"
+import { QaActionMenu, QaMenuItem } from "./qa-controls"
+
+export interface QaImportReviewHandle { focusDecision(): void }
 
 type Props = {
-  plan: QaImportPlan; list: QaImportContext; busy: boolean;
-  onQuestion: (key: string, target: string) => void;
-  onColumn: (key: string, target: string) => void;
-  onAdjust: () => void;
-  onMerge?: (changes: QaImportMergeChanges) => void;
-  onRows: (changes: Record<string, string>) => void;
-  onRole: (index: number, role: string) => void;
-  onParent: (key: string, parent: string) => void;
-  reviewRef?: Ref<HTMLDivElement>;
-  duplicate?: boolean;
+  plan: QaImportPlan; list: QaImportContext; busy: boolean
+  onQuestion: (key: string, target: string) => void
+  onColumn: (key: string, target: string) => void
+  onLocate?: (row: string) => void
+  onMerge?: (changes: QaImportMergeChanges) => void
+  reviewRef?: Ref<QaImportReviewHandle>
+  duplicate?: boolean
 }
 
-function Excerpt({ text }: { text: string }) {
+const groups = {
+  matched: { icon: Link2, label: "qa.importPreview.matched" },
+  added: { icon: Plus, label: "qa.importPreview.added" },
+  old: { icon: FileMinus, label: "qa.importPreview.old" },
+} as const
+
+function savedColumnLabel(column: QaColumn) {
+  return column.source_column == null ? column.label : `${excelColumn(column.source_column)} · ${column.label}`
+}
+
+export function QaImportReview({ plan, list, busy, onQuestion, onColumn, onLocate, onMerge, reviewRef, duplicate = false }: Props) {
   const t = useT()
-  return <p className="qa-decision-text">{text || t("qa.review.emptyReply")}</p>
-}
+  const root = useRef<HTMLDivElement>(null)
+  const [filter, setFilter] = useState<"all" | keyof typeof groups>("all")
+  const [expanded, setExpanded] = useState(new Set<string>())
+  const [showAll, setShowAll] = useState(false)
+  const [focusRequest, setFocusRequest] = useState(0)
 
-function repeatedKeys(keys: string[], matches: Record<string, string | null>) {
-  const counts = new Map<string, number>()
-  for (const key of keys) {
-    const target = matches[key]
-    if (target && target !== "new") counts.set(target, (counts.get(target) || 0) + 1)
-  }
-  return new Set(keys.filter(key => (counts.get(matches[key] || "") || 0) > 1))
-}
-
-function ColumnImpact({ plan, list, index, target }: { plan: QaImportPlan; list: QaImportContext; index: number; target: string }) {
-  const t = useT()
-  const impact = qaReplyColumnImpact(plan, list, index, target)
-  return !plan.review && impact.cleared > 0
-    ? <p className="qa-column-clear" role="note">{t(impact.cleared === 1 ? "qa.review.clearsOne" : "qa.review.clearsReplies", { count: impact.cleared })}</p>
-    : null
-}
-
-function ReplyDecision({ columnKey, plan, list, busy, onColumn, onCancel, duplicate = false }: Pick<Props, "plan" | "list" | "busy" | "onColumn"> & { columnKey: string; onCancel?: () => void; duplicate?: boolean }) {
-  const t = useT()
-  const used = new Set(Object.entries(plan.column_matches).filter(([key]) => key !== columnKey).map(([, target]) => target))
-  const available = list.columns.filter(c => !used.has(c.id))
-  const index = Number(columnKey)
-  const impact = qaReplyColumnImpact(plan, list, index, "new")
-  return <article className="qa-import-decision" data-qa-import-decision tabIndex={-1}>
-    <header className="qa-decision-heading"><h3>{t("qa.review.replyQuestion", { name: plan.headers[index] })}</h3>{onCancel && <Button size="sm" variant="ghost" disabled={busy} onClick={onCancel}>{t("qa.cancel")}</Button>}</header>
-    {duplicate && <p className="qa-decision-hint" role="alert">{t("qa.review.duplicateColumn")}</p>}
-    {impact.empty ? <p className="qa-decision-hint">{t("qa.review.emptyColumn")}</p> : <p className="qa-decision-hint">{t("qa.review.columnFilled", { count: impact.filled })}</p>}
-    <div className="qa-column-destinations">
-      {available.map(column => <div key={column.id}>
-          <Button size="sm" variant="secondary" disabled={busy} onClick={() => onColumn(columnKey, column.id)}><ArrowRight />{t("qa.review.writeColumn", { name: column.label })}</Button>
-          <ColumnImpact plan={plan} list={list} index={index} target={column.id} />
-        </div>)}
-      <div><Button size="sm" variant="secondary" disabled={busy} onClick={() => onColumn(columnKey, "new")}><Plus />{t("qa.review.addRound")}</Button></div>
-    </div>
-  </article>
-}
-
-function QuestionDecision({ row, plan, list, busy, onQuestion, onCancel, duplicate = false }: Pick<Props, "plan" | "list" | "busy" | "onQuestion"> & { row: QaImportPlan["rows"][number]; onCancel?: () => void; duplicate?: boolean }) {
-  const t = useT()
-  const suggested = plan.matches[row.key] || plan.suggestions?.[row.key]?.target
-  const [choice, setChoice] = useState(suggested && suggested !== "new" ? suggested : "")
-  const [searching, setSearching] = useState(false)
-  const [query, setQuery] = useState("")
-  const confirmRef = useRef<HTMLButtonElement>(null)
-  const focusConfirmation = useRef(false)
-  const used = new Set(Object.entries(plan.matches).filter(([key]) => key !== row.key).map(([, target]) => target))
-  const available = list.questions.filter(q => !used.has(q.id))
-  const target = available.find(q => q.id === choice)
-  const candidates = available.filter(q => `${q.display_number || ""} ${q.text} ${q.summary || ""}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
-  useEffect(() => {
-    if (focusConfirmation.current && !searching && target) {
-      confirmRef.current?.focus()
-      focusConfirmation.current = false
-    }
-  }, [searching, target])
-  return <article className="qa-import-decision" data-qa-import-decision tabIndex={-1}>
-    <header className="qa-decision-heading"><h3>{t("qa.review.questionQuestion")}</h3>{onCancel && <Button size="sm" variant="ghost" disabled={busy} onClick={onCancel}>{t("qa.cancel")}</Button>}</header>
-    {duplicate && <p className="qa-decision-hint" role="alert">{t("qa.review.duplicateQuestion")}</p>}
-    <div className="qa-reply-comparison">
-      {target && <div><span className="pm-label">{t("qa.historical")}</span><Excerpt text={target.text} /></div>}
-      <div><span className="pm-label">{t("qa.incoming")}</span><Excerpt text={row.text} /></div>
-    </div>
-    <div className="qa-decision-actions">
-      {target && <Button ref={confirmRef} size="sm" disabled={busy} onClick={() => onQuestion(row.key, target.id)}><Check />{t("qa.review.sameQuestion")}</Button>}
-      <Button size="sm" variant="secondary" disabled={busy} onClick={() => onQuestion(row.key, "new")}><Plus />{t("qa.review.newQuestion")}</Button>
-      {available.length > 0 && <Button size="sm" variant="ghost" disabled={busy} aria-expanded={searching} onClick={() => setSearching(value => !value)}><Search />{t("qa.review.findQuestion")}</Button>}
-    </div>
-    {searching && <div className="qa-question-picker">
-      <Input autoFocus aria-label={t("qa.review.searchExisting")} placeholder={t("qa.review.searchExisting")} value={query} disabled={busy} onChange={event => setQuery(event.target.value)} />
-      <div role="group" aria-label={t("qa.historical")}>{candidates.map(candidate => <button type="button" key={candidate.id} disabled={busy} onClick={() => { focusConfirmation.current = true; setChoice(candidate.id); setSearching(false) }}>
-        {candidate.display_number && <span>{candidate.display_number}</span>}<p>{candidate.text}</p>
-      </button>)}{!candidates.length && <p className="qa-meta">{t("qa.noResults")}</p>}</div>
-    </div>}
-  </article>
-}
-
-export function QaImportReview({ plan, list, busy, onQuestion, onColumn, onAdjust, onRows, onRole, onParent, onMerge, reviewRef, duplicate = false }: Props) {
-  const t = useT()
+  const first = list.questions.length === 0
   const summary = qaImportSummary(plan, list)
-  const [editing, setEditing] = useState<string | null>(null)
   const columnKeys = plan.mapping.replies.map(String)
-  const repeatedQuestions = repeatedKeys(plan.rows.map(row => row.key), plan.matches)
-  const repeatedColumns = repeatedKeys(columnKeys, plan.column_matches)
-  const duplicateCount = repeatedQuestions.size + repeatedColumns.size
-  const hasDuplicates = duplicate || duplicateCount > 0
-  const questions = plan.rows.filter(row => !plan.matches[row.key] || repeatedQuestions.has(row.key))
-  const confirmedColumns = columnKeys.filter(key => plan.column_matches[key] && !repeatedColumns.has(key))
-  const identityPending = summary.questions.pending + summary.replies.pending + (duplicateCount || (duplicate ? 1 : 0))
-  const pending = identityPending || plan.review?.unresolved || 0
-  const sourceRows = (plan.table_rows || []).filter(row => row.kind === "review")
-  const allHaveQuestion = sourceRows.length > 0 && sourceRows.every(row => row.values[plan.mapping.question]?.trim())
-  const confirmed = plan.rows.filter(row => plan.matches[row.key] && !repeatedQuestions.has(row.key))
-  const questionTargets = new Set(plan.rows.map(row => plan.matches[row.key]))
-  const identitiesSettled = !summary.questions.pending && !hasDuplicates
-  const omittedQuestions = summary.questions.omitted === null ? [] : list.questions.filter(q => q.included && !questionTargets.has(q.id))
-  const columnTargets = columnKeys.map(key => plan.column_matches[key])
-  const omittedColumns = !plan.review && plan.mapping_valid && !summary.replies.pending && !hasDuplicates ? list.columns.filter(column => column.included && !columnTargets.includes(column.id)) : []
-  const groupColumn = plan.mapping.group
-  const typeHeading = plan.mapping.type == null ? "" : plan.headers[plan.mapping.type] || ""
-  const ambiguousType = /^(?:type|category|类型|類型|类别|類別)$/i.test(typeHeading.split(" / ").at(-1)?.trim() || "")
-  const columnHint = groupColumn != null
-    ? { key: "qa.review.groupColumnHint", name: plan.headers[groupColumn] || t("qa.unnamedColumn", { number: groupColumn + 1 }) }
-    : ambiguousType ? { key: "qa.review.ambiguousTypeColumnHint", name: typeHeading } : null
-  function chooseQuestion(key: string, target: string) { setEditing(null); onQuestion(key, target) }
-  function chooseColumn(key: string, target: string) { setEditing(null); onColumn(key, target) }
-  return <div className="qa-import-review" ref={reviewRef} tabIndex={-1}>
-    <header className="qa-review-heading">
-      <div><p className="qa-meta">{t("qa.review.destination", { name: list.title })}</p><h2>{t(plan.stale ? "qa.review.staleHeading" : sourceRows.length ? sourceRows.length === 1 ? "qa.review.rowNeeded" : "qa.review.rowsNeeded" : !plan.mapping_valid ? "qa.review.checkTable" : pending ? "qa.review.needsDecisions" : "qa.review.ready", { count: sourceRows.length || pending })}</h2></div>
-      {!plan.stale && plan.mapping_valid && !sourceRows.length && <Button size="sm" variant="link" disabled={busy} onClick={onAdjust}>{t("qa.review.adjustTable")}</Button>}
-    </header>
-    <div className="qa-review-totals">
-      <p>{t(sourceRows.length ? "qa.review.recognizedTotals" : "qa.review.totals", { questions: plan.rows.length, replies: plan.mapping.replies.length, groups: summary.groups })}</p>
-      {plan.mapping_valid && !sourceRows.length && columnHint && <p className="qa-recognized-column">{t(columnHint.key, { name: columnHint.name, details: t("qa.review.details"), adjust: t("qa.review.adjustTable") })}</p>}
+  const repeatedQuestions = repeatedImportTargets(plan.rows.map(row => row.key), plan.matches)
+  const repeatedColumns = repeatedImportTargets(columnKeys, plan.column_matches)
+  const pendingColumns = new Set(columnKeys.filter(key => !plan.column_matches[key] || repeatedColumns.has(key)))
+  const cards = qaImportCards(plan, list, repeatedQuestions, summary.questions.omitted !== null && !plan.stale)
+  const canEdit = !busy && plan.mapping_valid && !plan.stale
+  const merge = plan.mapping_valid && !duplicate && !pendingColumns.size && !cards.some(card => card.group === "pending") ? onMerge : undefined
+  const inline = new Map<string, QaImportConflict[]>()
+  if (merge) for (const item of plan.review?.conflicts || []) {
+    if (plan.matches[item.row_key] !== item.question_id) continue
+    if (item.kind === "question" || (item.kind === "reply" && item.column_key != null && columnKeys.includes(item.column_key))) {
+      inline.set(item.row_key, [...(inline.get(item.row_key) || []), item])
+    }
+  }
+  const inlineIds = new Set([...inline.values()].flat().map(item => item.id))
+  const needsDecision = (card: QaImportCard) => card.group === "pending" || inline.get(card.key)?.some(item => !item.choice)
+  const visible = cards.filter(card => filter === "all" || card.group === filter)
+  const incomingCards = visible.filter(card => card.group !== "old")
+  const oldCards = visible.filter(card => card.group === "old")
+  const shown = first && !showAll ? incomingCards.slice(0, 3) : incomingCards
+  const choices = currentChoices(plan)
+  const usedQuestions = new Map(Object.entries(plan.matches).map(([row, target]) => [target, row]))
+  const usedColumns = new Map(Object.entries(plan.column_matches).map(([column, target]) => [target, column]))
+  const columnNames = new Map(list.columns.map(column => [column.id, column.label]))
+  const columnOptions = [{ value: "new", label: t("qa.importPreview.newRound") }, ...list.columns.map(column => {
+    const used = usedColumns.get(column.id)
+    return {
+      value: column.id, label: savedColumnLabel(column),
+      detail: used != null ? t("qa.importPreview.columnUsed", { column: excelColumn(Number(used)) }) : undefined,
+    }
+  })]
+
+  useImperativeHandle(reviewRef, () => ({
+    focusDecision() {
+      setFilter("all")
+      const next = cards.find(needsDecision) || (pendingColumns.size > 0 && cards.find(card => card.current && card.incoming)) ||
+        (pendingColumns.size > 0 && cards.find(card => card.incoming))
+      if (next) {
+        setExpanded(open => new Set([...open, next.key]))
+        if (first) setShowAll(true)
+      }
+      setFocusRequest(value => value + 1)
+    },
+  }))
+  useLayoutEffect(() => {
+    if (!focusRequest) return
+    const target = root.current?.querySelector<HTMLElement>("[data-qa-import-decision]") || root.current
+    target?.focus({ preventScroll: true })
+    target?.scrollIntoView({ block: "nearest" })
+  }, [focusRequest])
+
+  function toggle(key: string) {
+    setExpanded(previous => {
+      const next = new Set(previous)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  function selectContent(conflict: QaImportConflict, choice: QaImportContentChoice) {
+    merge?.({ content_choices: { ...choices, [conflict.id]: choice } })
+  }
+
+  function carry(column: string, ids: string[], keep: boolean) {
+    const retained = { ...plan.retained_replies }
+    const current = new Set(retained[column] || [])
+    for (const id of ids) {
+      if (keep) current.add(id)
+      else current.delete(id)
+    }
+    if (current.size) retained[column] = [...current]
+    else delete retained[column]
+    merge?.({ retained_replies: retained })
+  }
+
+  function carryControl(card: QaImportCard, pair: QaImportReplyPair) {
+    const column = pair.savedColumn
+    if (!merge || !pair.missing || !column || !card.current?.included) return null
+    const id = card.current.id
+    return <div className="qa-import-carry">
+      <Button size="sm" variant="outline" disabled={!canEdit} onClick={() => carry(column, [id], !pair.carried)}>
+        {t(pair.carried ? "qa.importPreview.undoCarry" : "qa.importPreview.carryReply")}
+      </Button>
+      <QaActionMenu label={t("qa.importPreview.carryOptions")} disabled={!canEdit}>
+        <QaMenuItem onClick={() => {
+          const ids = cards.flatMap(item => item.incoming && item.current?.included &&
+            qaImportReplyPairs(plan, list.columns, item).some(reply => reply.savedColumn === column && reply.missing)
+            ? [item.current.id] : [])
+          carry(column, ids, true)
+        }}>{t("qa.importPreview.carryColumn")}</QaMenuItem>
+        <QaMenuItem onClick={() => carry(column, plan.retained_replies?.[column] || [], false)}>{t("qa.importPreview.undoCarryColumn")}</QaMenuItem>
+      </QaActionMenu>
     </div>
-    {plan.mapping_valid && !sourceRows.length && <>
-      {list.questions.length > 0 && <dl className="qa-import-outcomes">
-        <div><dt>{t("qa.review.continuedCount")}</dt><dd>{summary.questions.continued}</dd></div>
-        <div><dt>{t("qa.review.newCount")}</dt><dd>{summary.questions.added}</dd></div>
-        <div><dt>{t(plan.review ? "qa.review.omittedResultCount" : "qa.review.omittedCount")}</dt><dd>{!identitiesSettled ? "—" : plan.review ? plan.review.missing_questions.filter(question => !question.kept).length : summary.questions.omitted ?? "—"}</dd></div>
-        {plan.review && identitiesSettled && plan.review.missing_questions.some(question => question.kept) && <div><dt>{t("qa.review.protectedCount")}</dt><dd>{plan.review.missing_questions.filter(question => question.kept).length}</dd></div>}
-        {summary.questions.pending > 0 && <div><dt>{t("qa.review.pendingCount")}</dt><dd>{summary.questions.pending}</dd></div>}
-      </dl>}
-      {list.questions.length > 0 && <p className="qa-decision-hint">{t("qa.review.versionHint")}</p>}
-    </>}
-    {sourceRows.length > 0 ? <section className="qa-source-decisions" data-qa-import-decision tabIndex={-1} aria-label={t("qa.review.rowsNeeded", { count: sourceRows.length })}>
-      <div className="qa-source-help"><p>{t("qa.review.rowHelp")}</p><div>
-        {allHaveQuestion && <Button size="sm" variant="secondary" disabled={busy} onClick={() => onRows(Object.fromEntries(sourceRows.map(row => [row.key, "question"])))}>{t("qa.review.allQuestions")}</Button>}
-        <Button size="sm" variant="ghost" disabled={busy} onClick={onAdjust}>{t("qa.review.sourceSettings")}</Button>
-      </div></div>
-      <QaImportTable plan={plan} busy={busy} initialReviewOnly onRole={onRole} onRow={(key, kind) => onRows({ [key]: kind })} onParent={onParent} />
-    </section> : !plan.mapping_valid && <div className="qa-notice"><p>{t("qa.review.columnsBlocked")}</p><Button size="sm" variant="secondary" disabled={busy} onClick={onAdjust}>{t("qa.review.adjustTable")}</Button></div>}
-    {plan.mapping_valid && !sourceRows.length && <>
-      {questions.map(row => <QuestionDecision key={row.key} row={row} plan={plan} list={list} busy={busy} onQuestion={chooseQuestion} duplicate={repeatedQuestions.has(row.key)} />)}
-      {columnKeys.filter(key => !plan.column_matches[key] || repeatedColumns.has(key)).map(key => <ReplyDecision key={key} columnKey={key} plan={plan} list={list} busy={busy} onColumn={chooseColumn} duplicate={repeatedColumns.has(key)} />)}
-      {!identityPending && plan.review && onMerge && <QaImportContentReview plan={plan} list={list} busy={busy} onMerge={onMerge} />}
-    </>}
-    {!sourceRows.length && <details className="qa-review-details">
-      <summary>{t("qa.review.details")}</summary>
-      <div className="qa-review-details-body">
-      {plan.mapping_valid && <>
-        {confirmedColumns.length > 0 && <section className="qa-review-detail-section">
-          <h3>{t("qa.review.columnLinks")}</h3>
-          {confirmedColumns.map(key => {
-          const value = plan.column_matches[key]
-          if (!value) return null
-          if (editing === `column-${key}`) return <ReplyDecision key={key} columnKey={key} plan={plan} list={list} busy={busy} onColumn={chooseColumn} onCancel={() => setEditing(null)} />
-          const target = list.columns.find(column => column.id === value)
-          const impact = qaReplyColumnImpact(plan, list, Number(key), value)
-          return <div className="qa-import-column-result" key={key}>
-            <div className="qa-import-link"><span>{plan.headers[Number(key)]}</span><ArrowRight aria-hidden className="size-3.5" /><strong>{target?.label || t("qa.review.newColumnResult")}</strong><Button size="sm" variant="ghost" disabled={busy} aria-label={t("qa.review.changeColumn", { name: plan.headers[Number(key)] })} onClick={() => setEditing(`column-${key}`)}>{t("qa.review.change")}</Button></div>
-            <p className="qa-meta">{t(impact.empty ? "qa.review.emptyColumn" : "qa.review.columnFilled", { count: impact.filled })}</p>
-            <ColumnImpact plan={plan} list={list} index={Number(key)} target={value} />
-            {plan.review && onMerge && value !== "new" && impact.cleared > 0 && <label className="qa-merge-clear-option"><input type="checkbox" disabled={busy} checked={(plan.blank_columns || []).includes(key)} onChange={event => onMerge({ blank_columns: event.target.checked ? [...new Set([...(plan.blank_columns || []), key])] : (plan.blank_columns || []).filter(column => column !== key) })} /><span>{t("qa.review.clearBlankOption", { count: impact.cleared })}</span></label>}
-          </div>
-          })}
-        </section>}
-      {list.questions.length > 0 && confirmed.length > 0 && <section className="qa-review-detail-section">
-        <h3>{t("qa.review.questionLinks", { count: confirmed.length })}</h3>
-        {confirmed.map(row => {
-          if (editing === `question-${row.key}`) return <QuestionDecision key={row.key} row={row} plan={plan} list={list} busy={busy} onQuestion={chooseQuestion} onCancel={() => setEditing(null)} />
-          const previous = list.questions.find(question => question.id === plan.matches[row.key])
-          return <div className="qa-import-question-result" key={row.key}>
-            <header><span className="qa-meta">{t(previous ? "qa.review.linkedQuestion" : "qa.review.newQuestionResult", { row: row.key })}</span><Button size="sm" variant="ghost" disabled={busy} aria-label={t("qa.review.changeQuestion", { row: row.key })} onClick={() => setEditing(`question-${row.key}`)}>{t("qa.review.change")}</Button></header>
-            {previous && <p className="qa-import-previous">{previous.display_number && <span>{previous.display_number} · </span>}{previous.summary || previous.text}</p>}
-            <Excerpt text={row.text} />
-          </div>
-        })}
-      </section>}
-      {plan.review && identitiesSettled && onMerge && <QaImportPreservedItems plan={plan} busy={busy} onMerge={onMerge} />}
-      {!plan.review && (omittedQuestions.length > 0 || omittedColumns.length > 0) && <section className="qa-review-detail-section qa-review-omissions">
-        {omittedQuestions.length > 0 && <><h3>{t("qa.review.omittedQuestions", { count: omittedQuestions.length })}</h3>{omittedQuestions.map(question => <p key={question.id}>{question.summary || question.text}</p>)}</>}
-        {omittedColumns.length > 0 && <p>{t("qa.review.omittedColumns", { names: omittedColumns.map(column => column.label).join(", ") })}</p>}
-        <p className="qa-meta">{t("qa.review.omittedHistory")}</p>
-      </section>}
-      {!identityPending && plan.review && onMerge && <QaImportDecidedEdits plan={plan} list={list} busy={busy} onMerge={onMerge} />}
-      </>}
-      <section className="qa-review-detail-section"><header className="qa-review-detail-heading"><h3>{t("qa.review.preview")}</h3></header><QaImportResult plan={plan} foldLongCells={false} /></section>
+  }
+
+  function renderCard(card: QaImportCard) {
+    const { incoming, current, key, group } = card
+    const open = expanded.has(key)
+    const Mark = group === "pending" ? Search : groups[group].icon
+    const conflicts = inline.get(key) || []
+    const questionConflict = conflicts.find(item => item.kind === "question")
+    const replyConflicts = new Map(conflicts.filter(item => item.kind === "reply").map(item => [item.column_key, item]))
+    const pairs = open ? qaImportReplyPairs(plan, list.columns, card)
+      .filter(pair => (!first && pair.column !== undefined) || pair.current?.body.trim() || pair.incoming?.body.trim()) : []
+    const result = plan.review?.preview?.[key]
+    const questionText = result?.text ?? incoming?.text
+    const attention = !!needsDecision(card)
+    const badge = attention ? t("qa.importPreview.pending") : result?.included === false ? t("qa.importPreview.removedQuestion")
+      : group === "added" && !first ? t("qa.importPreview.addedQuestion") : undefined
+    const selectQuestion = !first && !!incoming
+    const showMeta = !!(current?.group || incoming?.group || badge || (onLocate && incoming))
+
+    const questionOptions = () => [
+      { value: "new", label: t("qa.importPreview.asNewQuestion") },
+      ...list.questions.map(question => {
+        const used = usedQuestions.get(question.id)
+        const occupied = !!used && used !== key
+        return {
+          value: question.id, label: question.text,
+          detail: [question.display_number, question.group,
+            occupied ? t("qa.importPreview.questionUsed", { row: used }) : undefined].filter(Boolean).join(" · "),
+          disabled: occupied,
+        }
+      }),
+    ]
+    const oldSide = <div className="qa-import-card-side qa-import-current">
+      {showMeta && <div className="qa-import-card-meta">
+        {current?.group && <span className="qa-import-group-label">{current.group}</span>}
+      </div>}
+      {selectQuestion ? <DropdownSelect size="sm" searchable className="qa-import-question-select"
+        menuClassName="qa-exchange-menu qa-question-options" aria-label={t("qa.review.changeQuestion", { row: key })}
+        value={plan.matches[key] || ""} options={questionOptions} disabled={!canEdit}
+        valueContent={<span className="qa-import-question-text">{current?.text || t("qa.importPreview.matchQuestion")}</span>}
+        onChange={value => onQuestion(key, value)} />
+        : <span className="qa-import-question-text">{current?.text}</span>}
+      {group === "old" && <span className="qa-import-card-mark is-muted">
+        {t(card.missing?.kept ? "qa.review.keptExplicit" : "qa.importPreview.removedQuestion")}
+      </span>}
+    </div>
+    const newSide = incoming ? <div className="qa-import-card-side qa-import-incoming">
+      {showMeta && <div className="qa-import-card-meta">
+        {incoming.group && <span className="qa-import-group-label">{incoming.group}</span>}
+        {badge && <span className={`qa-import-card-mark${attention ? " is-pending" : ""}`}>
+          {attention && <CircleAlert size={14} aria-hidden />}{badge}
+        </span>}
+        {onLocate && <button type="button" className="qa-import-coordinate" onClick={() => onLocate(key)}
+          aria-label={t("qa.review.excelRow", { row: key })}>{excelColumn(plan.mapping.question)}{key}</button>}
+      </div>}
+      <button type="button" className="qa-import-question-text" aria-expanded={open} onClick={() => toggle(key)}>{questionText}</button>
+    </div> : <div />
+
+    return <article className="qa-import-card" key={key} data-qa-import-group={group} data-open={open || undefined}
+      data-qa-import-decision={group === "pending" ? "" : undefined} tabIndex={group === "pending" ? -1 : undefined}>
+      <div className="qa-import-card-head">
+        <button type="button" className="qa-import-card-toggle" aria-expanded={open}
+          aria-label={open ? t("qa.importPreview.collapseQuestion") : t("qa.importPreview.expandQuestion")} onClick={() => toggle(key)}>
+          <ChevronRight className="qa-import-fold" aria-hidden />
+        </button>
+        {first ? newSide : <div className="qa-import-pair" data-meta={showMeta && !!incoming || undefined}>
+          {oldSide}<span className="qa-import-pair-mark" data-kind={group} aria-hidden><Mark size={14} /></span>{newSide}
+        </div>}
       </div>
+      {open && <div className="qa-import-card-thread">
+        {questionConflict && <QaImportComparison
+          current={{ label: t("qa.importPreview.current"), body: current?.text || "" }}
+          incoming={{ label: t("qa.importPreview.excel"), body: questionText || "" }}
+          conflict={questionConflict} onChoice={choice => selectContent(questionConflict, choice)} busy={busy} />}
+        {pairs.map((pair, position) => {
+          const column = pair.column
+          const columnKey = String(column)
+          const conflict = replyConflicts.get(columnKey)
+          const label = column == null ? pair.incoming?.label || "" : plan.headers[column] || t("qa.field.reply")
+          const mapping = plan.column_matches[columnKey]
+          const currentTitle = mapping ? columnNames.get(mapping) : undefined
+          const pending = column != null && pendingColumns.has(columnKey)
+          const control = !first && column != null ? <DropdownSelect size="sm" className="qa-import-round-select"
+            menuClassName="qa-exchange-menu" aria-label={t("qa.review.changeColumn", { name: `${label} · ${excelColumn(column)}` })}
+            value={mapping === "new" ? "" : mapping || ""} placeholder={t("qa.importPreview.matchRound")}
+            valueContent={currentTitle ? <span className="pm-select-trigger-label min-w-0 truncate">{currentTitle}</span> : undefined}
+            options={columnOptions} disabled={!canEdit} onChange={value => onColumn(columnKey, value)} /> : undefined
+          const status = pair.missing && !pendingColumns.size && !pair.carried ? t("qa.importPreview.archivedReply") : undefined
+          const incomingStatus = pair.carried ? t("qa.importPreview.carriedReply")
+            : !first && mapping === "new" ? t("qa.importPreview.newRound") : undefined
+          return <QaImportComparison key={pair.key} current={pair.current}
+            incoming={pair.incoming ? { ...pair.incoming, label } : undefined}
+            position={position + 1} single={first} status={status} incomingStatus={incomingStatus} pending={pending}
+            currentControl={control} currentAction={carryControl(card, pair)}
+            busy={busy} conflict={conflict} onChoice={conflict ? choice => selectContent(conflict, choice) : undefined} />
+        })}
+        {!pairs.length && !questionConflict && <p className="qa-meta">{t("qa.importPreview.noReplies")}</p>}
+        {current && card.missing?.kept && merge && <QaImportPreservedItems plan={plan} busy={busy} onMerge={merge} questionId={current.id} />}
+      </div>}
+    </article>
+  }
+
+  function metric(Icon: typeof Link2, label: string, count: number | null) {
+    return <><span className="qa-import-outcome-icon" aria-hidden><Icon size={17} /></span>
+      <span className="qa-import-outcome-copy"><strong>{count ?? "—"}</strong><span>{label}</span></span></>
+  }
+
+  return <div className="qa-import-review" ref={root} tabIndex={-1}>
+    {plan.stale && <h2 className="qa-import-review-heading">{t("qa.review.staleHeading")}</h2>}
+    <div className={first ? "qa-import-metrics is-first" : "qa-import-metrics"} role="group" aria-label={t("qa.importPreview.outcomes")}>
+      {first ? <>
+        <div className="qa-import-outcome" data-qa-import-outcome="questions">{metric(MessagesSquare, t("qa.importPreview.questions"), plan.rows.length)}</div>
+        <div className="qa-import-outcome" data-qa-import-outcome="replies">{metric(Columns2, t("qa.review.replyColumns"), columnKeys.length)}</div>
+      </> : (Object.keys(groups) as (keyof typeof groups)[]).map(group => {
+        const count = group === "old" && summary.questions.omitted === null ? null : cards.filter(card => card.group === group).length
+        const { icon, label } = groups[group]
+        return <button type="button" className="qa-import-outcome" key={group} data-qa-import-outcome={group} aria-pressed={filter === group}
+          disabled={count === null} onClick={() => setFilter(previous => previous === group ? "all" : group)}>{metric(icon, t(label), count)}</button>
+      })}
+    </div>
+    {merge && <QaImportContentReview plan={plan} list={list} busy={busy} onMerge={merge} inline={inlineIds} />}
+    {!first && <div className="qa-import-column-head qa-meta"><div className="qa-import-pair">
+      <span>{t("qa.importPreview.current")}</span><span>{t("qa.importPreview.nextVersion")}</span>
+    </div></div>}
+    <div className="qa-import-cards">
+      {shown.map(renderCard)}
+      {oldCards.length > 0 && <h3 className="qa-import-archive-heading qa-meta">{t("qa.importPreview.oldQuestions")}</h3>}
+      {oldCards.map(renderCard)}
+      {!visible.length && <p className="qa-meta qa-import-empty">{t("qa.importPreview.empty")}</p>}
+    </div>
+    {first && visible.length > 3 && <Button size="sm" variant="link" aria-expanded={showAll} onClick={() => setShowAll(value => !value)}>
+      {t(showAll ? "qa.importPreview.showFewer" : "qa.importPreview.showAll", { count: visible.length })}
+    </Button>}
+    {merge && plan.review?.conflicts.some(item => item.choice && item.kind !== "structure" && !inlineIds.has(item.id)) && <details className="qa-import-settings">
+      <summary>{t("qa.importPreview.savedChoices")}</summary>
+      <QaImportDecidedEdits plan={plan} list={list} busy={busy} onMerge={merge} inline={inlineIds} />
     </details>}
   </div>
 }

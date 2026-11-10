@@ -157,6 +157,41 @@ def test_resolving_source_rows_preserves_confirmed_matches_and_column_mapping(qa
     assert next(q for q in questions if q["id"] == qid)["text"] == "Explain the seed storage room."
 
 
+def test_column_role_changes_keep_reviewed_rows_and_question_links_when_compatible(qa):
+    detail = mutate(qa, create(qa), "/questions", {"text": "Describe the storage cabinet."})
+    plan = upload(
+        qa,
+        detail,
+        [
+            ["Question", "A response", "Cabinet code"],
+            ["Workshop access", "", ""],
+            ["Describe the revised storage cabinet.", "A new lock was installed.", "C-7"],
+        ],
+    )
+    client, base = qa
+    url = f"{base}/lists/{detail['id']}/imports/{plan['id']}"
+
+    def patch(**changes):
+        nonlocal plan
+        result = client.patch(url, json={"plan_revision": plan["plan_revision"], **changes})
+        assert result.status_code == 200, result.text
+        plan = result.json()
+
+    patch(row_actions={"2": "section"})
+    question_id = detail["questions"][0]["id"]
+    patch(matches={"3": question_id})
+    patch(mapping={**plan["mapping"], "number": 2, "extras": []})
+
+    assert plan["mapping"]["number"] == 2
+    assert plan["table_rows"][0]["kind"] == "section"
+    assert plan["matches"] == {"3": question_id}
+    assert plan["rows"][0]["group"] == "Workshop access"
+
+    patch(mapping={**plan["mapping"], "number": None, "replies": [1, 2]})
+    assert plan["table_rows"][0]["kind"] == "section"
+    assert plan["matches"] == {"3": None}
+
+
 def test_new_questions_with_only_empty_historical_rounds_do_not_require_column_matching(qa):
     d = mutate(qa, create(qa), "/questions", {"text": "Describe the nursery entrance."})
     p = upload(
@@ -183,7 +218,7 @@ def test_new_questions_receive_fresh_round_even_when_old_round_was_previously_po
     )
     p = choose_new_questions(qa, d, p)
     assert p["column_matches"] == {"1": "new"}
-    assert any(column["id"] == cid for column in p["review"]["kept_columns"])
+    assert p["review"]["kept_columns"] == []
 
 
 def test_resuming_an_old_pending_review_resolves_empty_rounds_without_committing(qa):
