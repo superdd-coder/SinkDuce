@@ -339,6 +339,7 @@ def _make_agent():
     store = MagicMock()
     store.count_dialogue_turns.return_value = 0
     store.get_session.return_value.collections = []
+    store.previous_project_context.return_value = ("", ())
     llm = MagicMock()
     llm._model = "test-model"
     llm._client = MagicMock()

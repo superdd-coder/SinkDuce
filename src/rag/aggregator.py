@@ -26,6 +26,8 @@ class SubQueryResult:
     retrieved_chunks: list = field(default_factory=list)  # pre-grade candidates
     trace: list[dict] = field(default_factory=list)
     errors: list[dict] = field(default_factory=list)
+    qa_hits: list = field(default_factory=list)
+    target_collections: list[str] = field(default_factory=list)
 
 
 class Aggregator:

@@ -6,6 +6,7 @@ import { getMeetingTranscript, type Evidence } from "@/api/client"
 import { useAppStore } from "@/stores/app-store"
 import { useT } from "@/i18n/use-t"
 import { CitationSourcePreview } from "./citation-source-preview"
+import { QaCitationPreview } from "./qa-citation-preview"
 import "./chat-reports.css"
 import { citationMarkdown, citationOrder } from "@/lib/chat-citations"
 import { CitationContext, useCitations } from "./citation-context"
@@ -76,6 +77,7 @@ export function CitationScope({ citations = [], sessionId, children, source: ans
     setDetailsOpen(false); setSelected(record); setDialogOpen(true)
   }
   const detailTarget = selected ? citationFileTarget(selected, collections) : null
+  const isQa = !!selected?.source.qa_snapshot_id
   const loc = selected?.location || {}
   const position = [loc.page_number != null && t("chat.reports.page", { n: String(loc.page_number) }),
     loc.slide_number != null && t("chat.reports.slide", { n: String(loc.slide_number) }),
@@ -86,26 +88,29 @@ export function CitationScope({ citations = [], sessionId, children, source: ans
   return <CitationContext value={{ records: citations, numbers, open: openEvidence }}>
     {children}
     <Dialog open={dialogOpen} onOpenChange={opened => {setDialogOpen(opened);if(!opened)setDetailsOpen(false)}} onOpenChangeComplete={(opened) => { if (!opened && !dialogOpen) setSelected(null) }}>
-      <DialogContent className="pm-citation-dialog" finalFocus={triggerRef} forceOverlay showCloseButton={false}>
-        <div className="pm-citation-heading">
-          <div className="pm-citation-identity">
-            <DialogTitle>{t('chat.reports.evidence')}</DialogTitle>
-            <DialogDescription className="sr-only">{selected?.title}</DialogDescription>
+      <DialogContent className={isQa ? "qa-dialog qa-citation-dialog" : "pm-citation-dialog"}
+        finalFocus={triggerRef} forceOverlay showCloseButton={false}>
+        {isQa && selected ? <QaCitationPreview key={selected.id} evidence={selected} sessionId={sessionId} /> : <>
+          <div className="pm-citation-heading">
+            <div className="pm-citation-identity">
+              <DialogTitle>{t('chat.reports.evidence')}</DialogTitle>
+              <DialogDescription className="sr-only">{selected?.title}</DialogDescription>
+            </div>
+            <div className="pm-citation-actions">
+              {detailTarget && <button type="button" className="pm-citation-detail-button" onClick={() => setDetailsOpen(true)}>{t('chat.reports.fileDetails')}<ArrowUpRight size={13} aria-hidden="true"/></button>}
+              <DialogClose className="pm-citation-close" aria-label={t('common.close')}><X size={17} strokeWidth={1.6} aria-hidden="true"/></DialogClose>
+            </div>
           </div>
-          <div className="pm-citation-actions">
-            {detailTarget && <button type="button" className="pm-citation-detail-button" onClick={() => setDetailsOpen(true)}>{t('chat.reports.fileDetails')}<ArrowUpRight size={13} aria-hidden="true"/></button>}
-            <DialogClose className="pm-citation-close" aria-label={t('common.close')}><X size={17} strokeWidth={1.6} aria-hidden="true"/></DialogClose>
-          </div>
-        </div>
-        {selected && <div className="pm-citation-split">
-          <aside className="pm-citation-excerpt-pane">
-            <div className="pm-citation-source-intro"><h2 title={selected.title}>{selected.title}</h2></div>
-            <div className="pm-citation-excerpt-head"><span>{t("chat.reports.excerpt")}</span>{position && <span className="pm-report-meta">{position}</span>}</div>
-            <CitationExcerpt evidence={selected} />
-          </aside>
-          <CitationSourcePreview key={selected.id} evidence={selected} sessionId={sessionId} />
-        </div>}
-        {detailsOpen && detailTarget && <Suspense fallback={null}><ManagedFileDetail {...detailTarget} open={detailsOpen} onOpenChange={setDetailsOpen}/></Suspense>}
+          {selected && <div className="pm-citation-split">
+            <aside className="pm-citation-excerpt-pane">
+              <div className="pm-citation-source-intro"><h2 title={selected.title}>{selected.title}</h2></div>
+              <div className="pm-citation-excerpt-head"><span>{t("chat.reports.excerpt")}</span>{position && <span className="pm-report-meta">{position}</span>}</div>
+              <CitationExcerpt evidence={selected} />
+            </aside>
+            <CitationSourcePreview key={selected.id} evidence={selected} sessionId={sessionId} />
+          </div>}
+          {detailsOpen && detailTarget && <Suspense fallback={null}><ManagedFileDetail {...detailTarget} open={detailsOpen} onOpenChange={setDetailsOpen}/></Suspense>}
+        </>}
       </DialogContent>
     </Dialog>
   </CitationContext>

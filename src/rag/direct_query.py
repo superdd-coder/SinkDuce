@@ -12,6 +12,7 @@ from concurrent.futures import as_completed
 from dataclasses import dataclass, field
 
 from src.rag.retriever import RetrievedChunk
+from src.rag.source_scope import is_qa_chat_chunk, qa_chat_projects
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ class DirectQueryResult:
     candidate_chunks: list[RetrievedChunk] = field(default_factory=list)  # before rerank/cap
     errors: list[dict] = field(default_factory=list)
     trace: list[dict] = field(default_factory=list)
+    qa_hits: list[RetrievedChunk] = field(default_factory=list)
 
 
 
@@ -89,6 +91,9 @@ class DirectQueryModule:
         all_child_groups: dict[str, list[dict]] = {}
         errors: list[dict] = []
         trace: list[dict] = []
+        qa_projects = qa_chat_projects.get()
+        if qa_projects:
+            collections = [project for project in collections if project in qa_projects]
 
         # RBAC 纵深防御（2026-09-17）：这里的 `collections` 由调用方决定
         # （catalog 路由 / 工具参数 / 会话绑定 / 兜底"全部"）。上层本该已过可见性，
@@ -201,6 +206,16 @@ class DirectQueryModule:
                             all_child_groups.setdefault(pid, []).extend(children)
 
         # Merge: sort by score descending, NO text dedup
+        if qa_projects:
+            from src.qa.search_index import retrieve as retrieve_qa
+
+            for collection in collections:
+                try:
+                    all_chunks.extend(retrieve_qa(collection, query, top_k))
+                except Exception as exc:
+                    errors.append({"stage": "qa_retrieve", "error": type(exc).__name__})
+        has_qa = any(is_qa_chat_chunk(c) for c in all_chunks)
+
         all_chunks.sort(key=lambda c: c.score, reverse=True)
         candidate_chunks = [RetrievedChunk(c.text, c.score, dict(c.metadata)) for c in all_chunks]
 
@@ -218,6 +233,10 @@ class DirectQueryModule:
                 )
                 errors.append({"stage": "rerank", "error": type(e).__name__})
                 do_rerank = False
+
+        if has_qa and not do_rerank:
+            errors.append({"stage": "qa_rerank", "error": "RerankingUnavailable"})
+            all_chunks = [c for c in all_chunks if not is_qa_chat_chunk(c)]
 
         # ── Truncate ───────────────────────────────────────────────────
         # Keep the post-rerank cap even when rerank fails. Otherwise each
@@ -254,11 +273,12 @@ class DirectQueryModule:
 
         # ── Build context (always) ─────────────────────────────────────
         from src.rag.context_builder import build_context as _bc
-        context = _bc(all_chunks) if all_chunks else ""
+        document_chunks = [c for c in all_chunks if not is_qa_chat_chunk(c)] if has_qa else all_chunks
+        context = _bc(document_chunks) if document_chunks else ""
 
         # ── Generate answer (optional) ─────────────────────────────────
         answer: str | None = None
-        if generate_answer and self.llm and all_chunks:
+        if generate_answer and self.llm and document_chunks:
             # emit: step="synthesize_start", query
             _emit("synthesize_start", "Generating answer", query=query[:200])
             from src.prompts import DIRECT_ANSWER_USER
@@ -268,7 +288,7 @@ class DirectQueryModule:
                 context=context[:12000],
             )
             try:
-                prompt = evidence_for_model(prompt, all_chunks, self.llm)
+                prompt = evidence_for_model(prompt, document_chunks, self.llm)
                 answer = self.llm.generate(prompt, max_tokens=8192, thinking=True).strip()
                 logger.debug("[Direct] answer: %d chars", len(answer))
                 # emit: step="synthesize_done", answer_len

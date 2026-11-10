@@ -53,6 +53,9 @@ async function harness(file: string, name: string, api: Record<string, any>) {
     "./report-comment-rail": stub(["ReportCommentRail"]),
     "./citation-scope": stub(["CitationScope", "CitationLink"]),
     "./citation-source-preview": stub(["CitationSourcePreview"]),
+    "./qa-citation-preview": stub(["QaCitationPreview"]),
+    "@/components/qa/qa-materials": stub(["QaMaterialPreview"]),
+    "@/components/qa/qa-reply-text": stub(["QaReplyText"]),
     "@/lib/source-evidence": new URL("../src/lib/source-evidence.ts", import.meta.url).href,
     "./report-viewer": stub(["ReportViewer"]),
     "./document-mark": stub(["DocumentMark"]),
@@ -115,6 +118,57 @@ test('evidence dialog opens the existing file details for the cited collection a
     if(oldDocument)Object.defineProperty(globalThis,'document',oldDocument);else Reflect.deleteProperty(globalThis,'document')
     if(oldButton)Object.defineProperty(globalThis,'HTMLButtonElement',oldButton);else Reflect.deleteProperty(globalThis,'HTMLButtonElement')
   }
+})
+
+test('Q&A citation opens a focused reading dialog', async () => {
+  const oldDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
+  const oldButton = Object.getOwnPropertyDescriptor(globalThis, 'HTMLButtonElement')
+  Object.defineProperty(globalThis, 'document', {configurable:true,value:{activeElement:null}})
+  Object.defineProperty(globalThis, 'HTMLButtonElement', {configurable:true,value:class{}})
+  const h = await harness('citation-scope', 'CitationScope', {})
+  try {
+    const props = {sessionId:'s',citations:[],children:null}
+    const evidence = {id:'e',kind:'qa',title:'Gate schedule',quote:'Before rehearsal.',source:{qa_snapshot_id:'example-snapshot'}}
+    h.render(props).find(e => e.props.value?.open).props.value.open(evidence)
+    const tree = h.render(props)
+    assert.ok(tree.some(e => e.type.name === 'QaCitationPreview' && e.props.evidence === evidence))
+    const dialog = tree.find(e => e.type.name === 'DialogContent')
+    assert.match(dialog.props.className, /\bqa-citation-dialog\b/)
+    assert.doesNotMatch(dialog.props.className, /\bpm-citation-dialog\b/)
+    assert.ok(!tree.some(e => e.props.className === 'pm-citation-detail-button'))
+  } finally {
+    h.dispose()
+    if (oldDocument) Object.defineProperty(globalThis, 'document', oldDocument)
+    else Reflect.deleteProperty(globalThis, 'document')
+    if (oldButton) Object.defineProperty(globalThis, 'HTMLButtonElement', oldButton)
+    else Reflect.deleteProperty(globalThis, 'HTMLButtonElement')
+  }
+})
+
+test('a pinned Q&A preview locates the cited round and opens and returns from its linked excerpt', async () => {
+  const source = {available:true,kind:'project',filename:'Example.txt',file_id:'f',version_id:'v1',chunk_id:'p',historical:true}
+  const h = await harness('qa-citation-preview','QaCitationPreview',{
+    getChatQaSource:async () => ({collection:'c',list_id:'l',project_name:'Example project',list_title:'Sample list',version_number:2,
+      question:'When is the gate tested?',replies:[{column_id:'a',label:'First round',body:'Before practice.',sources:[]},
+        {column_id:'b',label:'Second round',body:'Before rehearsal.',sources:[source]}]}),
+  })
+  try {
+    const props = {sessionId:'s',evidence:{kind:'qa',source:{qa_snapshot_id:'example-snapshot',qa_column_id:'b'}}}
+    h.render(props); await h.flush()
+    const tree = h.render(props)
+    assert.equal(tree.find(e => e.type.name === 'DialogTitle')?.props.children, 'Sample list')
+    assert.ok(tree.some(e => e.props.className?.split(' ').includes('qa-reading')))
+    assert.ok(tree.some(e => e.props.className === 'qa-reply-number' && e.props.children === '02'))
+    const cited = elements(tree.find(e => e.props['aria-current'] === true))
+    assert.ok(cited.some(e => e.props.body === 'Before rehearsal.'))
+    assert.ok(tree.some(e => e.props.body === 'Before practice.'))
+    cited.find(e => e.type.name === 'Button' && e.props.title === 'Example.txt').props.onClick()
+    const passage = h.render(props).find(e => e.type.name === 'QaMaterialPreview')
+    assert.equal(passage.props.source.version_id,'v1')
+    assert.equal(passage.props.initialExcerpt,true)
+    passage.props.onBack()
+    assert.ok(h.render(props).some(e => e.props['aria-current'] === true))
+  } finally {h.dispose()}
 })
 
 test("the conversation card shows separate Output and Sources counts and opens outputs without exporting", async () => {

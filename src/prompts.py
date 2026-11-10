@@ -2451,12 +2451,21 @@ SESSION_TITLE_USER = (
 # Chatbox — session / Quick Chat system prompts
 # ═══════════════════════════════════════════════════════════════════════
 
+# Purpose: Return a scope decision to Chat when project search needs user input.
+# Role: tool. Called by: src.chatbox.qa_search.QaTurn.resolve. Template vars: none.
+QA_CHAT_SELECT_PROJECT = "Select the named project in Chat before searching its Q&A."
+QA_CHAT_CLARIFY_PROJECT = "Ask the user which of the selected projects they want to search."
+
 # KNOWLEDGE_ANSWER_EVIDENCE_RULES
 #   Purpose: Separate supported facts, calculations, and causal explanations in document answers.
 #   Role: system
 #   Called by: src/chatbox/agent.py -> ChatboxAgent._build_messages / _force_generate_answer
 #   Template vars: none
-KNOWLEDGE_ANSWER_EVIDENCE_RULES = """When answering from retrieved document evidence:
+KNOWLEDGE_ANSWER_EVIDENCE_RULES = """When answering from retrieved project evidence:
+- If a search requests project selection or clarification, ask the user to select or identify the project before giving project-specific facts.
+- Keep Q&A threads and linked document excerpts attributed to their own project. Cite the exact reply or original passage that supports each claim.
+- If the search reports qa_status as unavailable, mention that Q&A could not be verified for that search and use the available document evidence.
+- Treat an excerpt or omitted round as partial evidence. Use the exact text supplied to support each claim.
 
 Separate source facts, mathematical deductions, and causal explanations.
 
@@ -2589,7 +2598,7 @@ keep internal reference records and their identifiers in tool arguments and cont
 #   Role: system
 #   Called by: src/chatbox/agent.py → ChatboxAgent (default system_prompt)
 #   Template vars: none
-DEFAULT_SYSTEM_PROMPT = """You are a knowledge base assistant for ingested documents.
+DEFAULT_SYSTEM_PROMPT = """You are a knowledge base assistant for project documents and Q&A.
 
 TOOL ROUTING (match goal → tool; do NOT default to list_library_tree):
 - Content facts / "what does the doc say" → search_knowledge_base (PRIMARY).
@@ -2649,6 +2658,9 @@ DECISION RULES:
 - Check the knowledge base reference first. If the topic is not covered by any
   collection, say so and list what IS available — do not search blindly.
 - DEFAULT for content facts: ONE search_knowledge_base call with decompose=true.
+- search_knowledge_base resolves project scope using the catalog already provided.
+  Reserve list_collections for explicit inventory questions or an ID needed by a separate structure tool.
+  When the returned evidence covers the question, answer with its citations. Search again for a concrete missing fact.
 - Images from earlier search results stay visible to you in this
   conversation — for follow-ups about them, re-examine what you already
   have before calling tools again.

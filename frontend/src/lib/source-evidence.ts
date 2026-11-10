@@ -12,6 +12,12 @@ function canonicalSource(meta: Record<string, unknown>): string {
 /** Retrieval rows and sentence citations share the same chunk identity, never just a filename. */
 export function sourceEvidence(row: RetrievedSource, index: number, records: Evidence[] = []): Evidence {
   const meta = row.metadata || {}
+  if (typeof meta.qa_snapshot_id === 'string' && typeof meta.qa_evidence_id === 'string') {
+    return records.find(record => record.id === meta.qa_evidence_id && record.kind === 'qa') || {
+      id: meta.qa_evidence_id, kind: 'qa', title: String(meta.source_label || 'Q&A'),
+      quote: row.text, source: meta, location: {},
+    }
+  }
   const source = canonicalSource(meta)
   const fileId = String(meta.file_id || (source.startsWith('__file__:') ? source.slice(9) : ''))
   const chunkId = String(meta.chunk_id || meta.id || '')
@@ -47,7 +53,7 @@ export function sourceEvidence(row: RetrievedSource, index: number, records: Evi
 export function citationFileTarget(evidence: Evidence, collections: {id:string;name:string}[]) {
   const meta = evidence.source
   const collection = String(meta.collection || meta.collection_name || '').trim()
-  if (!collection || meta.attachment_id || evidence.kind === 'attachment' || evidence.kind === 'web') return null
+  if (!collection || meta.qa_snapshot_id || meta.attachment_id || evidence.kind === 'attachment' || evidence.kind === 'web') return null
   const source = canonicalSource(meta)
   const fileId = String(meta.file_id || (source.startsWith('__file__:') ? source.slice(9) : '')) || undefined
   if (!source && !fileId) return null

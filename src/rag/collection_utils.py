@@ -18,8 +18,10 @@ def _find_provider_by_id(providers: list, provider_id: str):
     return next((p for p in providers if p.id == provider_id), None)
 
 
-def get_collection_embedding(col_config: dict, collection: str = "") -> EmbeddingProvider | None:
-    """Create an embedding provider for a specific collection, falling back to global."""
+def get_collection_embedding_config(
+    col_config: dict, collection: str = ""
+) -> EmbeddingProviderConfig | None:
+    """Resolve the exact embedding configuration used by a collection."""
     from src.services import services
 
     actual_dim = services.db.get_vector_size(collection) if collection else None
@@ -32,7 +34,7 @@ def get_collection_embedding(col_config: dict, collection: str = "") -> Embeddin
             cfg = provider_cfg.model_copy()
             if actual_dim:
                 cfg.dimensions = actual_dim
-            return create_embedding_provider(cfg)
+            return cfg
 
     # 2. Check for old-style per-collection override fields (backward compat)
     old_provider = col_config.get("embedding_provider")
@@ -54,7 +56,7 @@ def get_collection_embedding(col_config: dict, collection: str = "") -> Embeddin
                 dimensions=dim,
                 batch_size=col_config.get("embedding_batch_size") or (global_default.batch_size if global_default else 10),
             )
-            return create_embedding_provider(cfg)
+            return cfg
 
     # 3. Fall back to global default
     global_default = services.config.embedding.default
@@ -71,9 +73,16 @@ def get_collection_embedding(col_config: dict, collection: str = "") -> Embeddin
                     global_default.model, actual_dim,
                 )
             cfg.dimensions = actual_dim
-        return create_embedding_provider(cfg)
+        return cfg
 
     return None
+
+
+
+def get_collection_embedding(col_config: dict, collection: str = "") -> EmbeddingProvider | None:
+    """Create an embedding provider for a specific collection, falling back to global."""
+    config = get_collection_embedding_config(col_config, collection)
+    return create_embedding_provider(config) if config else None
 
 
 def get_collection_reranker(col_config: dict) -> RerankerProvider | None:

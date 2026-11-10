@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { readFile } from "node:fs/promises"
 import { after, before, test } from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
@@ -87,11 +88,19 @@ test("the quote reader renders every selected excerpt including tables with the 
     ],
   }))
   assert.equal((html.match(/class="qa-source-quote"/g) || []).length, 3)
-  assert.match(html, /<table/)
+  assert.match(html, /<div class="pm-recall-md-table-wrap"><table/)
   assert.match(html, /<strong>inspection<\/strong>/)
   assert.match(html, /Please verify the calculation separately/)
   assert.match(html, /Page 3/)
   assert.doesNotMatch(html, /<script/)
+})
+
+test("tables in Q&A excerpts retain their column widths inside a horizontal scroller", async () => {
+  const css = await readFile(new URL("../src/components/qa/qa.css", import.meta.url), "utf8")
+  const scroller = css.match(/\.qa-source-quote \.pm-recall-md-table-wrap\s*\{([^}]+)\}/)?.[1] ?? ""
+  const table = css.match(/\.qa-source-quote \.pm-recall-md-table-wrap > table\s*\{([^}]+)\}/)?.[1] ?? ""
+  assert.match(scroller, /overflow-x:\s*auto/, "the table wrapper must scroll independently of the excerpt pane")
+  assert.match(table, /(?:^|;)\s*width:\s*max-content/, "the table must size its columns from its contents")
 })
 
 test("missing requested evidence names the material and keeps older proposals compatible", async () => {

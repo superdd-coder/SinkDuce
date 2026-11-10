@@ -15,9 +15,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import AsyncGenerator
 
+from src.async_ctx import run_with_context
 from src.chatbox.note_changes import (
     merge_note_changes, note_changes_from_result, note_references_from_history,
 )
+from src.chatbox.qa_evidence import QaEvidence, history_permitted, project_qa_tool_messages
+from src.chatbox.qa_search import QaTurn
 from src.chatbox.query_tools import (
     STRUCTURE_TOOL_NAMES,
     TOOLS,
@@ -31,7 +34,6 @@ from src.chatbox.query_tools import (
     execute_structure_tool,
     execute_structure_tool_async,
     force_collection_args,
-    merge_search_tool_calls,
     tools_for_mode,
 )
 from src.prompts import (
@@ -148,14 +150,20 @@ def _thinking_on_for_tool_round(
     return True
 
 
-def _send_chat_completion(llm, send, kwargs: dict):
+def _send_chat_completion(llm, send, kwargs: dict, retry_context=None):
     """Use provider parameter compatibility for Chat's raw tool/stream requests."""
     from src.providers.llm.parameters import create_chat_completion
 
     base_url = getattr(llm, "_base_url", "")
-    return create_chat_completion(
-        send, kwargs, base_url=base_url if isinstance(base_url, str) else ""
-    )
+    base_url = base_url if isinstance(base_url, str) else ""
+    try:
+        return create_chat_completion(send, kwargs, base_url=base_url)
+    except Exception as error:
+        retry_messages = retry_context(error) if retry_context else None
+        if retry_messages is None:
+            raise
+        kwargs["messages"] = retry_messages
+        return create_chat_completion(send, kwargs, base_url=base_url)
 
 
 def _retry_llm_kwargs_after_error(kwargs: dict, error: BaseException, llm=None) -> dict | None:
@@ -795,6 +803,7 @@ class ChatboxAgent:
         pre_message_context: str | None = None,
         evidence_registry=None,
         reports=None,
+        qa_evidence=None,
     ) -> list[dict]:
         """Build OpenAI-compatible messages for the LLM (three layouts).
 
@@ -862,7 +871,7 @@ class ChatboxAgent:
         # Group: Chat-style history (keep tool rows); no stored transcript dump.
         # Non-meeting: keep system_hist for rare stored system context.
         system_hist = [] if is_meeting else [m for m in hist if m.role == "system"]
-        dialogue_hist = [m for m in hist if m.role != "system"]
+        dialogue_hist = [m for m in hist if m.role != "system" and history_permitted(m.metadata)]
         # Incremental persist writes this-turn tools to DB. extra_messages is
         # the live copy — drop the flushed tail so the LLM does not read twice.
         if extra_messages:
@@ -949,6 +958,24 @@ class ChatboxAgent:
         if parts and evidence_registry is not None:
             from src.chatbox.citations import annotate_attachment_parts
             parts = annotate_attachment_parts(evidence_registry, parts, self._attachments, session_id)
+        if parts:
+            messages[0] = {**messages[0], "content": messages[0]["content"] + "\n\n" + CHAT_ATTACHMENT_POLICY}
+            for m in reversed(messages):
+                if m.get("role") == "user":
+                    m["content"] = [{"type": "text", "text": m.get("content") or ""}, *parts]
+                    break
+
+        messages = hydrate_attachment_history(self._attachments, session_id, messages,
+                                               is_visual=_chat_model_is_visual(self._llm))
+        hydrated = _hydrate_history_images(
+            _collapse_superseded_lookup_results(messages),
+            session_id=session_id,
+            image_store_dir=self._image_store_dir,
+            is_visual=_chat_model_is_visual(self._llm),
+        )
+        if qa_evidence is not None:
+            qa_evidence.fit_model_window(hydrated, evidence_registry)
+        rendered_messages = _sanitize_tool_messages(project_qa_tool_messages(hydrated, evidence_registry))
         if evidence_registry is not None:
             from src.reports.store import for_sessions as report_store
             try:
@@ -959,24 +986,7 @@ class ChatboxAgent:
                 catalog = []
             evidence = [{**e, 'quote': e['quote'][:160]} for e in evidence_registry.records()[-32:]]
             if catalog or evidence:
-                messages.insert(1, {'role': 'system', 'content': json.dumps({'conversation_reports': catalog, 'evidence': evidence}, ensure_ascii=False)})
-        if parts:
-            messages[0] = {**messages[0], "content": messages[0]["content"] + "\n\n" + CHAT_ATTACHMENT_POLICY}
-            for m in reversed(messages):
-                if m.get("role") == "user":
-                    m["content"] = [{"type": "text", "text": m.get("content") or ""}, *parts]
-                    break
-
-        messages = hydrate_attachment_history(self._attachments, session_id, messages,
-                                               is_visual=_chat_model_is_visual(self._llm))
-        rendered_messages = _sanitize_tool_messages(
-            _hydrate_history_images(
-                _collapse_superseded_lookup_results(messages),
-                session_id=session_id,
-                image_store_dir=self._image_store_dir,
-                is_visual=_chat_model_is_visual(self._llm),
-            )
-        )
+                rendered_messages.insert(1, {'role': 'system', 'content': json.dumps({'conversation_reports': catalog, 'evidence': evidence}, ensure_ascii=False)})
         tool_content = [m.get("content") for m in rendered_messages if m.get("role") == "tool"]
         image_count = sum(sum(p.get("type") == "image_url" for p in c if isinstance(p, dict))
                           for c in tool_content if isinstance(c, list))
@@ -1003,6 +1013,10 @@ class ChatboxAgent:
         reports = report_store(self._store).bind_session(session_id)
         self._prepare_chat_attachments(session_id, [])
         collections = self._get_collections(session_id)
+        previous_question, previous_projects = self._store.previous_project_context(session_id)
+        qa_turn = QaTurn(user_message, collections, self._agentic,
+                         previous_question=previous_question, previous_projects=previous_projects)
+        qa_evidence = QaEvidence(self._store, session_id, llm=self._llm)
         has_meetings = self._has_meetings(session_id, collections)
         _tools, _sys_prompt, _cat_text = self._resolve_tools_and_prompt(
             mode, session_id, web_search_enabled=web_search_enabled,
@@ -1034,19 +1048,25 @@ class ChatboxAgent:
         source_cursor = 0
         tx_lookup_dry = False
 
+        def build_turn_messages():
+            return self._build_messages(
+                session_id, user_message, extra_messages=extra_messages,
+                mode=mode, collections=collections,
+                system_prompt=_sys_prompt, catalog_text=_cat_text, evidence_registry=evidence,
+                pre_message_context=meeting_ephemeral_ctx, reports=reports, qa_evidence=qa_evidence,
+            )
+
+        def retry_context(error):
+            if qa_evidence.retry_context(error, evidence):
+                return build_turn_messages()
+            return None
+
         for _round in range(_MAX_TOOL_ROUNDS):
             if dry_served >= _MAX_WASTED_DRY_LOOKUPS:
                 # The model keeps re-emitting lookups after the budget was
                 # spent — stop feeding it rounds and force the answer now.
                 break
-            messages = self._build_messages(
-                session_id, user_message, extra_messages=extra_messages,
-                mode=mode,
-                collections=collections,
-                system_prompt=_sys_prompt, catalog_text=_cat_text, evidence_registry=evidence,
-                pre_message_context=meeting_ephemeral_ctx,
-                reports=reports,
-            )
+            messages = build_turn_messages()
 
             # CHECKPOINT: log multimodal messages
             for i, msg in enumerate(messages):
@@ -1061,17 +1081,19 @@ class ChatboxAgent:
             # Call LLM with tools — use underlying OpenAI client directly
             # (avoids modifying the LLMProvider ABC)
             round_tools = _drop_lookup_tool(_tools) if tx_lookup_dry else _tools
+            round_tools = qa_turn.available_tools(round_tools)
             response = self._call_llm_with_tools(
                 messages,
                 tools=round_tools,
                 tool_choice="auto",
+                retry_context=retry_context,
             )
 
             if response.get("tool_calls"):
                 # ── LLM wants to use tools ──
                 tcs = response["tool_calls"]
-                if mode != "direct" and len(tcs) > 1:
-                    tcs = merge_search_tool_calls(tcs)
+                if mode != "direct":
+                    tcs = qa_turn.plan_tool_calls(tcs, has_catalog=bool(_cat_text))
                 forced_col = self._forced_collection(mode, collections)
 
                 for tc in tcs:
@@ -1090,6 +1112,8 @@ class ChatboxAgent:
 
                     is_multimodal = False
                     tool_persist_text: str | None = None
+                    qa_result = None
+                    qa_bundle = None
                     tool_content: str | list
 
                     if tool_name in {"create_report", "get_report", "update_report", "revise_report"}:
@@ -1221,13 +1245,15 @@ class ChatboxAgent:
                             else:
                                 query = args.get("query", raw_query)
                                 direct_cols = [forced_col] if forced_col else (collections or [])
-                                direct_result = self._direct.retrieve(
+                                direct_result = qa_turn.direct(
+                                    self._direct,
                                     query,
                                     collections=direct_cols,
                                     **search_settings("direct"),
                                     generate_answer=False,
                                 )
                                 total_tool_calls += 1
+                                qa_result = direct_result
                                 for chunk in direct_result.chunks:
                                     source = {
                                         "text": getattr(chunk, "text", "")[:4000],
@@ -1271,9 +1297,10 @@ class ChatboxAgent:
                             )
                             total_tool_calls += 1
                         else:
-                            use_preliminary = decompose and not preliminary_retrieval_used
+                            use_preliminary = not preliminary_retrieval_used
                             preliminary_retrieval_used = preliminary_retrieval_used or decompose
-                            result = self._agentic.run(
+                            result = qa_turn.agentic(
+                                self._agentic,
                                 raw_query,
                                 collections=collections or None,
                                 **search_settings("agentic"),
@@ -1300,6 +1327,7 @@ class ChatboxAgent:
                                 elif result.context:
                                     tool_content_parts.append(result.context)
                                 tool_content = "\n\n".join(tool_content_parts) if tool_content_parts else "No relevant information found."
+                            qa_result = result
                             for chunk in result.all_chunks:
                                 source = {
                                     "text": getattr(chunk, "text", "")[:4000],
@@ -1314,6 +1342,12 @@ class ChatboxAgent:
                     tool_content = evidence.capture(tool_name, tool_content, sources=new_sources, args=args)
                     if tool_persist_text:
                         tool_persist_text = evidence.capture(tool_name, tool_persist_text, sources=new_sources, args=args)
+                    if qa_result is not None:
+                        qa_bundle, tool_content = qa_evidence.finish_search(
+                            qa_result, all_sources, evidence, user_message, self._direct, tool_content
+                        )
+                        if tool_name == "search_knowledge_base":
+                            qa_turn.finish_search(qa_result, qa_bundle)
                     merge_report_changes(report_changes, changes_from_result(tool_name, tool_content))
                     merge_note_changes(note_changes, note_changes_from_result(tool_name, tool_content))
                     # Inject assistant tool_call + tool result into extra messages
@@ -1326,16 +1360,20 @@ class ChatboxAgent:
                             "arguments": tc["function"]["arguments"],
                         },
                     }]
+                    qa_projects = sorted(qa_evidence.project_ids)
                     extra_messages.append({
                         "role": "assistant",
                         "content": None,
                         "tool_calls": tool_call_data,
+                        "_qa_projects": qa_projects,
                     })
                     extra_messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call_id,
                         "content": tool_content,
+                        "_qa_projects": qa_projects,
                         **({"_persist_text": tool_persist_text} if tool_persist_text else {}),
+                        **({"_qa_bundle": qa_bundle} if qa_bundle and qa_bundle.posts else {}),
                     })
             else:
                 # ── LLM returned text — final answer ──
@@ -1349,23 +1387,19 @@ class ChatboxAgent:
                 _MAX_TOOL_ROUNDS, total_tool_calls,
             )
             _persist_extra_messages(self._store, session_id, extra_messages)
-            messages = self._build_messages(
-                session_id, user_message, extra_messages=extra_messages,
-                mode=mode,
-                collections=collections,
-                system_prompt=_sys_prompt, catalog_text=_cat_text, evidence_registry=evidence,
-                pre_message_context=meeting_ephemeral_ctx,
-                reports=reports,
+            final_answer = _force_generate_answer(
+                self._llm, build_turn_messages(),
+                **({"retry_context": retry_context} if qa_evidence.posts else {}),
             )
-            final_answer = _force_generate_answer(self._llm, messages)
 
+        all_sources += qa_evidence.sources(evidence)
         # Save assistant message + extra messages (tool calls/results)
         _persist_extra_messages(self._store, session_id, extra_messages)
         if final_answer or note_changes or report_changes:
             self._store.add_message(
                 session_id, "assistant", final_answer,
                 sources=all_sources if all_sources else None,
-                metadata={"tool_calls": total_tool_calls, "note_changes": note_changes, "citations": evidence.used(final_answer), "report_changes": report_changes},
+                metadata={"tool_calls": total_tool_calls, "note_changes": note_changes, "citations": evidence.used(final_answer), "report_changes": report_changes, **qa_evidence.metadata()},
             )
 
         return ChatResponse(
@@ -1463,6 +1497,10 @@ class ChatboxAgent:
         # Prefer request collections over session's stored collections
         if collections is None:
             collections = self._get_collections(session_id)
+        previous_question, previous_projects = self._store.previous_project_context(session_id)
+        qa_turn = QaTurn(user_message, collections, self._agentic,
+                         previous_question=previous_question, previous_projects=previous_projects)
+        qa_evidence = QaEvidence(self._store, session_id, llm=self._llm)
         has_meetings = self._has_meetings(session_id, collections)
         _tools, _sys_prompt, _cat_text = self._resolve_tools_and_prompt(
             mode, session_id, collections, web_search_enabled=web_search_enabled,
@@ -1597,7 +1635,7 @@ class ChatboxAgent:
                 tools = kept
             if tx_lookup_dry:
                 tools = _drop_lookup_tool(tools)
-            return tools
+            return qa_turn.available_tools(tools)
 
         def _web_tool_result(
             *,
@@ -1614,20 +1652,16 @@ class ChatboxAgent:
                 message=message,
             )
 
-        for _round in range(_MAX_TOOL_ROUNDS):
-            if dry_served >= _MAX_WASTED_DRY_LOOKUPS:
-                # The model keeps re-emitting lookups after the budget was
-                # spent — stop feeding it rounds and force the answer now.
-                break
+        def build_turn_messages(include_review=True):
             messages = self._build_messages(
                 session_id, user_message, extra_messages=extra_messages,
                 mode=mode,
                 collections=collections,
                 system_prompt=_sys_prompt, catalog_text=_cat_text, evidence_registry=evidence,
-                pre_message_context=meeting_ephemeral_ctx,
-                reports=reports,
+                pre_message_context=meeting_ephemeral_ctx if include_review else None,
+                reports=reports, qa_evidence=qa_evidence,
             )
-            if review_batches:
+            if review_batches and include_review:
                 from src.prompts import CHAT_REPORT_REVIEW_PROGRESS_CONTEXT
                 from src.reports.completion import latest_review_failures, focus_review_retry
                 execution = review_execution(review_store, session_id, review_batches)
@@ -1637,6 +1671,14 @@ class ChatboxAgent:
                 messages.append({'role':'system', 'content':CHAT_REPORT_REVIEW_PROGRESS_CONTEXT.format(
                     state=json.dumps({'current_report_review_state':execution,
                         'latest_save_failures':failures}, ensure_ascii=False))})
+            return messages
+
+        for _round in range(_MAX_TOOL_ROUNDS):
+            if dry_served >= _MAX_WASTED_DRY_LOOKUPS:
+                # The model keeps re-emitting lookups after the budget was
+                # spent — stop feeding it rounds and force the answer now.
+                break
+            messages = build_turn_messages()
             if evidence.records():
                 yield {"type": "citations", "citations": evidence.live_records()}
             tools_round = _tools_this_round()
@@ -1645,6 +1687,8 @@ class ChatboxAgent:
                 for t in (tools_round or [])
             }
             known_tool_names.discard("")
+            if _cat_text and not qa_turn.wants_directory:
+                known_tool_names.discard("list_collections")
             previewed_tool_starts = 0
             if extra_messages:
                 yield {"type": "planning", "content": ""}
@@ -1653,6 +1697,13 @@ class ChatboxAgent:
             token_queue: sync_queue.Queue = sync_queue.Queue()
             client = getattr(self._llm, "_client", None)
             model = getattr(self._llm, "_model", "gpt-4")
+
+            def retry_stream_context(error):
+                if qa_evidence.retry_context(error, evidence):
+                    fitted = build_turn_messages()
+                    token_queue.put(("citations", evidence.live_records()))
+                    return fitted
+                return None
 
             def _stream_llm():
                 """Run streaming LLM call in thread. Puts (kind, data) tuples in queue."""
@@ -1730,7 +1781,7 @@ class ChatboxAgent:
 
                 try:
                     stream = _send_chat_completion(
-                        self._llm, client.chat.completions.create, stream_kwargs
+                        self._llm, client.chat.completions.create, stream_kwargs, retry_stream_context
                     )
                 except Exception as e:
                     logger.warning("LLM streaming call failed: %s", e)
@@ -1859,8 +1910,7 @@ class ChatboxAgent:
                     result["reasoning_content"] = all_thinking
                 token_queue.put(("done", result))
 
-            loop_obj = asyncio.get_event_loop()
-            future = loop_obj.run_in_executor(None, _stream_llm)
+            future = asyncio.create_task(run_with_context(_stream_llm))
 
             # Poll for tokens while LLM is running — yield often so SSE flushes
             response = None
@@ -1874,6 +1924,8 @@ class ChatboxAgent:
                             yield {"type": "thinking", "content": data}
                         elif kind == "token":
                             yield {"type": "token", "content": data}
+                        elif kind == "citations":
+                            yield {"type": "citations", "citations": data}
                         elif kind == "tool_name":
                             previewed_tool_starts += 1
                             yield {
@@ -1911,8 +1963,8 @@ class ChatboxAgent:
             if response.get("tool_calls"):
                 # ── Tool call path ──
                 tcs = response["tool_calls"]
-                if mode != "direct" and len(tcs) > 1:
-                    tcs = merge_search_tool_calls(tcs)
+                if mode != "direct":
+                    tcs = qa_turn.plan_tool_calls(tcs, has_catalog=bool(_cat_text))
                 forced_col = self._forced_collection(mode, collections)
 
                 delete_pairs: list[tuple[str, str]] = []
@@ -2057,6 +2109,8 @@ class ChatboxAgent:
                     # original context string (with :::image blocks). The live
                     # request may carry a list; the DB must get this string.
                     tool_persist_text: str | None = None
+                    qa_result = None
+                    qa_bundle = None
                     _ui_status = "done"
                     _ui_source_type = None
                     # Per-tool RAG/web hit count (structure tools omit this)
@@ -2926,7 +2980,8 @@ class ChatboxAgent:
                             _loop = asyncio.get_event_loop()
 
                             def _run_direct_retrieval():
-                                result = self._direct.retrieve(
+                                result = qa_turn.direct(
+                                    self._direct,
                                     query,
                                     collections=direct_cols,
                                     **search_settings("direct"),
@@ -2973,6 +3028,7 @@ class ChatboxAgent:
                                     )
                                 return {
                                     "sources": _sources,
+                                    "result": result,
                                     "context": result.context or "No relevant information found.",
                                     "multimodal": _multimodal,
                                 }
@@ -2980,6 +3036,7 @@ class ChatboxAgent:
                             # 保留请求上下文：_run_direct_retrieval 内部按 actor 过滤可见库
                             from src.async_ctx import run_with_context as _rwc
                             direct_data = await _rwc(_run_direct_retrieval)
+                            qa_result = direct_data["result"]
                             total_tool_calls += 1
                             for s in direct_data["sources"]:
                                 if s not in all_sources:
@@ -3042,12 +3099,13 @@ class ChatboxAgent:
                         import contextvars as _cv
 
                         _ctx = _cv.copy_context()
-                        use_preliminary = decompose and not preliminary_retrieval_used
+                        use_preliminary = not preliminary_retrieval_used
                         preliminary_retrieval_used = preliminary_retrieval_used or decompose
                         future = loop.run_in_executor(
                             None,
                             lambda: _ctx.run(
-                                self._agentic.run,
+                                qa_turn.agentic,
+                                self._agentic,
                                 raw_query,
                                 collections=collections or None,
                                 **search_settings("agentic"),
@@ -3096,6 +3154,7 @@ class ChatboxAgent:
                                 await asyncio.sleep(0.05)
 
                         result = await future
+                        qa_result = result
                         while True:
                             try:
                                 evt = step_queue.get_nowait()
@@ -3153,6 +3212,15 @@ class ChatboxAgent:
                     tool_content = evidence.capture(tool_name, tool_content, sources=new_sources, args=args)
                     if tool_persist_text:
                         tool_persist_text = evidence.capture(tool_name, tool_persist_text, sources=new_sources, args=args)
+                    if qa_result is not None:
+                        qa_bundle, tool_content = await asyncio.to_thread(
+                            qa_evidence.finish_search, qa_result, all_sources, evidence,
+                            user_message, self._direct, tool_content,
+                        )
+                        if tool_name == "search_knowledge_base":
+                            qa_turn.finish_search(qa_result, qa_bundle)
+                        if qa_bundle.posts:
+                            _sources_this_call = (_sources_this_call or 0) + len(qa_bundle.posts)
                     written_reports = changes_from_result(tool_name, tool_content)
                     merge_report_changes(report_changes, written_reports)
                     if evidence.records():
@@ -3228,19 +3296,24 @@ class ChatboxAgent:
                             "arguments": tc["function"]["arguments"],
                         },
                     }]
+                    qa_projects = sorted(qa_evidence.project_ids)
                     assistant_extra: dict = {
                         "role": "assistant",
                         "content": None,
                         "tool_calls": tool_call_data,
+                        "_qa_projects": qa_projects,
                     }
                     extra_messages.append(assistant_extra)
                     tool_extra: dict = {
                         "role": "tool",
                         "tool_call_id": tool_call_id,
                         "content": tool_content,
+                        "_qa_projects": qa_projects,
                     }
                     if tool_persist_text:
                         tool_extra["_persist_text"] = tool_persist_text
+                    if qa_bundle and qa_bundle.posts:
+                        tool_extra["_qa_bundle"] = qa_bundle
                     extra_messages.append(tool_extra)
                     _flush_extra_messages()
 
@@ -3254,8 +3327,9 @@ class ChatboxAgent:
                         continue
                     final_content = completion_text(execution, review_batches, user_message)
 
+                all_sources += qa_evidence.sources(evidence)
                 # Save assistant message
-                meta: dict = {"tool_calls": total_tool_calls, "citations": evidence.used(final_content), "report_changes": report_changes}
+                meta: dict = {"tool_calls": total_tool_calls, "citations": evidence.used(final_content), "report_changes": report_changes, **qa_evidence.metadata()}
                 if execution:
                     meta['report_review_status'] = execution
                 if note_changes:
@@ -3290,8 +3364,8 @@ class ChatboxAgent:
                 if all_sources:
                     for i, s in enumerate(all_sources[:3]):
                         logger.info(
-                            "[Chatbox]   source[%d]: text=%s... score=%.3f meta_keys=%s",
-                            i, s.get("text", "")[:60], s.get("score", 0),
+                            "[Chatbox]   source[%d]: score=%.3f meta_keys=%s",
+                            i, s.get("score", 0),
                             list((s.get("metadata") or {}).keys())[:6],
                         )
                 # message_count: Q&A turns for QC; raw rows for main Chat sidebar
@@ -3314,21 +3388,23 @@ class ChatboxAgent:
             _MAX_TOOL_ROUNDS, total_tool_calls,
         )
         _flush_extra_messages()
-        messages = self._build_messages(
-            session_id, user_message, extra_messages=extra_messages,
-            mode=mode,
-            collections=collections,
-            system_prompt=_sys_prompt, catalog_text=_cat_text, evidence_registry=evidence,
-            reports=reports,
-        )
+        def retry_final_context(error):
+            if qa_evidence.retry_context(error, evidence):
+                return build_turn_messages(include_review=False)
+            return None
+
         execution = review_execution(review_store, session_id, review_batches) if review_batches else None
-        final_content = completion_text(execution, review_batches, user_message) if execution else _force_generate_answer(self._llm, messages)
+        final_content = completion_text(execution, review_batches, user_message) if execution else _force_generate_answer(
+            self._llm, build_turn_messages(include_review=False),
+            **({"retry_context": retry_final_context} if qa_evidence.posts else {}),
+        )
+        all_sources += qa_evidence.sources(evidence)
         if final_content or note_changes or report_changes:
             # Yield the answer as token events so the frontend shows it,
             # then persist and emit done.
             for i in range(0, len(final_content), 4):
                 yield {"type": "token", "content": final_content[i:i + 4]}
-            meta_final: dict = {"tool_calls": total_tool_calls, "citations": evidence.used(final_content), "report_changes": report_changes}
+            meta_final: dict = {"tool_calls": total_tool_calls, "citations": evidence.used(final_content), "report_changes": report_changes, **qa_evidence.metadata()}
             if execution:
                 meta_final['report_review_status'] = execution
             if note_changes:
@@ -3366,7 +3442,7 @@ class ChatboxAgent:
 
     # ── LLM call with tools ──────────────────────────────────────────
 
-    def _call_llm_with_tools(self, messages: list[dict], tools=None, tool_choice="auto") -> dict:
+    def _call_llm_with_tools(self, messages: list[dict], tools=None, tool_choice="auto", retry_context=None) -> dict:
         """Call the Chat LLM with tools enabled.
 
         Uses the underlying OpenAI-compatible client directly for function
@@ -3407,7 +3483,7 @@ class ChatboxAgent:
             pass
 
         try:
-            resp = _send_chat_completion(self._llm, client.chat.completions.create, kwargs)
+            resp = _send_chat_completion(self._llm, client.chat.completions.create, kwargs, retry_context)
         except Exception as e:
             retry_kwargs = _retry_llm_kwargs_after_error(kwargs, e, llm=self._llm)
             if retry_kwargs is not None:
@@ -3466,6 +3542,7 @@ class ChatboxAgent:
     def persist_interrupted_answer(
         self, session_id: str, text: str, *, note_changes: list[dict] | None = None,
         citations: list[dict] | None = None, report_changes: list[dict] | None = None,
+        qa_projects: list[str] | None = None,
     ) -> None:
         """Persist a partially generated answer after a mid-stream disconnect.
 
@@ -3501,6 +3578,7 @@ class ChatboxAgent:
                     "tool_calls": 0, "partial": True, "interrupted": True,
                     **({"note_changes": note_changes} if note_changes else {}),
                     **({"citations": citations} if citations else {}),
+                    **({"qa_projects": qa_projects} if qa_projects else {}),
                     **({"report_changes": report_changes} if report_changes else {}),
                 },
             )
@@ -3536,7 +3614,7 @@ def _preview_tool_content(content, *, max_chars: int = 4000) -> str:
     return s
 
 
-def _force_generate_answer(llm, messages: list[dict]) -> str:
+def _force_generate_answer(llm, messages: list[dict], retry_context=None) -> str:
     """Generate a final answer without tools (strips thinking tags).
 
     Appends a synthesis instruction so the LLM knows to produce an answer
@@ -3560,6 +3638,10 @@ def _force_generate_answer(llm, messages: list[dict]) -> str:
         "content": MAIN_CHAT_FORCE_ANSWER_USER if is_main_chat else CHAT_FORCE_ANSWER_WITH_TOOLS_USER,
     })
 
+    def retry(error):
+        fitted = retry_context(error)
+        return [*fitted, _msgs[-1]] if fitted is not None else None
+
     try:
         if client:
             kwargs = dict(model=model, messages=_msgs, temperature=0.1, max_tokens=4096)
@@ -3568,7 +3650,7 @@ def _force_generate_answer(llm, messages: list[dict]) -> str:
                     llm._apply_thinking_kwargs(kwargs, False)
                 else:
                     kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-            resp = _send_chat_completion(llm, client.chat.completions.create, kwargs)
+            resp = _send_chat_completion(llm, client.chat.completions.create, kwargs, retry if retry_context else None)
             from src.providers.llm.openai_compat import _strip_think
 
             content = _strip_think(resp.choices[0].message.content or "")
@@ -3940,6 +4022,8 @@ def _persist_extra_messages(store, session_id: str, extra_messages: list[dict]) 
                     meta["reasoning_content"] = rc
             elif role == "tool":
                 meta["tool_call_id"] = em.get("tool_call_id", "")
+            if em.get("_qa_projects"):
+                meta["qa_projects"] = em["_qa_projects"]
             store.add_message(session_id, role, content, metadata=meta if meta else None)
         except Exception:
             logger.exception("Failed to persist extra message role=%s", em.get("role", "?"))

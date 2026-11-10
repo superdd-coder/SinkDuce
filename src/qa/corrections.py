@@ -280,6 +280,7 @@ def apply(collection, lid, iid, preview_id):
         conn.execute(
             "UPDATE qa_lists SET revision=revision+1,updated_at=? WHERE id=?", (store.now(), lid)
         )
+        store.queue_index(conn, lid)
         conn.execute(
             "INSERT INTO qa_events VALUES(?,?,?,?,?,?,?)",
             (

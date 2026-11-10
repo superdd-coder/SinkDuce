@@ -56,6 +56,7 @@ class VariantFetcher:
         *,
         task_query: str = "",
         original_user_question: str = "",
+        grade_query: str = "",
         variant_count: int = 2,
         on_step=None,
         **retrieve_kwargs,
@@ -64,6 +65,8 @@ class VariantFetcher:
 
         Parameters
         ----------
+        grade_query:
+            Full information need to verify when the search text is a narrower rewrite.
         on_step:
             Optional callback(step: str, iteration: int, content: str).
             Steps: ``variant_generation``, ``retrieving``, ``grading``,
@@ -83,7 +86,7 @@ class VariantFetcher:
                     logger.exception(_ctx() + "on_step error")
 
         state = AgentState(
-            original_query=query,
+            original_query=grade_query or query,
             original_user_question=original_user_question,
             collections=list(collections),
         )

@@ -1,4 +1,5 @@
 import { request } from "./http"
+import type { QaSource } from "./qa"
 
 /** Approve or deny a pending Chat web-search HITL request. */
 export const confirmWebSearch = (confirmId: string, approved: boolean) =>
@@ -118,3 +119,22 @@ export {
   type SessionMessagePayload,
   type SessionSseMessage,
 } from "./session-sse"
+
+export type QaSnapshotReference =
+  | (QaSource & { available: true; historical: boolean })
+  | { available: false; filename: string }
+
+export interface QaSourceSnapshot {
+  collection: string
+  project_name: string
+  list_id: string
+  list_title: string
+  version_number: number
+  question: string
+  replies: { column_id: string; label: string; body: string; sources: QaSnapshotReference[] }[]
+}
+
+export const getChatQaSource = (sessionId: string, snapshotId: string, signal?: AbortSignal) =>
+  request<QaSourceSnapshot>(
+    `/sessions/${encodeURIComponent(sessionId)}/qa-sources/${encodeURIComponent(snapshotId)}`, { signal },
+  )

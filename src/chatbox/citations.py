@@ -14,7 +14,9 @@ MAX_EVIDENCE = 2048  # Conversation cache; an individual report remains capped a
 MAX_QUOTE = 4000
 _MARKERS = re.compile(r"```.*?(?:```|\Z)|`[^`\n]*`|\[cite:([^\]\r\n]{0,200})\]", re.S)
 _SOURCE_KEYS = ("collection", "collection_name", "file_id", "version_id", "source",
-                "chunk_id", "meeting_id", "attachment_id", "url", "content_hash")
+                "chunk_id", "meeting_id", "attachment_id", "url", "content_hash",
+                "qa_snapshot_id", "qa_list_id", "qa_question_id", "qa_column_id",
+                "qa_text_revision_id", "qa_material_id", "historical")
 _LOCATION_KEYS = ("page_number", "slide_number", "paragraph_index", "sheet_name",
                   "char_offset", "heading_path", "line", "sentence_id", "start_time", "end_time",
                   "image_index")
@@ -150,6 +152,11 @@ class EvidenceRegistry:
     def live_records(self) -> list[dict]:
         return [self._records[eid] for eid in self._active if eid in self._records]
 
+    def discard(self, ids):
+        for eid in ids:
+            self._records.pop(eid, None)
+            self._active.pop(eid, None)
+
     def include(self, records):
         """Reactivate trusted report evidence without duplicating the history cache."""
         restored = EvidenceRegistry(self.session_id, records)
@@ -254,11 +261,17 @@ class EvidenceRegistry:
 
 
 def registry_from_history(store, session_id: str) -> EvidenceRegistry:
+    from src.chatbox.qa_evidence import history_permitted
+
     records = []
     for message in store.get_messages(session_id):
         metadata = getattr(message, "metadata", None) or {}
-        if isinstance(metadata.get("citations"), list):
-            records.extend(metadata["citations"])
+        if isinstance(metadata.get("citations"), list) and history_permitted(metadata):
+            records.extend(
+                record for record in metadata["citations"]
+                if isinstance(record, dict) and isinstance(record.get("source"), dict)
+                and not record["source"].get("qa_snapshot_id")
+            )
     return EvidenceRegistry(session_id, records)
 
 

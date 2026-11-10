@@ -258,6 +258,48 @@
 .qa-history-caption > strong { font: var(--type-ui); overflow-wrap: anywhere; }
 .qa-history-open:focus-visible, .qa-settings-link:focus-visible { outline: 2px solid var(--pm-green); outline-offset: -2px; border-radius: var(--pm-r-sm); }
 .qa-dialog { padding: 24px; max-height: calc(100dvh - 48px); overflow-y: auto; scrollbar-width: thin; }
+.pm-dialog.sd-dialog.qa-citation-dialog[data-slot="dialog-content"] {
+  --qa-citation-gutter: clamp(18px, 4vw, 32px);
+  display: flex;
+  flex-direction: column;
+  width: min(800px, calc(100vw - 32px));
+  max-width: none;
+  max-height: min(84dvh, 880px);
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  background: linear-gradient(var(--sd-surface-overlay), var(--sd-surface-overlay)), var(--sd-canvas) !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.pm-dialog.sd-dialog.qa-citation-dialog[data-slot="dialog-content"]:has(.qa-citation-reference) {
+  width: min(1120px, calc(100vw - 32px));
+  height: min(82dvh, 840px);
+}
+.qa-citation-header { display: flex; align-items: center; flex-shrink: 0; gap: 12px; padding: 15px var(--qa-citation-gutter); border-bottom: 1px solid var(--border); }
+.qa-citation-identity { flex: 1; min-width: 0; }
+.qa-citation-identity [data-slot="dialog-title"], .qa-citation-project > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qa-citation-project { display: flex; align-items: center; gap: 6px; min-width: 0; margin-bottom: 3px; }
+.qa-citation-project > svg { flex-shrink: 0; color: var(--pm-green); }
+.qa-citation-version, .qa-citation-mark { flex-shrink: 0; padding: 3px 8px; border-radius: var(--sd-radius-pill); font: var(--type-meta); }
+.qa-citation-version { background: var(--sd-field); color: var(--pm-muted); }
+.qa-citation-mark { background: var(--sd-selected); color: var(--sd-selected-ink); }
+.qa-citation-header .pm-citation-close { flex-shrink: 0; }
+.qa-citation-reading { padding: 24px var(--qa-citation-gutter) 30px; }
+.qa-citation-reading .qa-question-head { padding: 0 0 18px; border-bottom: 1px solid var(--border); }
+.qa-citation-question-label { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.qa-citation-reading .qa-reply { scroll-margin-block: 12px; }
+.qa-citation-reading .qa-reply[aria-current] .qa-reply-number { background: var(--sd-selected); color: var(--sd-selected-ink); }
+.qa-citation-reading .qa-sources { margin: 6px 0 0; margin-inline-start: 42px; }
+.qa-citation-reading .qa-sources button > svg, .qa-citation-reading .qa-sources button > small { flex-shrink: 0; }
+.qa-citation-reading .qa-sources .qa-citation-unavailable { white-space: normal; overflow-wrap: anywhere; }
+.qa-citation-reference { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+.qa-citation-historical { align-self: flex-start; margin: 10px var(--qa-citation-gutter) 0; }
+.qa-citation-reference > .qa-material-preview { border-radius: 0; background: transparent; box-shadow: none; }
+@media (max-width: 600px) {
+  .qa-citation-header { gap: 8px; padding-block: 12px; }
+  .qa-citation-reading .qa-sources { margin-inline-start: 34px; }
+}
 .qa-form { display: flex; flex-direction: column; gap: 20px; padding: 4px 0 0; min-width: 0; }
 .qa-field { display: flex; flex-direction: column; min-width: 0; gap: 0; }
 .qa-field .pm-field-label { margin-bottom: 9px; }
@@ -421,6 +463,9 @@
 .qa-source-quote > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; font: var(--type-meta); color: var(--pm-muted); }
 .qa-source-quote > header > small { color: var(--pm-faint); }
 .qa-source-quote .pm-recall-md { font: var(--type-reading-compact); line-height: 1.75; overflow-wrap: anywhere; }
+.qa-source-quote .pm-recall-md-table-wrap { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; }
+.qa-source-quote .pm-recall-md-table-wrap > table { width: max-content; min-width: 100%; max-width: none; table-layout: auto; }
+.qa-source-quote .pm-recall-md-table-wrap :is(th, td) { max-width: 320px; overflow-wrap: break-word; word-break: normal; }
 .qa-ai-panel { background: var(--pm-canvas); border-radius: var(--pm-r); padding: 18px; margin: 8px 0 20px; }
 .qa-reply .qa-drafting { display: flex; align-items: center; gap: 8px; color: var(--pm-faint); white-space: nowrap; }
 .qa-drafting > svg { flex-shrink: 0; }

@@ -219,6 +219,16 @@ def get_session(session_id: str):
     # Filter out internal tool/function messages — they are LLM conversation
     # context (tool_call + tool_result pairs), not user-visible chat content.
     visible_msgs = [m for m in msgs if m.role in ("user", "assistant")]
+    from src.chatbox.qa_evidence import history_permitted
+
+    def render(m):
+        permitted = history_permitted(m.metadata)
+        return MessageResponse(
+            id=m.id, session_id=m.session_id, role=m.role, created_at=m.created_at,
+            content=m.content if permitted else "Q&A source unavailable",
+            sources=m.sources if permitted else None,
+            metadata=m.metadata if permitted else {"qa_source_unavailable": True},
+        )
     return SessionDetailResponse(
         id=session.id,
         title=session.title,
@@ -226,19 +236,16 @@ def get_session(session_id: str):
         config=getattr(session, "config", None) or {},
         created_at=session.created_at,
         updated_at=session.updated_at,
-        messages=[
-            MessageResponse(
-                id=m.id,
-                session_id=m.session_id,
-                role=m.role,
-                content=m.content,
-                sources=m.sources,
-                metadata=m.metadata,
-                created_at=m.created_at,
-            )
-            for m in visible_msgs
-        ],
+        messages=[render(m) for m in visible_msgs],
     )
+
+
+@router.get("/sessions/{session_id}/qa-sources/{snapshot_id}")
+def get_qa_source(session_id: str, snapshot_id: str):
+    from src.chatbox.qa_evidence import open_snapshot
+
+    require_session_access(session_id)
+    return open_snapshot(_get_store(), session_id, snapshot_id)
 
 
 @router.patch("/sessions/{session_id}")
@@ -283,6 +290,8 @@ def _sanitize_session_title(raw: str, *, fallback: str) -> str:
 @router.post("/sessions/{session_id}/generate-title")
 def generate_title(session_id: str):
     """Generate a concise title from the first Q&A using the default chat LLM."""
+    from src.chatbox.qa_evidence import history_permitted
+
     require_session_access(session_id)
     store = _get_store()
     session = store.get_session(session_id)
@@ -305,7 +314,7 @@ def generate_title(session_id: str):
         raise HTTPException(400, "Need at least one Q&A exchange to generate a title")
 
     question = (user_msg.content or "").strip()
-    answer = (assistant_msg.content or "").strip()
+    answer = (assistant_msg.content or "").strip() if history_permitted(assistant_msg.metadata) else ""
     fallback = _fallback_session_title(question)
 
     agent = getattr(services, "chatbox_agent", None)

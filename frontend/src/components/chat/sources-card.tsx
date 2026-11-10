@@ -1,5 +1,5 @@
 import { useId, useState } from 'react'
-import { ArrowUpRight, ChevronDown, FileText, Globe } from 'lucide-react'
+import { ArrowUpRight, ChevronDown, FileText, Globe, MessagesSquare } from 'lucide-react'
 import { useAppStore, type Source } from '@/stores/app-store'
 import { useT } from '@/i18n/use-t'
 import { sourceEvidence } from '@/lib/source-evidence'
@@ -16,7 +16,7 @@ export function SourcesCard({ sources }: {sources: Source[]}) {
   const byKey = new Map<string, Source>()
   for (const [index, source] of (sources || []).entries()) {
     const meta = source.metadata || {}
-    const key = JSON.stringify([meta.collection || '', meta.version_id || '', meta.chunk_id || meta.id || meta.url || index])
+    const key = JSON.stringify([meta.collection || '', meta.version_id || '', meta.qa_snapshot_id || meta.chunk_id || meta.id || meta.url || index])
     if (!byKey.has(key) || source.score >= byKey.get(key)!.score) byKey.set(key, source)
   }
   const list = [...byKey.values()].sort((a,b) => (Number(b.score) || 0) - (Number(a.score) || 0))
@@ -32,7 +32,7 @@ export function SourcesCard({ sources }: {sources: Source[]}) {
         const collectionName = collections.find(item => item.id === collection || item.name === collection)?.name
         const page = evidence.location.page_number
         return <button type="button" key={index} className="pm-chat-source-row" title={evidence.title} onClick={() => citations.open(evidence)}>
-          {evidence.kind === 'web' ? <Globe size={16} aria-hidden="true"/> : <FileText size={16} aria-hidden="true"/>}
+          {evidence.kind === 'qa' ? <MessagesSquare size={16} aria-hidden="true"/> : evidence.kind === 'web' ? <Globe size={16} aria-hidden="true"/> : <FileText size={16} aria-hidden="true"/>}
           <span className="pm-chat-source-copy"><span className="pm-chat-source-name">{evidence.title}</span>
             <span className="pm-chat-source-snippet">{evidence.quote}</span>
             {(collectionName || page != null) && <span className="pm-chat-source-context">{[collectionName,page != null && t('chat.reports.page',{n:String(page)})].filter(Boolean).join(' · ')}</span>}

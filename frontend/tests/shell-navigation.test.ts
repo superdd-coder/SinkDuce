@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { readFile } from "node:fs/promises"
 import { after, before, test } from "node:test"
 import { fileURLToPath } from "node:url"
 import { createElement } from "react"
@@ -62,6 +63,15 @@ function render(identity: NavIdentity | null, developerMode = false) {
 function actions(html: string) {
   return [...html.matchAll(/<button\b[^>]*aria-label="([^"]+)"/g)].map(match => match[1])
 }
+
+test("the floating navigation obscures the workspace in both themes", async () => {
+  const css = await readFile(new URL("../src/styles/foundation.css", import.meta.url), "utf8")
+  const navigation = css.match(/^\.sd-navigation\s*\{([^}]+)\}/m)?.[1] ?? ""
+  assert.match(navigation, /background-color:\s*var\(--sd-canvas\)/, "The navigation needs a solid base beneath its gradient")
+  const canvasColors = [...css.matchAll(/--sd-canvas:\s*([^;]+);/g)].map(match => match[1].trim())
+  assert.equal(canvasColors.length, 2)
+  for (const color of canvasColors) assert.match(color, /^#[0-9a-f]{6}$/i)
+})
 
 test("icon navigation retains accessible names, current page and the settings entry", () => {
   const html = render(null)

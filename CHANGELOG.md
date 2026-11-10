@@ -4,6 +4,16 @@ Kept newest-first. CI extracts the section matching the release tag into
 `latest.json → notes` (shown in the desktop update dialog), so headings must
 stay in the exact `## vX.Y.Z` form.
 
+## v1.7.3
+
+- Chat 可检索所选项目最新版 Q&A 的问题和回复。问答和文档一起重排和评分，命中后按问题汇总整帖。
+- 点击 Q&A 来源可查看问题与各轮回复，并打开回复引用的文档片段。
+- 宽表格在文档片段预览中保留列宽，支持左右滚动。修复展开的左侧导航透出下方列表的问题。
+
+- Search questions and replies from the latest Q&A lists in the projects selected in Chat. Q&A and document results are ranked and graded together, and matching threads are grouped by question.
+- Open a Q&A source to read the question and its replies, then follow their citations to the referenced document excerpts.
+- Scroll wide tables horizontally in document excerpt previews. Fix the expanded navigation rail showing the list underneath.
+
 ## v1.7.2
 
 - 修复会议摘要流式输出结束时可能出现的白屏，更新生成中的占位卡片和分段按钮。
