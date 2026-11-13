@@ -19,6 +19,15 @@ def normalize(value):
     return re.sub(r"\s+", " ", value).strip()
 
 
+def _preserve_legacy_type_column(mapping):
+    mapping = {**mapping}
+    index = mapping.pop("type", None)
+    extras = mapping.get("extras", [])
+    if index is not None and index not in extras:
+        mapping["extras"] = sorted([*extras, index])
+    return mapping
+
+
 def asset_path(collection, lid, kind, resource_id):
     from src.file_mgmt import store as files
     from src.paths import assert_resource_id, confine
@@ -36,9 +45,10 @@ def get_plan(conn, lid, iid):
     result = json.loads(row["plan_json"])
     result["committed_version_id"] = row["committed_version_id"]
     if not result["committed_version_id"] and not result.get("cancelled"):
+        result["mapping"] = _preserve_legacy_type_column(result["mapping"])
         choices = result.get("content_choices", {})
         for item in (result.get("review") or {}).get("conflicts", []):
-            if item["kind"] == "structure":
+            if item["kind"] in ("structure", "type"):
                 choices.pop(item["id"], None)
         _restore_plan_section_titles(result)
         resolve_empty_rounds(conn, lid, result)
@@ -94,14 +104,13 @@ def review_plan(conn, lid, plan, *, strict=False):
 
 
 def build_plan(conn, lid, parsed, mapping, *, validate=False, row_actions=None, parents=None):
-    mapping = {**mapping}
+    mapping = _preserve_legacy_type_column(mapping)
     active = range(parsed.get("region", {}).get("start_column", 1) - 1, len(parsed["headers"]))
     used = {
         mapping["question"],
         *mapping["replies"],
         mapping.get("number"),
         mapping.get("status"),
-        mapping.get("type"),
         mapping.get("group"),
         *mapping.get("ignored", []),
     }
@@ -121,9 +130,7 @@ def build_plan(conn, lid, parsed, mapping, *, validate=False, row_actions=None, 
         *mapping.get("extras", []),
         *mapping.get("ignored", []),
     ]
-    indices += [
-        mapping[k] for k in ("number", "status", "type", "group") if mapping.get(k) is not None
-    ]
+    indices += [mapping[k] for k in ("number", "status", "group") if mapping.get(k) is not None]
     if len(set(indices)) != len(indices) or any(
         not isinstance(i, int) or i < 0 or i >= size for i in indices
     ):
@@ -352,11 +359,11 @@ def update(collection, lid, iid, payload):
                 plan.pop(key, None)
         if parsed is not None:
             parsed["pipeline_cache"] = plan.get("pipeline_cache", {})
-            mapping = payload.get("mapping") or detected_mapping
+            mapping = _preserve_legacy_type_column(payload.get("mapping") or detected_mapping)
 
             def role_signature(value):
                 return (
-                    *(value.get(key) for key in ("question", "number", "status", "type", "group")),
+                    *(value.get(key) for key in ("question", "number", "status", "group")),
                     *(
                         tuple(sorted(value.get(key, [])))
                         for key in ("replies", "extras", "ignored")
@@ -696,8 +703,8 @@ def commit(collection, lid, iid, plan_revision):
                             qid,
                             rid,
                             pos,
-                            metadata.default_value(meta, "statuses"),
-                            metadata.default_value(meta, "types"),
+                            metadata.default_status(meta),
+                            "",
                             store.now(),
                         ),
                     )
@@ -734,17 +741,6 @@ def commit(collection, lid, iid, plan_revision):
                         cid,
                         effective["replies"][str(index)],
                     )
-                if effective.get("reset_type"):
-                    default_type = (
-                        "Other"
-                        if plan["mapping"].get("type") is None
-                        and metadata.valid_option(meta, "types", "Other")
-                        else ""
-                    )
-                    conn.execute(
-                        "UPDATE qa_version_questions SET type=?,type_origin='default' WHERE version_id=? AND question_id=?",
-                        (default_type, vid, qid),
-                    )
                 metadata.import_row(
                     conn,
                     vid,
@@ -755,14 +751,12 @@ def commit(collection, lid, iid, plan_revision):
                         "source_effective_typed": row.get("effective_typed", row["typed"]),
                         "effective_values": effective["effective_values"],
                         "effective_typed": effective["effective_typed"],
-                        "reset_imported_type": effective.get("reset_type", False),
                     },
                     qid,
                     extra_fields,
                     plan["mapping"],
                 )
                 metadata.save(conn, vid, meta)
-                # Identity suggestions contain targets, not summaries or question types.
                 # Optional display annotations are generated after a successful commit.
                 row["committed_question_id"] = qid
                 row["external_baseline"] = {**effective["external_baseline"], "question_id": qid}
@@ -775,18 +769,6 @@ def commit(collection, lid, iid, plan_revision):
                         (vid, qid),
                     )
                 )
-            if merged["regrouped_types"]:
-                used_types = {
-                    item[0]
-                    for item in conn.execute(
-                        "SELECT DISTINCT type FROM qa_version_questions WHERE version_id=?", (vid,)
-                    )
-                }
-                obsolete = merged["regrouped_types"] - used_types
-                meta["options"]["types"] = [
-                    option for option in meta["options"]["types"] if option["id"] not in obsolete
-                ]
-
             from . import outline
 
             # Resolve source identities against the immutable external structure,

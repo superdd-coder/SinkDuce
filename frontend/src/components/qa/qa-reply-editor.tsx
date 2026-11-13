@@ -14,7 +14,7 @@ import { sourceScopedKey } from "@/api/source-scope"
 import { createQaProgressSampler } from "@/lib/qa-draft-progress"
 import { groupQaSources } from "@/lib/qa-sources"
 import { streamQaDraft, getQaList, getQaReplyHistory,
-  type QaDraftProgress, type QaListDetail, type QaProposal, type QaQuestion, type QaReply, type QaReplyRevision, type QaSource } from "@/api/client"
+  type QaDraftOptions, type QaDraftProgress, type QaListDetail, type QaProposal, type QaQuestion, type QaReply, type QaReplyRevision, type QaSource } from "@/api/client"
 
 export function QaReplyEditor({ collectionId, data, question, reply, busy, onSave, onFinish, onRename, onSource, position, onToggle }: {
   collectionId: string; data: QaListDetail; question: QaQuestion; reply: QaReply; busy: boolean; position: number;
@@ -31,8 +31,7 @@ export function QaReplyEditor({ collectionId, data, question, reply, busy, onSav
   const [assistant, setAssistant] = useState(false)
   const assistantId = useId()
   const [generating, setGenerating] = useState(false)
-  const [proposal, setProposal] = useState<QaProposal | null>(null)
-  const [proposalInput, setProposalInput] = useState("")
+  const [draft, setDraft] = useState<{ proposal: QaProposal; body: string; input: string; composing: boolean } | null>(null)
   const [generationError, setGenerationError] = useState("")
   const [undo, setUndo] = useState<{ before: string; after: string } | null>(null)
   const [progress, setProgress] = useState<QaDraftProgress>({ stage: "preparing" })
@@ -40,6 +39,11 @@ export function QaReplyEditor({ collectionId, data, question, reply, busy, onSav
   const adoptable = useRef<string | null>(null)
   const editable = data.can_edit && question.included && reply.included
   const sources = editor.savedDraft?.sources || reply.sources || []
+  const followUp = draft !== null && editor.value === draft.input
+  const draftTooLong = draft !== null && [...draft.body].length > 32767
+  const draftBlocked = draftTooLong || !!draft?.composing
+  const canAdopt = followUp && !draftBlocked && !!draft?.body.trim()
+    && editor.ready && !generating && editor.state !== "saving" && !busy
 
   useEffect(() => () => {
     generation.current?.controller.abort()
@@ -53,29 +57,33 @@ export function QaReplyEditor({ collectionId, data, question, reply, busy, onSav
     generation.current?.sampler.stop()
     generation.current = null
     adoptable.current = null
-    setAssistant(false); setGenerating(false); setProposal(null); setGenerationError("")
+    setAssistant(false); setGenerating(false); setDraft(null); setGenerationError("")
   }
 
   async function generate(guidance: string, materialVersionIds: string[]) {
     if (generation.current || !assistant || !editor.ready || !editable || busy) return false
+    if (followUp && draftBlocked) return false
+    const input = editor.value
+    const options: QaDraftOptions = { guidance, material_version_ids: materialVersionIds }
+    if (followUp && draft) {
+      options.previous_proposal_id = draft.proposal.id
+      if (draft.body !== draft.proposal.body) options.edited_draft = draft.body
+    }
     const controller = new AbortController()
     const sampler = createQaProgressSampler(next => { if (generation.current?.controller === controller && !controller.signal.aborted) setProgress(next) })
     generation.current = { controller, sampler }
     const currentRun = () => generation.current?.controller === controller && !controller.signal.aborted
-    const instructions = editor.value
-    const previousProposalId = proposal && proposalInput === instructions ? proposal.id : undefined
     setProgress({ stage: "preparing" }); setGenerating(true); setGenerationError("")
     try {
       if (!await editor.flush()) { if (currentRun()) setGenerationError("qa.replySaveFailed"); return false }
       if (!currentRun()) return false
       const current = await getQaList(collectionId, data.id, data.version.id, controller.signal)
       if (!currentRun()) return false
-      const result = await streamQaDraft(collectionId, current, question.id, reply.column_id, instructions, sampler.update, controller.signal, {
-        guidance, ...(previousProposalId ? { previous_proposal_id: previousProposalId } : {}), material_version_ids: materialVersionIds,
-      })
+      const result = await streamQaDraft(collectionId, current, question.id, reply.column_id,
+        followUp ? "" : input, sampler.update, controller.signal, options)
       if (!currentRun()) return false
       adoptable.current = result.id
-      setProposalInput(instructions); setProposal(result)
+      setDraft({ proposal: result, body: result.body, input, composing: false })
       return true
     } catch (error) {
       const message = error instanceof Error ? error.message : ""
@@ -87,6 +95,14 @@ export function QaReplyEditor({ collectionId, data, question, reply, busy, onSav
       sampler.stop()
       if (generation.current?.controller === controller) { generation.current = null; setGenerating(false) }
     }
+  }
+
+  function adoptDraft() {
+    if (!draft || !canAdopt || generation.current || adoptable.current !== draft.proposal.id) return
+    setUndo({ before: editor.value, after: draft.body })
+    closeAssistant()
+    editor.edit(draft.body, draft.proposal.id)
+    void editor.flush()
   }
 
   return <article className={`qa-reply ${!reply.included ? "is-removed" : ""}`}>
@@ -131,20 +147,27 @@ export function QaReplyEditor({ collectionId, data, question, reply, busy, onSav
       </div>
     </div> : <QaReplyText className={!reply.body ? "qa-empty-reply" : ""} body={reply.body || t("qa.emptyReply")} />}
     {assistant && editable && <QaDraftInstructions collectionId={collectionId} listId={data.id} panelId={assistantId}
-      followUp={!!proposal && editor.value === proposalInput} disabled={generating || busy || !editor.ready} onGenerate={generate}>
+      followUp={followUp} disabled={generating || busy || !editor.ready || (followUp && draftBlocked)} onGenerate={generate}>
       <div className="qa-ai-panel-heading">
         {generating ? <span className="qa-drafting" role="status" aria-live="polite"><Loader2 aria-hidden className="size-3.5 animate-spin" /><span>{t(`qa.draftProgress.${progress.stage === "drafting" && progress.operation ? progress.operation : progress.stage}`)}</span></span>
-          : <span className="pm-label">{proposal?.operation ? t(`qa.aiResult.${proposal.operation}`) : t("qa.aiDraft")}</span>}
+          : <span className="qa-draft-title">{draft?.proposal.operation ? t(`qa.aiResult.${draft.proposal.operation}`) : t("qa.aiDraft")}</span>}
         <Button type="button" variant="ghost" size="icon-xs" aria-label={t("common.close")} onClick={closeAssistant}><X /></Button>
       </div>
-      {proposal && <div className="qa-proposal"><QaReplyText body={proposal.body} /><QaEvidenceNotice proposal={proposal} />
-        {editor.value !== proposalInput && <p className="qa-meta">{t("qa.aiInputChanged")}</p>}
+      {draft && <div className="qa-proposal">
+        <QaRichReply key={draft.proposal.id} value={draft.body} label={t("qa.aiEditableDraft")} placeholder={t("qa.replyPlaceholder")}
+          ready={followUp && !generating && !busy} invalid={draftTooLong}
+          onChange={(body, composing) => {
+            if (!generation.current && adoptable.current === draft.proposal.id) {
+              setDraft(current => current?.proposal.id === draft.proposal.id ? { ...current, body, composing } : current)
+            }
+          }}
+          onCompositionStart={() => setDraft(current => current?.proposal.id === draft.proposal.id ? { ...current, composing: true } : current)} />
+        <QaEvidenceNotice proposal={draft.proposal} />
+        {!followUp && <p className="qa-meta">{t("qa.aiInputChanged")}</p>}
+        {draftTooLong && <p className="qa-notice" role="alert">{t("qa.aiDraftTooLong")}</p>}
         <div className="qa-proposal-actions">
-          <QaSources sources={proposal.sources} onSource={onSource} />
-          <Button type="button" size="sm" disabled={generating || editor.state === "saving" || busy || editor.value !== proposalInput} onClick={() => {
-            if (adoptable.current !== proposal.id || generation.current || editor.state === "saving" || busy || editor.value !== proposalInput) return
-            setUndo({ before: editor.value, after: proposal.body }); closeAssistant(); editor.edit(proposal.body, proposal.id); void editor.flush()
-          }}>{t("qa.useDraft")}</Button>
+          <QaSources sources={draft.proposal.sources} onSource={onSource} />
+          <Button type="button" size="sm" disabled={!canAdopt} onClick={adoptDraft}>{t("qa.useDraft")}</Button>
         </div>
       </div>}
       {generationError && <p className="qa-notice" role="alert">{t(generationError)}</p>}

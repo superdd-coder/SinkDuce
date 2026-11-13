@@ -24,10 +24,9 @@ after(async () => {
 })
 
 const props = {
-  count: 19, status: "all", type: "all", omitted: false,
+  count: 19, status: "all", omitted: false,
   statusOptions: [{ value: "open", label: "Awaiting confirmation" }],
-  typeOptions: [{ value: "clarify", label: "Clarify" }],
-  onStatusChange() {}, onTypeChange() {}, onOmittedChange() {}, onClear() {},
+  onStatusChange() {}, onOmittedChange() {}, onClear() {},
 }
 
 test("the question count and named icon trigger are available without active filters", async () => {
@@ -39,21 +38,20 @@ test("the question count and named icon trigger are available without active fil
   assert.doesNotMatch(html, /is-active|Awaiting confirmation|>Clarify</)
 })
 
-test("active status and type are named accessibly beside the filtered result count", async () => {
+test("active status is named accessibly beside the filtered result count", async () => {
   const { QaQuestionFilter } = await server.ssrLoadModule("/src/components/qa/qa-question-filter.tsx")
-  const html = renderToStaticMarkup(createElement(QaQuestionFilter, { ...props, count: 3, status: "open", type: "clarify" }))
+  const html = renderToStaticMarkup(createElement(QaQuestionFilter, { ...props, count: 3, status: "open" }))
   assert.match(html, /class="qa-question-filter is-active"/)
   assert.match(html, /aria-live="polite"[^>]*>3<\/span>/)
-  assert.match(html, /aria-label="[^"]*Awaiting confirmation[^"]*Clarify[^"]*"/)
+  assert.match(html, /aria-label="[^"]*Awaiting confirmation[^"]*"/)
   assert.doesNotMatch(html, /aria-pressed=/)
 })
 
-test("a type filter alone is marked active without counting the default status as a selection", async () => {
+test("legacy category data cannot activate the filter", async () => {
   const { QaQuestionFilter } = await server.ssrLoadModule("/src/components/qa/qa-question-filter.tsx")
-  const html = renderToStaticMarkup(createElement(QaQuestionFilter, { ...props, type: "clarify" }))
-  assert.match(html, /qa-question-filter is-active/)
-  assert.match(html, /aria-label="[^"]*Clarify[^"]*"/)
-  assert.doesNotMatch(html, /Awaiting confirmation/)
+  const legacyProps = { ...props, type: "clarify", typeOptions: [{ value: "clarify", label: "Clarify" }] }
+  const html = renderToStaticMarkup(createElement(QaQuestionFilter, legacyProps))
+  assert.doesNotMatch(html, /qa-question-filter is-active|Clarify|Awaiting confirmation/)
 })
 
 test("showing omitted questions activates the same filter control and names its scope", async () => {

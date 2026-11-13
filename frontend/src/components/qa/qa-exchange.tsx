@@ -38,13 +38,13 @@ export function QaExchange({ collectionId, list: existingList, mode, close: onCl
 
   const [headerRow, setHeaderRow] = useState(resume?.plan.header_row || 1)
   const [region, setRegion] = useState(resume?.plan.region || { start_column: 1, end_column: 1, header_end_row: 1, end_row: 1 })
-  const [options, setOptions] = useState({ include_number: true, include_status: false, include_type: false, resequence: false })
+  const [options, setOptions] = useState({ include_number: true, include_status: false, resequence: false })
 
   useEffect(() => {
     if (mode !== "export" || !existingList) return
     if (!existingList.original_layout) getQaTemplates(collectionId).then(rows => {
       const template = rows.find(r => r.id === existingList.template_id)
-      if (template) setOptions({ include_number: template.include_number ?? true, include_status: template.include_status ?? false, include_type: template.include_type ?? false, resequence: template.resequence ?? false })
+      if (template) setOptions({ include_number: template.include_number ?? true, include_status: template.include_status ?? false, resequence: template.resequence ?? false })
     }).catch(() => {})
     getQaExports(collectionId, existingList.id).then(setExports).catch(() => {})
   }, [collectionId, existingList, mode])
@@ -214,7 +214,7 @@ export function QaExchange({ collectionId, list: existingList, mode, close: onCl
         </div>
         <p className="qa-meta">{t(existingList.original_layout ? "qa.originalLayoutExport" : "qa.exportHelp")}</p>
         <div className="qa-exchange-export-disclosures">
-          {!existingList.original_layout && <details><summary>{t("qa.exportSettings")}</summary><div className="qa-export-options">{(["include_number", "include_status", "include_type"] as const).map(k => <QaToggle key={k} checked={options[k]} onChange={value => setOptions(s => ({ ...s, [k]: value }))} label={t(`qa.exportOption.${k}`)} />)}</div>{existingList.can_edit && onTemplate && <Button variant="link" size="sm" disabled={busy} onClick={() => exit(onTemplate)}>{t("qa.template")}</Button>}</details>}
+          {!existingList.original_layout && <details><summary>{t("qa.exportSettings")}</summary><div className="qa-export-options">{(["include_number", "include_status"] as const).map(k => <QaToggle key={k} checked={options[k]} onChange={value => setOptions(s => ({ ...s, [k]: value }))} label={t(`qa.exportOption.${k}`)} />)}</div>{existingList.can_edit && onTemplate && <Button variant="link" size="sm" disabled={busy} onClick={() => exit(onTemplate)}>{t("qa.template")}</Button>}</details>}
           {exports.length > 0 && <details><summary>{t("qa.exportHistory")}</summary>{exports.map(e => <button key={e.id} className="qa-version-row" disabled={busy} onClick={() => run(async () => saveQaDownload(await downloadQaExport(collectionId, existingList.id, e.id), "Q&A.xlsx"))}>{new Date(e.created_at).toLocaleString()} · {t("qa.download")}</button>)}</details>}
         </div>
         {existingList.can_edit && <div className="qa-exchange-export-footer"><Button disabled={busy} onClick={() => run(async () => { saveQaDownload(await exportQaFile(collectionId, existingList, options), `${existingList.title}-V${existingList.version.number}.xlsx`); close() })}><Download />{t(busy ? "qa.processing" : "qa.download")}</Button></div>}

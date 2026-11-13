@@ -4,6 +4,14 @@ Kept newest-first. CI extracts the section matching the release tag into
 `latest.json → notes` (shown in the desktop update dialog), so headings must
 stay in the exact `## vX.Y.Z` form.
 
+## v1.7.5
+
+- 会议列表底部新增归档区，可查看和恢复已归档会议。
+- 更新 Q&A 的 Excel 导入、回复编辑和 AI 草稿流程，并调整软件更新弹窗。
+
+- View and restore archived meetings from the bottom of the meeting list.
+- Update Q&A Excel import, reply editing, and AI drafting, and refine the software update dialog.
+
 ## v1.7.4
 
 - 在同一个 Q&A 导入窗口检查 Excel 区域、行列类别和匹配结果。更新清单时，左右对照问题和每轮回复，可直接更改匹配。

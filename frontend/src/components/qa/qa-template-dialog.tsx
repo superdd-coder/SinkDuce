@@ -9,7 +9,7 @@ import { useT } from "@/i18n/use-t"
 import { getQaLogo, getQaTemplates, saveQaTemplate, uploadQaLogo, type QaListDetail, type QaTemplate } from "@/api/client"
 import "./qa-settings-refinement.css"
 
-const defaults: Partial<QaTemplate> & { name: string } = { name: "", title: "", include_number: true, include_status: false, include_type: false, resequence: false, metadata_position: "left", logo_position: "right" }
+const defaults: Partial<QaTemplate> & { name: string } = { name: "", title: "", include_number: true, include_status: false, resequence: false, metadata_position: "left", logo_position: "right" }
 export function QaTemplateDialog({ collectionId, list, close: onClosed, onSelect }: { collectionId: string; list: QaListDetail; close: () => void; onSelect: (id: string) => Promise<boolean> }) {
   const { open, close, onOpenChangeComplete } = useQaModal(onClosed)
   const t = useT()
@@ -36,13 +36,13 @@ export function QaTemplateDialog({ collectionId, list, close: onClosed, onSelect
         <QaFilePicker label={t("qa.uploadLogo")} accept="image/png,image/jpeg" disabled={busy} onFile={async file => { setBusy(true); try { const result = await uploadQaLogo(collectionId, file); update("logo_id", result.id) } catch { setError(t("qa.failed")) } finally { setBusy(false) } }} />
         {form.logo_id && <><DropdownSelect size="sm" aria-label={t("qa.logoPosition")} value={form.logo_position || "right"} onChange={value => update("logo_position", value)} options={[{ value: "left", label: t("qa.left") }, { value: "right", label: t("qa.right") }]} /><Button type="button" size="sm" variant="ghost" onClick={() => { update("logo_id", ""); setLogo(null) }}>{t("qa.removeLogo")}</Button></>}
       </div>
-      <div className="qa-refinement-toggles">{(["include_number", "include_status", "include_type"] as const).map(k => <QaToggle key={k} checked={!!form[k]} onChange={value => update(k, value)} label={t(`qa.exportOption.${k}`)} />)}</div>
+      <div className="qa-refinement-toggles">{(["include_number", "include_status"] as const).map(k => <QaToggle key={k} checked={!!form[k]} onChange={value => update(k, value)} label={t(`qa.exportOption.${k}`)} />)}</div>
     </div>
     <figure className="qa-template-paper qa-refinement-template">
       <figcaption className="qa-meta">{t("common.preview")}</figcaption>
       <header style={{ flexDirection: logo && form.logo_position === "left" ? "row-reverse" : "row" }}><h3>{form.title || list.title}</h3>{logo && <img src={logo} alt="" />}</header>
       <p style={{ textAlign: form.metadata_position || "left" }}>V{list.version.number} · {new Date().toLocaleDateString()}</p>
-      <div className="qa-template-columns">{form.include_number && <span>{t("qa.field.number")}</span>}<span>{t("qa.question")}</span>{form.include_status && <span>{t("qa.statusLabel")}</span>}{form.include_type && <span>{t("qa.typeLabel")}</span>}{list.columns.filter(c => c.included).map(c => <span key={c.id}>{c.label}</span>)}</div>
+      <div className="qa-template-columns">{form.include_number && <span>{t("qa.field.number")}</span>}<span>{t("qa.question")}</span>{form.include_status && <span>{t("qa.statusLabel")}</span>}{list.columns.filter(c => c.included).map(c => <span key={c.id}>{c.label}</span>)}</div>
       <div className="qa-paper-lines" aria-hidden="true" />
     </figure></div>
     <div className="qa-refinement-footer"><Button variant="ghost" disabled={busy} onClick={close}>{t("qa.cancel")}</Button><Button disabled={busy || !form.name.trim()} onClick={async () => { setBusy(true); setError(""); try { const result = await saveQaTemplate(collectionId, form); if (await onSelect(result.id)) close() } catch { setError(t("qa.failed")) } finally { setBusy(false) } }}>{t("qa.saveTemplate")}</Button></div>

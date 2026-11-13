@@ -1,4 +1,4 @@
-"""Column roles distinguish fictional themes from question actions and custom types."""
+"""Group recognition separates topic structure from additional fields."""
 
 from io import BytesIO
 
@@ -41,7 +41,7 @@ def test_explicit_topic_header_maps_to_group(heading):
     _, parsed = workbook([heading, "Question", "Reply"], ["Storage", "Safety"])
     result = workbook_reader.default_mapping(parsed)
     assert result.get("group") == 0
-    assert result["type"] is None and 0 not in result["extras"]
+    assert "type" not in result and 0 not in result["extras"]
 
 
 @pytest.mark.parametrize("heading", ["Type", "Category"])
@@ -52,7 +52,7 @@ def test_ambiguous_header_is_group_when_body_forms_named_topic_blocks(heading):
     )
     result = workbook_reader.default_mapping(parsed)
     assert result.get("group") == 0
-    assert result["type"] == 3
+    assert result["extras"] == [3]
 
 
 def test_vertical_topic_merge_supports_group_even_without_repeated_cell_values():
@@ -63,7 +63,7 @@ def test_vertical_topic_merge_supports_group_even_without_repeated_cell_values()
     )
     result = workbook_reader.default_mapping(parsed)
     assert result.get("group") == 0
-    assert result["type"] is None
+    assert "type" not in result
 
 
 def test_topic_blocks_can_include_singleton_groups():
@@ -133,14 +133,14 @@ def test_sparse_theme_blocks_need_bold_anchors_and_do_not_cross_sections(
         ),
     ],
 )
-def test_explicit_or_weakly_grouped_custom_types_are_not_reclassified(heading, labels, validation):
+def test_weak_or_action_oriented_columns_stay_additional_fields(heading, labels, validation):
     _, parsed = workbook([heading, "Question", "Reply"], labels, validation=validation)
     result = workbook_reader.default_mapping(parsed)
     assert result.get("group") is None
-    assert result["type"] == 0
+    assert result["extras"] == [0]
 
 
-def test_entity_section_still_inherits_type_without_a_group_column():
+def test_section_value_is_inherited_as_an_additional_field():
     book = openpyxl.Workbook()
     sheet = book.active
     sheet.append(["Index", "Type", "Question", "Reply"])
@@ -152,7 +152,7 @@ def test_entity_section_still_inherits_type_without_a_group_column():
     parsed = workbook_reader.read_workbook(out.getvalue())
     mapping = workbook_reader.default_mapping(parsed)
     table, rows = workbook_reader.classify_rows(parsed, mapping)
-    assert mapping.get("group") is None and mapping["type"] == 1
+    assert mapping.get("group") is None and mapping["extras"] == [1]
     assert table[0]["kind"] == "section"
     assert rows[0]["effective_values"][1] == "Exhibition"
 
@@ -166,21 +166,20 @@ def suggest(monkeypatch, parsed, **roles):
     monkeypatch.setattr(intelligence, "generate_json", generate)
 
 
-def test_ai_cannot_override_explicit_group_header_or_lose_the_type_column(monkeypatch):
+def test_ai_cannot_override_explicit_group_header(monkeypatch):
     raw, parsed = workbook(["Topic", "Question", "Reply", "Question Type"], ["Storage", "Security"])
     suggest(monkeypatch, parsed, type=0)
     _, result, status = intelligence.map_headers(raw, parsed)
     assert status == "ready"
-    assert result.get("group") == 0 and result["type"] == 3
-    assert result["extras"] == []
+    assert result.get("group") == 0 and result["extras"] == [3]
 
 
-def test_ai_preserves_explicit_question_type_beside_group(monkeypatch):
+def test_ai_preserves_action_labels_as_an_additional_field_beside_group(monkeypatch):
     raw, parsed = workbook(["Topic", "Question", "Reply", "Question Type"], ["Storage", "Security"])
-    suggest(monkeypatch, parsed, group=0)
+    suggest(monkeypatch, parsed, group=0, type=3)
     _, result, status = intelligence.map_headers(raw, parsed)
     assert status == "ready"
-    assert result.get("group") == 0 and result["type"] == 3
+    assert result.get("group") == 0 and result["extras"] == [3]
 
 
 def test_ai_cannot_turn_an_explicit_reply_header_into_group(monkeypatch):
@@ -200,7 +199,7 @@ def test_ai_cannot_override_merged_topic_structure(monkeypatch):
     suggest(monkeypatch, parsed, type=0)
     _, result, status = intelligence.map_headers(raw, parsed)
     assert status == "ready"
-    assert result.get("group") == 0 and result["type"] is None
+    assert result.get("group") == 0 and "type" not in result
 
 
 @pytest.mark.parametrize(
@@ -211,7 +210,7 @@ def test_ai_group_suggestion_does_not_override_an_action_or_uncertain_type(monke
     suggest(monkeypatch, parsed, group=0)
     _, result, status = intelligence.map_headers(raw, parsed)
     assert status == "ready"
-    assert result.get("group") is None and result["type"] == 0
+    assert result.get("group") is None and result["extras"] == [0]
 
 
 def test_ai_can_suggest_a_group_when_an_unfamiliar_header_has_structure(monkeypatch):
@@ -223,7 +222,7 @@ def test_ai_can_suggest_a_group_when_an_unfamiliar_header_has_structure(monkeypa
     suggest(monkeypatch, parsed, group=0)
     _, result, status = intelligence.map_headers(raw, parsed)
     assert status == "ready"
-    assert result.get("group") == 0 and result["type"] is None
+    assert result.get("group") == 0 and "type" not in result
 
 
 @pytest.mark.parametrize("index", [1, 8])

@@ -162,8 +162,8 @@ def apply(collection, lid, iid, preview_id):
                     target,
                     rid,
                     source["position"],
-                    metadata.default_value(meta, "statuses"),
-                    metadata.default_value(meta, "types"),
+                    metadata.default_status(meta),
+                    "",
                     store.now(),
                 ),
             )

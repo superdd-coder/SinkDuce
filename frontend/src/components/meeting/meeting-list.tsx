@@ -61,6 +61,8 @@ interface DragInfo {
   fromGroupId: string | null
 }
 
+const tsOf = (iso?: string) => new Date(iso || 0).getTime()
+
 export function MeetingList({
   meetings,
   activeMeeting,
@@ -142,20 +144,29 @@ export function MeetingList({
     return m
   }, [meetings])
 
-  /** meeting_id -> group ids containing it (data model allows multi-group). */
-  const groupIdsByMeeting = useMemo(() => {
-    const map = new Map<string, string[]>()
-    for (const g of groups) {
-      for (const mem of g.members) {
-        const ids = map.get(mem.meeting_id) ?? []
-        ids.push(g.id)
-        map.set(mem.meeting_id, ids)
+  // A meeting is shown under a group when both are in the same section.
+  const { membersByGroup, visibleGroupIdsByMeeting, groupedMeetingIds } = useMemo(() => {
+    const membersByGroup = new Map<string, Meeting[]>()
+    const visibleGroupIdsByMeeting = new Map<string, string[]>()
+    const groupedMeetingIds = new Set<string>()
+    for (const group of groups) {
+      const members: Meeting[] = []
+      for (const { meeting_id } of group.members) {
+        groupedMeetingIds.add(meeting_id)
+        const meeting = meetingById.get(meeting_id)
+        if (!meeting || Boolean(meeting.archived) !== Boolean(group.archived)) continue
+        members.push(meeting)
+        const groupIds = visibleGroupIdsByMeeting.get(meeting_id) ?? []
+        groupIds.push(group.id)
+        visibleGroupIdsByMeeting.set(meeting_id, groupIds)
       }
+      members.sort((a, b) => tsOf(b.created_at || b.updated_at) - tsOf(a.created_at || a.updated_at))
+      membersByGroup.set(group.id, members)
     }
-    return map
-  }, [groups])
+    return { membersByGroup, visibleGroupIdsByMeeting, groupedMeetingIds }
+  }, [groups, meetingById])
 
-  const groupOfActive = activeMeeting ? groupIdsByMeeting.get(activeMeeting) : undefined
+  const groupOfActive = activeMeeting ? visibleGroupIdsByMeeting.get(activeMeeting) : undefined
 
   /** Opening a member meeting expands its group so the indented row exists. */
   useEffect(() => {
@@ -169,43 +180,22 @@ export function MeetingList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeMeeting, groupOfActive?.join(",")])
 
-  const tsOf = (iso?: string) => new Date(iso || 0).getTime()
-
-  /**
-   * A group's time = the newest member meeting's creation time (falls back to
-   * the group's own updated_at when it has no timed members). Drives both the
-   * rail position and the displayed time.
-   */
-  const groupLatestCreatedAt = (g: MeetingGroup): string | undefined => {
-    let best: string | undefined
-    let bestTs = 0
-    for (const mem of g.members) {
-      const m = meetingById.get(mem.meeting_id)
-      const iso = m?.created_at || m?.updated_at
-      const ts = tsOf(iso)
-      if (ts > bestTs) {
-        bestTs = ts
-        best = iso
-      }
-    }
-    return best ?? g.updated_at
-  }
+  const groupLatestCreatedAt = useCallback((group: MeetingGroup) => {
+    const newest = membersByGroup.get(group.id)?.[0]
+    const createdAt = newest?.created_at || newest?.updated_at
+    return tsOf(createdAt) > 0 ? createdAt : group.updated_at
+  }, [membersByGroup])
 
   type Row =
     | { kind: "meeting"; key: string; ts: number; meeting: Meeting }
     | { kind: "group"; key: string; ts: number; group: MeetingGroup }
 
-  /**
-   * Merged top-level rows, newest first. Archived ungrouped meetings and
-   * archived groups fold into a collapsed section at the bottom; archived
-   * meetings *inside* a group stay in their group's branch.
-   */
+  // Meetings without a group in their section get their own row.
   const { activeRows, archivedRows } = useMemo(() => {
-    const grouped = new Set(groupIdsByMeeting.keys())
     const active: Row[] = []
     const archived: Row[] = []
     for (const m of meetings) {
-      if (grouped.has(m.id)) continue
+      if (visibleGroupIdsByMeeting.has(m.id)) continue
       const row: Row = { kind: "meeting", key: m.id, ts: tsOf(m.created_at || m.updated_at), meeting: m }
       ;(m.archived ? archived : active).push(row)
     }
@@ -216,25 +206,25 @@ export function MeetingList({
     active.sort((a, b) => b.ts - a.ts)
     archived.sort((a, b) => b.ts - a.ts)
     return { activeRows: active, archivedRows: archived }
-  }, [meetings, groups, groupIdsByMeeting])
+  }, [meetings, groups, visibleGroupIdsByMeeting, groupLatestCreatedAt])
 
   /** Groups that can still receive drag-drops (archived ones are folded). */
   const droppableGroups = useMemo(() => groups.filter((g) => !g.archived), [groups])
 
+  const expandedGroupId = groupOfActive?.find((id) => expandedIds.has(id))
   const activeRowKey = activeMeeting
-    ? groupOfActive && groupOfActive.length > 0 && expandedIds.has(groupOfActive[0])
-      ? `${groupOfActive[0]}:${activeMeeting}`
+    ? expandedGroupId
+      ? `${expandedGroupId}:${activeMeeting}`
       : activeMeeting
     : activeGroup
 
   useEffect(() => {
-    if (!activeRowKey) {
+    const activeEl = activeRowKey ? itemRefs.current.get(activeRowKey) : undefined
+    const listEl = listRef.current
+    if (!activeEl || !listEl) {
       setIndicatorReady(false)
       return
     }
-    const activeEl = itemRefs.current.get(activeRowKey)
-    const listEl = listRef.current
-    if (!activeEl || !listEl) return
     // Rect math (not offsetTop): member rows sit inside the positioned
     // branch container, so offsetParent is the branch — the pill must be
     // measured against the list's content box instead. Horizontal geometry
@@ -294,7 +284,7 @@ export function MeetingList({
     return t("meeting.draft")
   }
 
-  const edgeFade = useScrollEdgeFade(listRef, activeRows.length + archivedRows.length)
+  const edgeFade = useScrollEdgeFade(listRef, `${activeRows.length}:${archivedRows.length}:${archiveOpen}`)
 
   const toggleExpanded = (groupId: string) => {
     setExpandedIds((prev) => {
@@ -377,7 +367,7 @@ export function MeetingList({
     // ——那种恰恰需要允许删除来清理（后端 409 闸门与此同口径）。
     const isLiveRecording =
       recordingMeetingId === m.id || !!m.recording_live
-    const inAnyGroup = (groupIdsByMeeting.get(m.id)?.length ?? 0) > 0
+    const inAnyGroup = groupedMeetingIds.has(m.id)
     return (
       <div
         key={opts.key}
@@ -393,6 +383,7 @@ export function MeetingList({
           onSelect(m.id)
         }}
         onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault()
             if (lockedByPeerRecording) return
@@ -507,10 +498,7 @@ export function MeetingList({
   const renderGroupRow = (g: MeetingGroup) => {
     const isActive = activeGroup === g.id && !activeMeeting
     const isExpanded = expandedIds.has(g.id)
-    const members = g.members
-      .map((mem) => meetingById.get(mem.meeting_id))
-      .filter((m): m is Meeting => !!m)
-      .sort((a, b) => tsOf(b.created_at || b.updated_at) - tsOf(a.created_at || a.updated_at))
+    const members = membersByGroup.get(g.id) ?? []
     return (
       <div key={g.id} className="pm-rail-group-block">
         <div
@@ -634,6 +622,7 @@ export function MeetingList({
                   transform: `translate(${indicator.x}px, ${indicator.top}px)`,
                   width: indicator.width,
                   height: indicator.height,
+                  visibility: indicatorReady ? undefined : "hidden",
                 }}
                 aria-hidden
               />

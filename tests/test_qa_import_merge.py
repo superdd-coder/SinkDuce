@@ -341,13 +341,13 @@ def test_pending_identities_skip_content_merging_and_bad_override_keys_are_rejec
         evaluate(data, plan)
 
 
-def test_status_type_and_typed_extra_values_preserve_local_changes(qa):
+def test_status_and_typed_extra_values_preserve_local_changes(qa):
     from src.qa import metadata
 
     data, qid, cid = question(qa)
 
     def extra(plan, row, conn):
-        plan["mapping"].update(status=2, type=3, extras=[4])
+        plan["mapping"].update(status=2, extras=[3, 4])
         plan["headers"] += ["Status", "Type", "Drawer"]
         row["values"] += ["Waiting for reply", "Other", "Drawer A"]
         row["typed"] += [{"value": value, "kind": "s"} for value in row["values"][2:]]
@@ -358,16 +358,16 @@ def test_status_type_and_typed_extra_values_preserve_local_changes(qa):
         metadata.save(conn, data["version"]["id"], meta)
 
     record(data, qid, cid, extra=extra)
-    data = mutate(qa, data, f"/questions/{qid}", {"status": "closed", "type": "Provide"}, "patch")
+    data = mutate(qa, data, f"/questions/{qid}", {"status": "closed"}, "patch")
     plan = incoming(data, qid, cid)
     plan["headers"] += ["Status", "Type", "Drawer"]
-    plan["mapping"].update(status=2, type=3, extras=[4])
+    plan["mapping"].update(status=2, extras=[3, 4])
     plan["rows"][0]["values"] += ["Waiting for reply", "Other", "Drawer A"]
     plan["rows"][0]["typed"] += [
         {"value": value, "kind": "s"} for value in plan["rows"][0]["values"][2:]
     ]
     merged = evaluate(data, plan)["rows"]["2"]
-    assert merged["effective_values"][2:] == ["Closed", "Provide", "Drawer B"]
+    assert merged["effective_values"][2:] == ["Closed", "Other", "Drawer B"]
     assert merged["effective_typed"][4] == {"value": "Drawer B", "kind": "s"}
 
 

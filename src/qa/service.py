@@ -8,7 +8,7 @@ from . import metadata, outline, store
 from .numbering import display_numbers
 
 
-def detail(collection_id, list_id, version_id=None):
+def detail(collection_id, list_id, version_id=None, *, include_legacy_types=False):
     with store.connection(collection_id) as conn:
         conn.execute("BEGIN")
         listing = dict(store.get_list(conn, list_id))
@@ -40,6 +40,9 @@ def detail(collection_id, list_id, version_id=None):
             (version_id,),
         ):
             q = dict(row)
+            if not include_legacy_types:
+                q.pop("type")
+                q.pop("type_origin")
             q["id"] = q.pop("question_id")
             q["included"] = bool(q["included"])
             q["fields"] = metadata.public(meta, q["id"])
@@ -111,7 +114,9 @@ def detail(collection_id, list_id, version_id=None):
             q["display_number"] = numbers.get(q["id"], "")
         listing.update(
             version=dict(version),
-            options=meta["options"],
+            options=meta["options"]
+            if include_legacy_types
+            else {"statuses": meta["options"]["statuses"]},
             outline=[
                 {
                     **{
@@ -131,9 +136,7 @@ def detail(collection_id, list_id, version_id=None):
             and not listing["archived"]
             and can(get_actor(), "qa.update", {"collection_id": collection_id}),
         )
-        pending = sum(
-            q["included"] and (not q["summary"] or q["type_origin"] == "default") for q in questions
-        )
+        pending = sum(q["included"] and not q["summary"] for q in questions)
         listing["annotation_pending"] = pending
         listing["annotation_state"] = meta.get("annotation_state", "idle") if pending else "ready"
         template = conn.execute(
@@ -148,7 +151,7 @@ def project_questions(collection_id, include_omitted=False):
         rows = [
             dict(r)
             for r in conn.execute(
-                """SELECT q.question_id AS id,q.included,q.status,q.type,q.type_origin,q.updated_at,q.external_number,
+                """SELECT q.question_id AS id,q.included,q.status,q.updated_at,q.external_number,
             t.body AS text,l.id AS list_id,l.title AS list_title,l.current_version_id AS version_id FROM qa_lists l
             JOIN qa_version_questions q ON q.version_id=l.current_version_id
             JOIN qa_text_revisions t ON t.id=q.text_revision_id
@@ -165,12 +168,10 @@ def project_questions(collection_id, include_omitted=False):
             vid = row.pop("version_id")
             options = versions[vid]["options"]
             status = next((o for o in options["statuses"] if o["id"] == row["status"]), {})
-            kind = next((o for o in options["types"] if o["id"] == row["type"]), {})
             row.update(
                 display_number=numbers[vid].get(row["id"], ""),
                 status_label=status.get("label", ""),
                 status_color=status.get("color", "#7c8580"),
-                type_label=kind.get("label", ""),
             )
         return rows
 
@@ -248,12 +249,7 @@ def add_question(collection_id, lid, data):
         store.fail("question_required", 422)
     with store.writing(collection_id, lid, data, "question.create") as (conn, _, v):
         meta = metadata.read(conn, v["id"])
-        kind = (
-            data.type if "type" in data.model_fields_set else metadata.default_value(meta, "types")
-        )
-        if not metadata.valid_option(meta, "types", kind):
-            store.fail("invalid_option", 422)
-        status = metadata.default_value(meta, "statuses")
+        status = metadata.default_status(meta)
         qid = store.new_id()
         conn.execute("INSERT INTO qa_questions VALUES(?,?,?)", (qid, lid, v["id"]))
         rid = store.text_revision(conn, qid, data.text)
@@ -263,14 +259,9 @@ def add_question(collection_id, lid, data):
         ).fetchone()[0]
         conn.execute(
             """INSERT INTO qa_version_questions(version_id,question_id,text_revision_id,included,position,external_number,status,type,updated_at)
-            VALUES(?,?,?,1,?,?,?,?,?)""",
-            (v["id"], qid, rid, pos, data.external_number, status, kind, store.now()),
+            VALUES(?,?,?,1,?,?,?,'',?)""",
+            (v["id"], qid, rid, pos, data.external_number, status, store.now()),
         )
-        if "type" in data.model_fields_set:
-            conn.execute(
-                "UPDATE qa_version_questions SET type_origin='manual' WHERE version_id=? AND question_id=?",
-                (v["id"], qid),
-            )
         for c in conn.execute(
             "SELECT column_id FROM qa_version_columns WHERE version_id=?", (v["id"],)
         ).fetchall():
@@ -308,11 +299,8 @@ def update_question(collection_id, lid, qid, data):
                 conn, qid, text, previous_id=q["text_revision_id"]
             )
         meta = metadata.read(conn, v["id"])
-        for key, field in [("status", "statuses"), ("type", "types")]:
-            if key in changes and not metadata.valid_option(meta, field, changes[key]):
-                store.fail("invalid_option", 422)
-        if "type" in changes:
-            changes["type_origin"] = "manual"
+        if "status" in changes and not metadata.valid_status(meta, changes["status"]):
+            store.fail("invalid_option", 422)
         changes["updated_at"] = store.now()
         conn.execute(
             f"UPDATE qa_version_questions SET {','.join(k + '=?' for k in changes)} WHERE version_id=? AND question_id=?",
@@ -510,27 +498,17 @@ def annotation_key(conn, vid, qid):
 
 
 def save_annotation(conn, vid, qid, data):
-    options = metadata.read(conn, vid)["options"]["types"]
-    value = data["type"]
-    if not any(o["id"] == value for o in options):
-        matches = [o["id"] for o in options if o["label"].casefold() == value.casefold()]
-        value = matches[0] if len(matches) == 1 else None
+    # The retired type column remains in the SQLite schema for older workspaces.
     conn.execute(
-        "INSERT OR REPLACE INTO qa_annotations VALUES(?,?,?,?,?,?)",
+        "INSERT OR REPLACE INTO qa_annotations VALUES(?,?,?,?,?,'')",
         (
             vid,
             qid,
             annotation_key(conn, vid, qid),
             data["summary"][:240],
             data["reply_summary"][:400],
-            value or "",
         ),
     )
-    if value is not None:
-        conn.execute(
-            "UPDATE qa_version_questions SET type=?,type_origin='ai' WHERE version_id=? AND question_id=? AND type_origin!='manual'",
-            (value, vid, qid),
-        )
 
 
 def versions(collection_id, lid):

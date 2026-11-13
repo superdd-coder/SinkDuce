@@ -28,6 +28,7 @@ class TurnRelation(BaseModel):
 class ReplyIntent(BaseModel):
     kind: Literal["guidance", "message", "answer", "mixed", "unclear"]
     needs_retrieval: bool | None = None
+    skip_retrieval: bool = False
     speech_act: Literal["question", "answer", "mixed", "unknown"] = "unknown"
     question_author_relation: AuthorRelation = "unknown"
     turn_relations: list[TurnRelation] = Field(default_factory=list, max_length=100)
@@ -49,6 +50,19 @@ def _column_contribution(label):
     if re.search(r"repl(?:y|ies)|response|answer|答复|回复|回答", label, re.IGNORECASE):
         return "answer"
     return "neutral"
+
+
+# Match standalone directives. A reference to search inside correspondence or a
+# restriction on a specific source is interpreted by the intent model instead.
+_NO_SEARCH = re.compile(
+    r"(?:^|[.!?;。！？；\n])\s*(?:"
+    r"(?:请\s*)?(?:不需要|无需|不用|不要|不必|别|跳过)\s*(?:再\s*|去\s*)?(?:搜索|检索|查资料)"
+    r"(?=\s*(?:$|[,.!?;，。！？；\n]|直接|什么的))"
+    r"|(?:please\s+)?(?:(?:do not|don['’]t|no need to)\s+(?:search|retrieve|look up)"
+    r"|(?:skip|no|without)\s+(?:the\s+)?(?:search(?:ing)?|retrieval))"
+    r"(?=\s*(?:$|[,.!?;:\n]|(?:just\s+)?(?:draft|write|reply|answer)\b)))",
+    re.IGNORECASE,
+)
 
 
 def reply_operation(
@@ -196,6 +210,8 @@ def generate(collection, lid, qid, cid, data, *, on_progress=None, check_cancel=
                 conn, data.previous_proposal_id, vid, qid, cid, base, context
             )
     working_draft = prior["body"] if prior else data.instructions
+    if data.edited_draft is not None:
+        working_draft = data.edited_draft
     detail = service.detail(collection, lid, vid)
     question = next(q for q in detail["questions"] if q["id"] == qid)
     index = next(i for i, c in enumerate(detail["columns"]) if c["id"] == cid)
@@ -216,8 +232,18 @@ def generate(collection, lid, qid, cid, data, *, on_progress=None, check_cancel=
         previous_replies=previous,
         guidance=guidance,
     )
-    if prior:
+    if prior and working_draft.strip():
         operation = "revise"
+    request_text = guidance or ""
+    if not interactive and intent.kind in {"guidance", "mixed"}:
+        request_text = working_draft
+    skip_retrieval = bool(request_text.strip()) and (
+        intent.skip_retrieval
+        or ((interactive or intent.kind == "guidance") and bool(_NO_SEARCH.search(request_text)))
+    )
+    if skip_retrieval:
+        needs_retrieval = False
+        material_versions = []
     previous = _attribute_turns(previous, intent)
     responding_to = _responding_to(question["text"], previous)
     named_action = _column_contribution(target)
@@ -242,7 +268,11 @@ def generate(collection, lid, qid, cid, data, *, on_progress=None, check_cancel=
     chunks, retrieval_gaps = [], []
     material_sources, missing_names = [], []
     material_failed = project_failed = False
-    names = _explicit_material_names(intent.material_names, guidance) if interactive else []
+    names = (
+        _explicit_material_names(intent.material_names, guidance)
+        if interactive and not skip_retrieval
+        else []
+    )
     new_selection = bool(material_versions) and set(material_versions) != set(
         prior.get("material_version_ids", []) if prior else []
     )
@@ -414,6 +444,11 @@ def generate(collection, lid, qid, cid, data, *, on_progress=None, check_cancel=
         verified_names.update(matched)
         add_evidence(source, sheet_name)
     missing_names = [name for name in missing_names if _filename_key(name) not in verified_names]
+    content_scope = "project_context"
+    if not search_requested:
+        content_scope = (
+            "conversation_only" if skip_retrieval or operation == "draft" else "input_only"
+        )
     packet = {
         "question": question["text"],
         "question_author_relation": intent.question_author_relation,
@@ -425,9 +460,7 @@ def generate(collection, lid, qid, cid, data, *, on_progress=None, check_cancel=
         "reply_position": index + 1,
         "operation": operation,
         "speech_act": intent.speech_act,
-        "content_scope": "input_only"
-        if operation in {"polish", "revise"} and not search_requested
-        else "project_context",
+        "content_scope": content_scope,
         "retrieval_status": "skipped"
         if not search_requested
         else "ok"
@@ -472,11 +505,13 @@ def generate(collection, lid, qid, cid, data, *, on_progress=None, check_cancel=
         store.fail("ai_repeated_reply", 503)
     selected = [sources[i - 1] for i in dict.fromkeys(result.sources) if 1 <= i <= len(sources)]
     current_reply = next(reply for reply in question["replies"] if reply["column_id"] == cid)
-    if prior and not search_requested:
-        selected = prior.get("sources", [])
-        missing_names = prior.get("unverified_sources", [])
+    prior_evidence = prior if working_draft.strip() and not search_requested else None
+    if prior_evidence:
+        selected = prior_evidence.get("sources", [])
+        missing_names = prior_evidence.get("unverified_sources", [])
     elif (
-        not search_requested
+        not prior
+        and not search_requested
         and (operation == "polish" or interactive)
         and working_draft == current_reply["body"]
     ):
@@ -488,7 +523,7 @@ def generate(collection, lid, qid, cid, data, *, on_progress=None, check_cancel=
         "sources": selected,
         "base_cell_revision_id": base,
         "insufficient_evidence": bool(missing_names)
-        or bool(prior and not search_requested and prior.get("insufficient_evidence"))
+        or bool(prior_evidence and prior_evidence.get("insufficient_evidence"))
         or search_requested
         and (
             result.insufficient_evidence

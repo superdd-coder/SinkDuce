@@ -4,18 +4,17 @@ import { readQaDraftStream, type QaDraftProgress } from "../lib/qa-draft-progres
 export type { QaDraftProgress } from "../lib/qa-draft-progress"
 
 export type QaStatus = string
-export type QaType = string
 export interface QaOption { id: string; label: string; color: string }
-export interface QaOptions { statuses: QaOption[]; types: QaOption[] }
+export interface QaOptions { statuses: QaOption[] }
 export interface QaExtraField { id: string; label: string; value: string | number | boolean | null; kind: string }
 export interface QaVersion { id: string; number: number; state: "working" | "frozen"; created_at: string }
 export interface QaColumn { id: string; label: string; included: boolean; position: number; absent_since: number | null; source_column?: number }
 export interface QaReply { sources: QaSource[]; column_id: string; label: string; body: string; included: boolean; modified: boolean; historical_body: string; cleared_since: number | null; absent_since: number | null; text_revision_id: string }
-export interface QaQuestion { display_number?: string; type_origin?: "default" | "ai" | "manual"; fields?: QaExtraField[]; group?: string; group_id?: string; parent_id?: string; summary: string; reply_summary: string; id: string; text: string; included: boolean; position: number; status: QaStatus; type: QaType; external_number: string; updated_at: string; absent_since: number | null; replies: QaReply[]; latest_reply: string }
+export interface QaQuestion { display_number?: string; fields?: QaExtraField[]; group?: string; group_id?: string; parent_id?: string; summary: string; reply_summary: string; id: string; text: string; included: boolean; position: number; status: QaStatus; external_number: string; updated_at: string; absent_since: number | null; replies: QaReply[]; latest_reply: string }
 export interface QaListSummary { id: string; title: string; revision: number; archived: boolean; question_count: number; version_number: number; updated_at: string }
 export interface QaOutlineItem { display_number?: string; id: string; kind: "group" | "question" | "note"; text?: string; group_id?: string; parent_id?: string }
 export interface QaListDetail { annotation_pending?: number; annotation_state?: "idle" | "running" | "partial" | "ready"; outline?: QaOutlineItem[]; options?: QaOptions; original_layout?: boolean; template_id: string | null; id: string; title: string; revision: number; archived: boolean; current_version_id: string; version: QaVersion; columns: QaColumn[]; questions: QaQuestion[]; can_edit: boolean }
-export interface QaProjectQuestion { display_number?: string; type_origin?: "default" | "ai" | "manual"; status_label: string; status_color: string; type_label: string; id: string; text: string; included: boolean; status: QaStatus; type: QaType; updated_at: string; list_id: string; list_title: string }
+export interface QaProjectQuestion { display_number?: string; status_label: string; status_color: string; id: string; text: string; included: boolean; status: QaStatus; updated_at: string; list_id: string; list_title: string }
 export interface QaReplyRevision { id: string; body: string; created_at: string; created_by: string }
 
 export const qaBase = (collection: string) => `/collections/${encodeURIComponent(collection)}/qa`
@@ -29,12 +28,12 @@ export const deleteQaList = (collection: string, list: QaListDetail, confirm_tit
 export const getQaProjectQuestions = (collection: string, includeOmitted: boolean, signal?: AbortSignal) => request<QaProjectQuestion[]>(`${qaBase(collection)}/questions?include_omitted=${includeOmitted}`, { signal })
 export const getQaReplyHistory = (collection: string, list: QaListDetail, question: string, column: string) => request<QaReplyRevision[]>(`${qaBase(collection)}/lists/${list.id}/questions/${question}/replies/${column}/history?version_id=${list.version.id}`)
 
-export interface QaMapping { question: number; number?: number | null; status?: number | null; type?: number | null; group?: number | null; replies: number[]; extras?: number[]; ignored?: number[] }
+export interface QaMapping { question: number; number?: number | null; status?: number | null; group?: number | null; replies: number[]; extras?: number[]; ignored?: number[] }
 export interface QaRegion { start_column: number; end_column: number; header_end_row: number; end_row: number }
 export type QaImportContentChoice = "keep" | "incoming"
 export interface QaImportConflict {
   id: string; row_key: string; question_id: string; column_key: string | null;
-  kind: "question" | "reply" | "status" | "type" | "extra" | "structure" | "membership";
+  kind: "question" | "reply" | "status" | "extra" | "structure" | "membership";
   label: string; current: string; incoming: string; baseline: string | null; choice: QaImportContentChoice | null;
 }
 export interface QaImportContentReview {
@@ -92,7 +91,12 @@ export const analyzeQaImport = (collection: string, id: string, plan: QaImportPl
 export interface QaSource { kind: "material" | "project"; file_id: string; version_id: string; filename: string; page_number?: number; excerpt: string; chunk_id: string }
 export interface QaDraft { body: string; draft_revision: number; base_cell_revision_id: string; sources: QaSource[] }
 export interface QaProposal { operation?: "draft" | "polish" | "revise"; id: string; body: string; sources: QaSource[]; base_cell_revision_id: string; insufficient_evidence: boolean; unverified_sources?: string[] }
-export interface QaDraftOptions { guidance: string; previous_proposal_id?: string; material_version_ids?: string[] }
+export interface QaDraftOptions {
+  guidance: string
+  previous_proposal_id?: string
+  edited_draft?: string
+  material_version_ids?: string[]
+}
 const draftBase = (collection: string, list: QaListDetail, question: string, column: string) => `${qaBase(collection)}/lists/${list.id}/questions/${question}/drafts/${column}`
 export const getQaDraft = (collection: string, list: QaListDetail, question: string, column: string) => request<QaDraft | null>(`${draftBase(collection, list, question, column)}?version_id=${list.version.id}`)
 export const putQaDraft = (collection: string, list: QaListDetail, question: string, column: string, draft: { body: string; draft_revision: number; base_cell_revision_id: string; proposal_id?: string }) => request<QaDraft>(draftBase(collection, list, question, column), { method: "PUT", body: JSON.stringify({ ...draft, version_id: list.version.id }) })
@@ -128,7 +132,7 @@ export const getQaSourceFile = async (collection: string, id: string, source: Qa
   const res = await apiFetch(path, { signal }); if (!res.ok) throw new Error(await res.text()); return res.blob()
 }
 
-export interface QaTemplate { id: string; revision: number; name: string; title?: string; metadata_position?: "left" | "right"; logo_position?: "left" | "right"; logo_id?: string; include_number?: boolean; include_status?: boolean; include_type?: boolean; resequence?: boolean }
+export interface QaTemplate { id: string; revision: number; name: string; title?: string; metadata_position?: "left" | "right"; logo_position?: "left" | "right"; logo_id?: string; include_number?: boolean; include_status?: boolean; resequence?: boolean }
 export const getQaTemplates = (collection: string) => request<QaTemplate[]>(`${qaBase(collection)}/templates`)
 export const saveQaTemplate = (collection: string, template: Partial<QaTemplate> & { name: string }) => {
   const { id, revision, ...values } = template

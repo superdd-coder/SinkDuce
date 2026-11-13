@@ -8,7 +8,7 @@ from .workbook_layout import write_original
 
 
 def create(collection, lid, options):
-    snapshot = service.detail(collection, lid)
+    snapshot = service.detail(collection, lid, include_legacy_types=True)
     if not snapshot["can_edit"]:
         store.fail("read_only", 403)
     if snapshot["revision"] != options["expected_revision"]:
@@ -21,6 +21,7 @@ def create(collection, lid, options):
             (lid,),
         ).fetchone()
         options = {**(json.loads(template[0]) if template else {}), **options}
+    options.pop("include_type", None)
     options = {**options, "date": store.now()[:10]}
     logo = (
         asset_path(collection, "templates", "logos", options["logo_id"])

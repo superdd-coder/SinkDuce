@@ -463,7 +463,8 @@ def resolve_group_mapping(parsed, mapping):
             None,
         )
     result = {**mapping, "group": group}
-    for role in ("number", "status", "type"):
+    result.pop("type", None)
+    for role in ("number", "status"):
         if group is not None and result.get(role) == group:
             result[role] = None
     for role in ("replies", "ignored"):
@@ -473,28 +474,9 @@ def resolve_group_mapping(parsed, mapping):
         group,
         result.get("number"),
         result.get("status"),
-        result.get("type"),
         *result["replies"],
         *result["ignored"],
     }
-    displaced_type = (group is not None and group == mapping.get("type")) or (
-        suggested in candidates and suggested != group and header_role(headers[suggested]) == "type"
-    )
-    if result.get("type") is None and (group is not None or displaced_type):
-        types = [
-            index
-            for index in candidates
-            if index not in used and header_role(headers[index]) == "type"
-        ]
-        result["type"] = next(
-            (
-                index
-                for index in types
-                if _header_name(headers[index]) not in _AMBIGUOUS_TYPE_HEADERS
-            ),
-            types[0] if displaced_type and types else None,
-        )
-        used.add(result["type"])
     result["extras"] = [index for index in active if index not in used]
     return result
 
@@ -508,7 +490,6 @@ def default_mapping(parsed):
         "question": question,
         "number": None,
         "status": None,
-        "type": None,
         "group": None,
         "replies": [],
         "extras": [],
@@ -517,7 +498,7 @@ def default_mapping(parsed):
     for i, role in classified.items():
         if i == question:
             continue
-        if role in ("number", "status", "type", "group") and result[role] is None:
+        if role in ("number", "status", "group") and result[role] is None:
             result[role] = i
         elif role == "reply":
             result["replies"].append(i)
@@ -584,7 +565,6 @@ def classify_rows(parsed, mapping, actions=None, parents=None):
             column_label = column_key = bold_group = ""
         row_group, row_group_key = current_group, group_key
         group_inherited = ""
-        group_value = ""
         if group_col is not None and kind in ("question", "child"):
             label = group_values[r]
             if label:
@@ -600,7 +580,6 @@ def classify_rows(parsed, mapping, actions=None, parents=None):
                         break
                 if not label and bold_group:
                     label, group_inherited = bold_group, "bold"
-            group_value = label
             if label and label != current_group:
                 if label != column_label:
                     column_label, column_key = label, f"column:{row['key']}"
@@ -626,16 +605,10 @@ def classify_rows(parsed, mapping, actions=None, parents=None):
         )
         if group_inherited:
             row["group_inherited"] = group_inherited
-        if group_value:
-            row["group_value"] = group_value
         if kind == "section":
             group_key = row["key"]
             current_group = " · ".join(vals[i] for i in (semantic or nonempty))
-            group_fields = {
-                i: row["typed"][i]
-                for i in semantic
-                if i == mapping.get("type") or i in mapping.get("extras", [])
-            }
+            group_fields = {i: row["typed"][i] for i in semantic if i in mapping.get("extras", [])}
         elif kind in ("question", "child"):
             effective = list(row.get("typed", [{"value": value, "kind": "s"} for value in vals]))
             for i, value in group_fields.items():
@@ -643,9 +616,6 @@ def classify_rows(parsed, mapping, actions=None, parents=None):
                     effective[i] = value
             row["effective_typed"] = effective
             row["effective_values"] = [text(c["value"]) for c in effective]
-            type_col = mapping.get("type")
-            if type_col is not None and vals[type_col] and type_col + 1 in row.get("bold", []):
-                group_fields[type_col] = row["typed"][type_col]
             row["source_rows"] = [r]
             questions.append(row)
         elif kind == "continuation":

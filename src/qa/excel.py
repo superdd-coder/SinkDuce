@@ -21,8 +21,6 @@ def write_workbook(snapshot, options, logo_path=None):
     headers = (["No"] if options.get("include_number", True) else []) + ["Question"]
     if options.get("include_status"):
         headers.append("Status")
-    if options.get("include_type"):
-        headers.append("Type")
     headers += [c["label"] for c in columns]
     ws.append([options.get("title") or snapshot["title"]])
     position = max(1, len(headers) - 1) if options.get("metadata_position") == "right" else 1
@@ -76,17 +74,6 @@ def write_workbook(snapshot, options, logo_path=None):
                         if o["id"] == q["status"]
                     ),
                     q["status"],
-                )
-            )
-        if options.get("include_type"):
-            row.append(
-                next(
-                    (
-                        o["label"]
-                        for o in snapshot.get("options", {}).get("types", [])
-                        if o["id"] == q["type"]
-                    ),
-                    q["type"],
                 )
             )
         replies = {r["column_id"]: r["body"] for r in q["replies"]}

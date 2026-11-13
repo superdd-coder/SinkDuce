@@ -17,10 +17,6 @@ def defaults():
                     ("closed", "Closed", "#397b60"),
                 ]
             ],
-            "types": [
-                {"id": key, "label": key, "color": "#397b60"}
-                for key in ["Clarify", "Provide", "Confirm", "Revise", "Other"]
-            ],
         },
         "fields": [],
         "values": {},
@@ -59,33 +55,31 @@ def public(data, qid):
     ]
 
 
-def valid_option(data, field, value):
-    return value == "" or any(o["id"] == value for o in data["options"][field])
+def valid_status(data, value):
+    return value == "" or any(o["id"] == value for o in data["options"]["statuses"])
 
 
-def default_value(data, field):
-    preferred = "waiting" if field == "statuses" else "Other"
-    options = data["options"][field]
+def default_status(data):
+    options = data["options"]["statuses"]
     return (
-        preferred
-        if any(o["id"] == preferred for o in options)
+        "waiting"
+        if any(o["id"] == "waiting" for o in options)
         else options[0]["id"]
         if options
         else ""
     )
 
 
-def merge_option(data, field, label):
+def _merge_status(data, label):
     label = label.strip()
     if not label:
         return ""
-    existing = next((o for o in data["options"][field] if o["label"].strip() == label), None)
+    statuses = data["options"]["statuses"]
+    existing = next((o for o in statuses if o["label"].strip() == label), None)
     if existing:
         return existing["id"]
     oid = store.new_id()
-    data["options"][field].append(
-        {"id": oid, "label": label, "color": "#6486ad" if field == "statuses" else "#397b60"}
-    )
+    statuses.append({"id": oid, "label": label, "color": "#6486ad"})
     return oid
 
 
@@ -127,13 +121,12 @@ def field_bindings(data, plan):
 def import_setup(conn, vid, plan):
     data = read(conn, vid)
     mapping = plan["mapping"]
-    for key, field in [("status", "statuses"), ("type", "types")]:
-        index = mapping.get(key)
-        if index is not None:
-            for label in plan.get("validations", {}).get(str(index), []):
-                merge_option(data, field, label)
-            for row in plan["rows"]:
-                merge_option(data, field, row.get("effective_values", row["values"])[index])
+    status_col = mapping.get("status")
+    if status_col is not None:
+        for label in plan.get("validations", {}).get(str(status_col), []):
+            _merge_status(data, label)
+        for row in plan["rows"]:
+            _merge_status(data, row.get("effective_values", row["values"])[status_col])
     fields = field_bindings(data, plan)
     for field in data["fields"]:
         field["included"] = False
@@ -182,24 +175,16 @@ def import_row(conn, vid, data, row, qid, fields, mapping):
     )
     data["layout"].setdefault("reply_baseline", {})[qid] = row.get("formatted_values", {})
     data["layout"].setdefault("option_baseline", {})[qid] = {}
-    for key, field in [("status", "statuses"), ("type", "types")]:
-        index = mapping.get(key)
-        if index is not None:
-            data["layout"]["option_baseline"][qid][str(index)] = row.get(
-                "source_effective_values", row["values"]
-            )[index]
-            value = merge_option(data, field, row.get("effective_values", row["values"])[index])
-            if key == "type" and not value and row.get("reset_imported_type"):
-                continue
-            conn.execute(
-                f"UPDATE qa_version_questions SET {key}=? WHERE version_id=? AND question_id=?",
-                (value, vid, qid),
-            )
-            if key == "type":
-                conn.execute(
-                    "UPDATE qa_version_questions SET type_origin='manual' WHERE version_id=? AND question_id=?",
-                    (vid, qid),
-                )
+    status_col = mapping.get("status")
+    if status_col is not None:
+        data["layout"]["option_baseline"][qid][str(status_col)] = row.get(
+            "source_effective_values", row["values"]
+        )[status_col]
+        value = _merge_status(data, row.get("effective_values", row["values"])[status_col])
+        conn.execute(
+            "UPDATE qa_version_questions SET status=? WHERE version_id=? AND question_id=?",
+            (value, vid, qid),
+        )
 
 
 def update_options(collection, lid, request):
@@ -207,30 +192,25 @@ def update_options(collection, lid, request):
 
     with store.writing(collection, lid, request, "options.update") as (conn, _, v):
         data = read(conn, v["id"])
-        new = request.options.model_dump()
-        for field, column in [("statuses", "status"), ("types", "type")]:
-            ids = [o["id"] for o in new[field]]
-            labels = [o["label"].strip() for o in new[field]]
-            if (
-                len(ids) != len(set(ids))
-                or len(labels) != len(set(labels))
-                or any(not label for label in labels)
-            ):
-                store.fail("invalid_options", 422)
-            removed = {o["id"] for o in data["options"][field]} - set(ids)
-            for oid in removed:
-                used = conn.execute(
-                    f"SELECT 1 FROM qa_version_questions WHERE version_id=? AND {column}=?",
-                    (v["id"], oid),
-                ).fetchone()
-                if used:
-                    target = request.replacements.get(field, {}).get(oid)
-                    if target not in ids and target != "":
-                        store.fail("option_in_use")
-                    conn.execute(
-                        f"UPDATE qa_version_questions SET {column}=? WHERE version_id=? AND {column}=?",
-                        (target, v["id"], oid),
-                    )
-        data["options"] = new
+        statuses = request.options.model_dump()["statuses"]
+        ids = {o["id"] for o in statuses}
+        labels = {o["label"].strip() for o in statuses}
+        if len(ids) != len(statuses) or len(labels) != len(statuses) or "" in labels:
+            store.fail("invalid_options", 422)
+        removed = {o["id"] for o in data["options"]["statuses"]} - ids
+        for oid in removed:
+            used = conn.execute(
+                "SELECT 1 FROM qa_version_questions WHERE version_id=? AND status=?",
+                (v["id"], oid),
+            ).fetchone()
+            if used:
+                target = request.replacements.get("statuses", {}).get(oid)
+                if target not in ids and target != "":
+                    store.fail("option_in_use")
+                conn.execute(
+                    "UPDATE qa_version_questions SET status=? WHERE version_id=? AND status=?",
+                    (target, v["id"], oid),
+                )
+        data["options"]["statuses"] = statuses
         save(conn, v["id"], data)
     return service.detail(collection, lid)

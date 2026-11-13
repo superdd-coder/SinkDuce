@@ -1,4 +1,4 @@
-"""Retryable derived summaries and types, independent of workbook matching."""
+"""Retryable summaries independent of workbook matching."""
 
 import threading
 from weakref import WeakValueDictionary
@@ -26,7 +26,7 @@ def summarize(collection, lid, revision):
         rows = [
             {"key": q["id"], "text": q["text"], "latest_reply": q["latest_reply"]}
             for q in snapshot["questions"]
-            if q["included"] and (not q["summary"] or q["type_origin"] == "default")
+            if q["included"] and not q["summary"]
         ]
         if not rows:
             return
@@ -42,11 +42,7 @@ def summarize(collection, lid, revision):
         jobs = [
             (
                 QA_SUMMARY_SYSTEM,
-                {
-                    "stage": "summaries",
-                    "rows": batch,
-                    "question_types": snapshot["options"]["types"],
-                },
+                {"stage": "summaries", "rows": batch},
                 intelligence.Annotations,
             )
             for batch in batches(rows, limit=8)
@@ -66,7 +62,7 @@ def summarize(collection, lid, revision):
             conn.execute("BEGIN IMMEDIATE")
             if store.get_list(conn, lid)["current_version_id"] == vid:
                 meta = metadata.read(conn, vid)
-                # Detail derives readiness from valid summaries and explicit type origins.
+                # Detail derives readiness from valid summaries.
                 meta["annotation_state"] = "partial"
                 metadata.save(conn, vid, meta)
     finally:

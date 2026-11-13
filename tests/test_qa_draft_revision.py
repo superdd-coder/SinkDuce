@@ -145,6 +145,48 @@ def test_continue_uses_private_previous_proposal_and_retains_its_citations(
     assert current["questions"][0]["replies"][0]["body"] == ""
 
 
+@pytest.mark.parametrize("original", ["", "The desk has the preliminary opening schedule."])
+def test_follow_up_uses_the_edited_proposal_as_its_only_working_draft(
+    qa, exchange, monkeypatch, original
+):
+    detail, qid, first_column = exchange
+    earlier = "The reception team will confirm the hours."
+    detail = mutate(
+        qa, detail, f"/questions/{qid}/replies/{first_column}", {"body": earlier}, "put"
+    )
+    exchange = detail, qid, detail["columns"][1]["id"]
+    edited = "We expect to reopen in spring, subject to confirmation."
+    seen, searches = model(
+        monkeypatch,
+        {"kind": "guidance", "needs_retrieval": False},
+        {"body": "We will send the new opening schedule."},
+        {"kind": "guidance", "needs_retrieval": False},
+        {"body": "We expect to reopen in spring and will confirm the timing."},
+    )
+    first = generate(qa, exchange, instructions=original, guidance="Write one sentence.")
+    assert first.status_code == 200, first.text
+    second = generate(
+        qa,
+        exchange,
+        instructions=original,
+        guidance="Make the timing more tentative.",
+        previous_proposal_id=first.json()["id"],
+        edited_draft=edited,
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["operation"] == "revise"
+    assert seen[0]["working_draft"] == seen[1]["working_draft"] == original
+    assert seen[1]["operation"] == ("revise" if original else "draft")
+    assert seen[2]["working_draft"] == seen[3]["working_draft"] == edited
+    assert seen[3]["guidance"] == "Make the timing more tentative."
+    assert seen[3]["responding_to"]["body"] == earlier
+    assert seen[3]["evidence"] == [] and searches == []
+    assert first.json()["body"] not in json.dumps(seen[2:])
+    if original:
+        assert original not in json.dumps(seen[2:])
+    assert "Write one sentence." not in json.dumps(seen[2:])
+
+
 @pytest.mark.parametrize("other", ["column", "actor", "changed_cell"])
 def test_previous_proposal_requires_current_actor_cell_and_context(
     qa, exchange, monkeypatch, other
@@ -172,10 +214,19 @@ def test_previous_proposal_requires_current_actor_cell_and_context(
             qa, detail, f"/questions/{qid}/replies/{cid}", {"body": "The archive is closed."}, "put"
         )
     rejected = generate(
-        qa, (detail, qid, cid), guidance="Shorter.", previous_proposal_id=first.json()["id"]
+        qa,
+        (detail, qid, cid),
+        guidance="Shorter.",
+        previous_proposal_id=first.json()["id"],
+        edited_draft="Will the archive open on Saturday?",
     )
     assert rejected.status_code == 409, rejected.text
     assert rejected.json()["detail"]["code"] == "stale_draft"
+
+
+def test_edited_draft_requires_a_previous_proposal(qa, exchange):
+    result = generate(qa, exchange, edited_draft="Could you confirm the opening hours?")
+    assert result.status_code == 422, result.text
 
 
 def test_missing_explicit_material_is_reported_without_substituting_other_documents(

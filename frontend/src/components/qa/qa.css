@@ -81,8 +81,6 @@
 .qa-question-summary > span:last-child { display: inline; }
 .qa-display-number { display: inline; margin-right: 8px; color: var(--pm-muted); font: var(--type-meta); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .qa-group-toggle .qa-display-number { margin-right: 0; }
-.qa-type { display: inline-block; max-width: min(12em, 55%); padding: 1px 7px; margin-right: 8px; border-radius: 6px; background: color-mix(in srgb, var(--pm-ink) 4%, transparent); color: var(--pm-muted); font: var(--type-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
-.qa-question-row[aria-current="true"] .qa-type { background: var(--sd-field); color: inherit; }
 .qa-reply-summary { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--pm-muted); font: var(--type-reading-compact); }
 .qa-row-status { display: flex; align-items: center; gap: 8px; white-space: nowrap; font: var(--type-meta); }
 .qa-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--pm-faint); }
@@ -103,8 +101,6 @@
 .qa-fields-toggle { background: transparent; margin-left: auto; align-self: center; flex-shrink: 0; color: var(--pm-muted); font: var(--type-meta); }
 .qa-fields-toggle > svg { transition: transform 180ms var(--pm-ease); }
 .qa-fields-toggle[aria-expanded="true"] > svg { transform: rotate(180deg); }
-.qa-type-select { display: inline-flex; vertical-align: baseline; margin-right: 10px; max-width: 100%; }
-.qa-type-select .pm-select-trigger--tag { padding: 2px 8px; min-height: 24px; font: var(--type-meta); }
 .qa-question-title-actions { position: absolute; top: 0; right: -2px; z-index: 1; display: flex; align-items: center; gap: 5px; padding: 0 2px 2px 20px; background: linear-gradient(to right, transparent, white 18px); opacity: 0; pointer-events: none; transition: opacity 180ms var(--pm-ease); }
 .qa-question-title-row:hover .qa-question-title-actions, .qa-question-title-row:focus-within .qa-question-title-actions { opacity: 1; pointer-events: auto; }
 @media (hover: none) {
@@ -113,7 +109,6 @@
 }
 .qa-question-controls { gap: 6px; flex-wrap: wrap; }
 .qa-question-controls .qa-filter { min-width: 90px; max-width: min(240px, 100%); }
-.qa-question-controls .qa-type-select { margin-right: 0; }
 .qa-question-controls .pm-select-trigger { min-height: 30px; padding: 4px 8px; border-color: transparent; border-radius: 999px; background: var(--sd-field); color: var(--sd-text); font: var(--type-meta); box-shadow: none; }
 .qa-question-controls .pm-select-trigger:hover:not(.is-disabled), .qa-question-controls .pm-select-trigger.is-open { background: var(--sd-hover); color: var(--sd-ink); }
 .qa-side { display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); min-width: 0; min-height: 0; position: relative; }
@@ -147,7 +142,7 @@
 .qa-replies { display: flex; flex-direction: column; gap: 20px; margin-top: 24px; }
 .qa-reply { min-width: 0; }
 .qa-replies > .qa-add-reply { align-self: flex-start; }
-.qa-replies > .qa-reply > :is(.qa-composer, .qa-reply-text, .qa-composer-preview) { margin-inline-start: 32px; }
+.qa-replies > .qa-reply > :is(.qa-composer, .qa-reply-text, .qa-composer-preview, .qa-draft-assistant) { margin-inline-start: 32px; }
 .qa-replies > .qa-reply > .qa-reply-text { padding: 6px 10px; }
 .qa-replies .qa-composer-preview { border: 0; background: transparent; min-height: 38px; padding: 8px 10px; }
 .qa-reply > header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 4px; }
@@ -569,7 +564,6 @@
 .qa-extra-fields dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 24px; }
 .qa-extra-fields dt { color: var(--pm-faint); margin-bottom: 5px; }
 .qa-extra-fields dd { font: var(--type-ui); color: var(--pm-text); white-space: pre-wrap; overflow-wrap: anywhere; }
-.qa-option-tabs { display: flex; gap: 6px; }
 .qa-options-list { max-height: 42dvh; overflow-y: auto; padding: 4px; }
 .qa-option-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; }
 .qa-option-row > input { flex: 1; min-width: 0; }

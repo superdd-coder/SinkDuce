@@ -2,10 +2,9 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Status = str
-QuestionType = str
 
 
 class Input(BaseModel):
@@ -50,7 +49,7 @@ class ListDelete(Input):
 
 class QuestionCreate(Mutation):
     text: str = Field(min_length=1, max_length=32767)
-    type: QuestionType = "Other"
+    type: str | None = Field(default=None, exclude=True)
     external_number: str = Field(default="", max_length=200)
     group_id: str | None = None
     parent_id: str | None = None
@@ -78,7 +77,7 @@ class OutlinePatch(Mutation):
 class QuestionPatch(Mutation):
     text: str | None = Field(default=None, min_length=1, max_length=32767)
     status: Status | None = None
-    type: QuestionType | None = None
+    type: str | None = Field(default=None, exclude=True)
     external_number: str | None = Field(default=None, max_length=200)
 
 
@@ -120,7 +119,14 @@ class DraftGenerate(Mutation):
     instructions: str = Field(default="", max_length=32767)
     guidance: str | None = Field(default=None, max_length=32767)
     previous_proposal_id: str | None = Field(default=None, max_length=200)
+    edited_draft: str | None = Field(default=None, max_length=32767)
     material_version_ids: list[str] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def edited_draft_requires_proposal(self):
+        if self.edited_draft is not None and not self.previous_proposal_id:
+            raise ValueError("An edited draft requires a previous proposal")
+        return self
 
 
 class ImportCommit(Input):
@@ -132,7 +138,7 @@ class FieldMapping(Input):
     number: int | None = Field(default=None, ge=0)
     replies: list[int] = Field(max_length=100)
     status: int | None = Field(default=None, ge=0)
-    type: int | None = Field(default=None, ge=0)
+    type: int | None = Field(default=None, ge=0)  # Older clients may map this as a field.
     group: int | None = Field(default=None, ge=0)
     extras: list[int] = Field(default_factory=list, max_length=100)
     ignored: list[int] = Field(default_factory=list, max_length=100)
@@ -181,7 +187,7 @@ class ExportCreate(Input):
     expected_revision: int = Field(ge=1)
     include_number: bool = True
     include_status: bool = False
-    include_type: bool = False
+    include_type: bool = Field(default=False, exclude=True)
     resequence: bool = False
 
 
@@ -209,7 +215,7 @@ class TemplateInput(Input):
     metadata_position: Literal["left", "right"] | None = None
     include_number: bool | None = None
     include_status: bool | None = None
-    include_type: bool | None = None
+    include_type: bool | None = Field(default=None, exclude=True)
     resequence: bool | None = None
 
 
@@ -221,7 +227,7 @@ class ListOption(Input):
 
 class ListOptions(Input):
     statuses: list[ListOption] = Field(max_length=200)
-    types: list[ListOption] = Field(max_length=200)
+    types: list[ListOption] | None = Field(default=None, max_length=200, exclude=True)
 
 
 class OptionsPatch(Mutation):
