@@ -29,6 +29,7 @@ class ReplyIntent(BaseModel):
     kind: Literal["guidance", "message", "answer", "mixed", "unclear"]
     needs_retrieval: bool | None = None
     skip_retrieval: bool = False
+    consult_selected_materials: bool = False
     speech_act: Literal["question", "answer", "mixed", "unknown"] = "unknown"
     question_author_relation: AuthorRelation = "unknown"
     turn_relations: list[TurnRelation] = Field(default_factory=list, max_length=100)
@@ -237,13 +238,19 @@ def generate(collection, lid, qid, cid, data, *, on_progress=None, check_cancel=
     request_text = guidance or ""
     if not interactive and intent.kind in {"guidance", "mixed"}:
         request_text = working_draft
-    skip_retrieval = bool(request_text.strip()) and (
-        intent.skip_retrieval
-        or ((interactive or intent.kind == "guidance") and bool(_NO_SEARCH.search(request_text)))
+    skip_retrieval = bool(request_text.strip()) and intent.skip_retrieval
+    skip_broader_search = (interactive or intent.kind == "guidance") and bool(
+        _NO_SEARCH.search(request_text)
     )
-    if skip_retrieval:
+    names = (
+        _explicit_material_names(intent.material_names, guidance)
+        if interactive and not skip_retrieval
+        else []
+    )
+    if skip_retrieval or skip_broader_search:
         needs_retrieval = False
-        material_versions = []
+        if skip_retrieval or not (names or intent.consult_selected_materials):
+            material_versions = []
     previous = _attribute_turns(previous, intent)
     responding_to = _responding_to(question["text"], previous)
     named_action = _column_contribution(target)
@@ -268,17 +275,17 @@ def generate(collection, lid, qid, cid, data, *, on_progress=None, check_cancel=
     chunks, retrieval_gaps = [], []
     material_sources, missing_names = [], []
     material_failed = project_failed = False
-    names = (
-        _explicit_material_names(intent.material_names, guidance)
-        if interactive and not skip_retrieval
-        else []
-    )
     new_selection = bool(material_versions) and set(material_versions) != set(
         prior.get("material_version_ids", []) if prior else []
     )
     if new_selection and working_draft.strip():
         operation = "revise"
-    search_materials = interactive and bool(names or new_selection or needs_retrieval)
+    search_materials = interactive and bool(
+        names
+        or new_selection
+        or needs_retrieval
+        or (material_versions and intent.consult_selected_materials)
+    )
     search_project = needs_retrieval and not (interactive and (names or material_versions))
     search_requested = search_materials or search_project
     project_names = set()
@@ -366,7 +373,7 @@ def generate(collection, lid, qid, cid, data, *, on_progress=None, check_cancel=
     else:
         if search_materials:
             material_sources, missing_names, material_failed = read_materials()
-            if not material_versions and not re.search(
+            if not (skip_broader_search or material_versions) and not re.search(
                 r"\battach(?:ed|ments?)\b|附件", guidance, re.IGNORECASE
             ):
                 project_names = {
@@ -447,7 +454,9 @@ def generate(collection, lid, qid, cid, data, *, on_progress=None, check_cancel=
     content_scope = "project_context"
     if not search_requested:
         content_scope = (
-            "conversation_only" if skip_retrieval or operation == "draft" else "input_only"
+            "conversation_only"
+            if skip_retrieval or skip_broader_search or operation == "draft"
+            else "input_only"
         )
     packet = {
         "question": question["text"],

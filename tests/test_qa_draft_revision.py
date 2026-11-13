@@ -257,6 +257,57 @@ def test_missing_explicit_material_is_reported_without_substituting_other_docume
     assert project == [] and len(searches) == 1
 
 
+@pytest.mark.parametrize(
+    "guidance,pinned,names,found",
+    [
+        (
+            "No search; use the attached Hours notice.pdf to confirm opening time.",
+            [],
+            ["Hours notice.pdf"],
+            True,
+        ),
+        ("不用搜索，直接根据已选附件确认开放时间。", ["archive-v1"], [], True),
+        ("No search; check Hours notice.pdf.", [], ["Hours notice.pdf"], False),
+    ],
+)
+def test_skip_broader_search_still_reads_requested_material(
+    qa, exchange, monkeypatch, guidance, pinned, names, found
+):
+    source = {
+        "kind": "material",
+        "file_id": "archive-guide",
+        "version_id": "archive-v1",
+        "filename": "Hours notice.pdf",
+        "chunk_id": "opening-hours",
+        "excerpt": "The archive opens at noon.",
+    }
+    packets, project = model(
+        monkeypatch,
+        {
+            "kind": "guidance",
+            "needs_retrieval": True,
+            "material_names": names,
+            "consult_selected_materials": bool(pinned),
+        },
+        {"body": "Please confirm the opening time.", "sources": [1]},
+    )
+    resolutions, searches = material_search(
+        monkeypatch, matches=[source] if found else [], missing=[] if found else names
+    )
+
+    result = generate(qa, exchange, guidance=guidance, material_version_ids=pinned)
+
+    assert result.status_code == 200, result.text
+    assert resolutions == ([pinned] if pinned else [])
+    assert len(searches) == 1 and searches[0][2:] == (names, False)
+    assert project == []
+    assert result.json()["sources"] == ([source] if found else [])
+    assert result.json().get("unverified_sources", []) == ([] if found else names)
+    assert [evidence["text"] for evidence in packets[-1]["evidence"]] == (
+        [source["excerpt"]] if found else []
+    )
+
+
 def test_replacing_a_pin_uses_only_the_new_version_as_evidence(qa, exchange, monkeypatch):
     from src.qa import materials
 
