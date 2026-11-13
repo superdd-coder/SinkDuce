@@ -3,12 +3,12 @@
 import json
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from src.prompts import QA_DATA_USER, QA_MAPPING_SYSTEM, QA_SUMMARY_SYSTEM
 
 from . import excel, store
-from .models import FieldMapping, QuestionType, TableRegion
+from .models import FieldMapping, TableRegion
 
 MAX_PACKET = 140_000
 
@@ -22,34 +22,10 @@ class HeaderSuggestion(FieldMapping):
     ] = Field(default_factory=dict)
 
 
-class RowSuggestion(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    key: str
-    target: str
-    certainty: Literal["high", "review"]
-    reason: str = Field(default="", max_length=1000)
-    summary: str = Field(max_length=240)
-    reply_summary: str = Field(max_length=400)
-    type: QuestionType
-
-
-class ColumnSuggestion(BaseModel):
-    key: str
-    target: str
-    certainty: Literal["high", "review"]
-    reason: str = Field(default="", max_length=1000)
-
-
-class MatchSuggestions(BaseModel):
-    rows: list[RowSuggestion]
-    columns: list[ColumnSuggestion] = Field(default_factory=list)
-
-
 class AnnotationRow(BaseModel):
     key: str
     summary: str
     reply_summary: str = ""
-    type: str
 
 
 class Annotations(BaseModel):
@@ -140,9 +116,7 @@ def map_headers(raw, parsed, fixed_region=False):
             *mapping["ignored"],
         ]
         selected += [
-            mapping[key]
-            for key in ("number", "status", "type", "group")
-            if mapping[key] is not None
+            mapping[key] for key in ("number", "status", "group") if mapping[key] is not None
         ]
         start = parsed["region"]["start_column"] - 1
         if len(selected) != len(set(selected)) or any(
@@ -210,7 +184,6 @@ def annotate(collection, lid, qid, expected_revision):
                 "history": [],
                 "existing_matches": {},
                 "historical_columns": [],
-                "question_types": snapshot["options"]["types"],
             },
             Annotations,
         )
@@ -227,11 +200,3 @@ def annotate(collection, lid, qid, expected_revision):
         ):
             service.save_annotation(conn, vid, qid, suggestion.model_dump())
     return service.detail(collection, lid)
-
-
-def _types(collection, lid):
-    from . import metadata
-
-    with store.connection(collection) as conn:
-        listing = store.get_list(conn, lid)
-        return metadata.read(conn, listing["current_version_id"])["options"]["types"]

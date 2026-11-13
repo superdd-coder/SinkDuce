@@ -17,10 +17,12 @@ def test_template_applies_metadata_and_remains_frozen_in_prior_export(qa):
             "metadata_position": "right",
             "include_number": False,
             "include_status": True,
+            "include_type": True,
         },
     )
     assert r.status_code == 201, r.text
     template = r.json()
+    assert "include_type" not in template
     d = create(qa)
     d = mutate(qa, d, "/questions", {"text": "Provide the orchard route map."})
     d = mutate(qa, d, "", {"template_id": template["id"]}, "patch")
@@ -31,7 +33,7 @@ def test_template_applies_metadata_and_remains_frozen_in_prior_export(qa):
     first = client.get(url).content
     ws = openpyxl.load_workbook(BytesIO(first)).active
     assert ws["A1"].value == "Garden review"
-    assert [c.value for c in ws[4]][:2] == ["Question", "Status"]
+    assert [c.value for c in ws[4]] == ["Question", "Status", "A response", "B response"]
     r = client.patch(
         base + f"/templates/{template['id']}",
         json={"expected_revision": 1, "name": "Updated exchange", "title": "New review"},

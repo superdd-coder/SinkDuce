@@ -80,6 +80,7 @@ async function harness(component = "qa-reply-editor", uploadResults: QaMaterial[
       }))
       const fileSpace = tree.find(node => node.type === "section" && node.props["aria-label"] === "qa.materials")
       const spaceItems = elements(fileSpace)
+      const composeRow = elements(tree.find(node => node.props.className === "qa-draft-compose-row"))
       return {
         drop(files: File[]) {
           const panel = tree.find(node => node.props.id === "draft-panel")
@@ -97,6 +98,7 @@ async function harness(component = "qa-reply-editor", uploadResults: QaMaterial[
           ;(action.props.onClick as () => void)()
         },
         spaceItems,
+        composeRow,
         removeAttachment: tree.find(node => node.props["aria-label"] === "qa.aiRemoveAttachment"),
         button: tree.find(node => node.type === "button" && node.props.type === "submit"),
         versionBadges: tree.filter(node => node.type === "small" && Array.isArray(node.props.children)).map(node => (node.props.children as unknown[]).join("")),
@@ -108,10 +110,11 @@ async function harness(component = "qa-reply-editor", uploadResults: QaMaterial[
       const trigger = tree.find(node => node.props["aria-label"] === "qa.aiDraft")
       const form = tree.find(node => typeof node.type === "function" && node.type.name === "QaDraftInstructions")
       const proposals = tree.filter(node => node.props.className === "qa-proposal")
+      const proposalEditor = elements(proposals[0]).find(node => node.props.label === "qa.aiEditableDraft")
       const adopt = tree.find(node => node.type === "button" && node.props.children === "qa.useDraft")
       const historyAction = tree.find(node => typeof node.type === "function" && node.type.name === "QaMenuItem" && Array.isArray(node.props.children) && node.props.children.includes("qa.history"))
       const history = tree.find(node => node.props.className === "qa-revision-history")
-      return { trigger, form, proposals, adopt, historyAction, history, composer: tree.find(node => typeof node.props.className === "string" && node.props.className.startsWith("qa-composer")) }
+      return { trigger, form, proposals, proposalEditor, adopt, historyAction, history, composer: tree.find(node => typeof node.props.className === "string" && node.props.className.startsWith("qa-composer")) }
     },
   }
 }
@@ -184,7 +187,7 @@ test("reply history remains accessible through the reply menu", async () => {
   } finally { h.dispose() }
 })
 
-test("subsequent instructions revise one draft, preserve it on failure, and adopt only the latest result", async () => {
+test("follow-up uses the edited draft, keeps edits on failure and adopts the latest manual text", async () => {
   const h = await harness()
   try {
     ;(h.render().trigger?.props.onClick as () => void)()
@@ -193,26 +196,36 @@ test("subsequent instructions revise one draft, preserve it on failure, and adop
     await h.tick()
     h.calls[0].resolve(draft("proposal-a", "The reading room opens at noon."))
     assert.equal(await first, true)
+    const edit = (body: string) => {
+      const onChange = h.render().proposalEditor?.props.onChange as ((body: string, composing: boolean) => void) | undefined
+      assert.ok(onChange, "the generated result is directly editable")
+      onChange(body, false)
+    }
+    edit("The reading room is expected to open at noon.")
     const adoptPrevious = h.render().adopt?.props.onClick as () => void
     const retry = submit()("Make this shorter.", [])
     await h.tick()
     assert.equal(h.calls[1].options?.previous_proposal_id, "proposal-a")
+    assert.equal(h.calls[1].options?.edited_draft, "The reading room is expected to open at noon.")
+    assert.equal(h.calls[1].body, "", "the upper reply is not sent on a follow-up")
     assert.equal(h.render().proposals.length, 1)
     assert.equal(h.render().adopt?.props.disabled, true)
     h.calls[1].reject(new Error("stale_draft"))
     assert.equal(await retry, false)
     assert.equal(h.render().proposals.length, 1)
+    assert.equal(h.render().proposalEditor?.props.value, "The reading room is expected to open at noon.")
     const final = submit()("Make this shorter.", [])
     await h.tick()
     assert.equal(h.calls[2].options?.previous_proposal_id, "proposal-a")
     h.calls[2].resolve(draft("proposal-b", "Opens at noon."))
     assert.equal(await final, true)
     assert.equal(h.render().proposals.length, 1)
+    edit("Expected to open at noon.")
     const adoptLatest = h.render().adopt?.props.onClick as () => void
     adoptPrevious()
     adoptLatest()
     adoptLatest()
-    assert.deepEqual(h.adopted, [["Opens at noon.", "proposal-b"]])
+    assert.deepEqual(h.adopted, [["Expected to open at noon.", "proposal-b"]])
   } finally { h.dispose() }
 })
 
@@ -244,10 +257,14 @@ test("dropping a replacement attaches its exact parsed version without duplicati
   } finally { h.dispose() }
 })
 
-test("the compact send action has an accessible name for drafting and revising", async () => {
+test("the compact row groups attachment, instructions and the named send action", async () => {
   const h = await harness("qa-draft-instructions")
   try {
-    assert.equal(h.renderInstructions().button?.props["aria-label"], "qa.aiGenerateDraft")
+    const form = h.renderInstructions()
+    assert.ok(form.composeRow.some(node => node.props.label === "qa.aiAddAttachment"))
+    assert.equal(form.composeRow.find(node => node.type === "textarea")?.props.rows, 1)
+    assert.ok(form.button && form.composeRow.includes(form.button))
+    assert.equal(form.button.props["aria-label"], "qa.aiGenerateDraft")
     assert.equal(h.renderInstructions(true).button?.props["aria-label"], "qa.aiReviseDraft")
   } finally { h.dispose() }
 })

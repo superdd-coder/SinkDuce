@@ -3,6 +3,7 @@
 import asyncio
 import json
 import threading
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -57,6 +58,74 @@ def test_draft_stream_emits_actual_stages_then_proposal(qa, monkeypatch):
         ("result", proposal),
     ]
     assert "private" not in response.text
+
+
+@pytest.mark.parametrize(
+    "guidance,pinned,skip_retrieval",
+    [
+        ("不用搜索 直接按现有问答写一段简短回复。", [], False),
+        ("Please skip the search. Draft a short confirmation.", ["example_version"], False),
+        ("Use only what's already in this exchange.", [], True),
+    ],
+)
+def test_direct_reply_skips_search_and_search_progress(
+    qa, monkeypatch, guidance, pinned, skip_retrieval
+):
+    from src.qa import materials
+    from src.services import services
+
+    data = mutate(qa, create(qa), "/questions", {"text": "Confirm the display opening time."})
+    qid, cid = data["questions"][0]["id"], data["columns"][0]["id"]
+    calls, packets = [], []
+
+    class LLM:
+        def generate(self, prompt, **_):
+            packet = json.loads(prompt.split("\n", 1)[1])
+            packets.append(packet)
+            if packet.get("stage") == "reply_intent":
+                return json.dumps(
+                    {"kind": "guidance", "needs_retrieval": True, "skip_retrieval": skip_retrieval}
+                )
+            return json.dumps({"body": "We will confirm the opening time separately."})
+
+    def search(_query, **kwargs):
+        calls.append("project search")
+        kwargs["on_step"]({"step": "variant_generation"})
+        return SimpleNamespace(retained_chunks=[], tasks=[], errors=[])
+
+    def materials_search(*_, **_options):
+        calls.append("material search")
+        return [], []
+
+    def resolve(*_):
+        calls.append("resolve attachments")
+        return []
+
+    monkeypatch.setattr(services, "llm", LLM())
+    monkeypatch.setattr(services, "agentic_query", SimpleNamespace(run=search))
+    monkeypatch.setattr(materials, "search_references", materials_search)
+    monkeypatch.setattr(materials, "resolve_references", resolve)
+    client, base = qa
+    response = client.post(
+        f"{base}/lists/{data['id']}/questions/{qid}/drafts/{cid}/generate/stream",
+        json={
+            "expected_revision": data["revision"],
+            "guidance": guidance,
+            "material_version_ids": pinned,
+        },
+    )
+    actual = events(response.text)
+    assert actual[-1][0] == "result", actual
+    assert calls == []
+    assert [payload["stage"] for kind, payload in actual if kind == "progress"] == [
+        "preparing",
+        "intent",
+        "drafting",
+        "finalizing",
+    ]
+    assert packets[-1]["retrieval_status"] == "skipped"
+    assert packets[-1]["content_scope"] == "conversation_only"
+    assert actual[-1][1]["material_version_ids"] == []
 
 
 @pytest.mark.parametrize(

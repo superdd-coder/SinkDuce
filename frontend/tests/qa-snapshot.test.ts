@@ -6,7 +6,7 @@ import { reconcileQaSnapshot } from "../src/lib/qa-snapshot.ts"
 function listing(): QaListDetail {
   const question = (id: string, text: string): QaQuestion => ({
     id, text, summary: "Check the cabinet lock.", reply_summary: "The lock is pending.",
-    included: true, position: 0, status: "open", type: "clarify", type_origin: "ai",
+    included: true, position: 0, status: "open",
     external_number: "", updated_at: "2030-01-01", absent_since: null, latest_reply: "Pending.",
     replies: [{ column_id: "c1", label: "Response", body: "Pending.", sources: [], included: true,
       modified: false, historical_body: "", cleared_since: null, absent_since: null, text_revision_id: `${id}-r1` }],
@@ -33,7 +33,7 @@ test("reply acknowledgement retains the question label and unchanged list object
   assert.equal(merged.questions[0].summary, current.questions[0].summary)
   assert.equal(merged.questions[0].replies[0].body, "A new lock is fitted.")
   assert.equal(merged.questions[0].reply_summary, "", "an old answer summary is never carried over to changed reply text")
-  assert.equal(merged.annotation_pending, 0, "reply saves do not flash the question classification prompt")
+  assert.equal(merged.annotation_pending, 0, "reply saves do not flash the summary notice")
   assert.equal(merged.annotation_state, "ready")
   assert.equal(merged.questions[1], current.questions[1])
   assert.equal(merged.outline, current.outline)

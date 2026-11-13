@@ -1,3 +1,5 @@
+import type { Locale } from "../i18n/index"
+
 /** GitHub Release DMG name: SinkDuce-macos-arm64-vX.Y.Z.dmg */
 
 export function desktopDmgAssetName(tagOrVersion: string): string {
@@ -43,4 +45,39 @@ export function shouldOfferUpdate(opts: {
   if (!opts.versionNewer) return false
   if (opts.desktop) return Boolean(opts.downloadUrl)
   return true
+}
+
+/** The release feed groups English and Chinese notes in one changelog section. */
+export function releaseNotesForLocale(body: string, locale: Locale): { language: Locale; items: string[] } {
+  const notes: { text: string; language?: Locale }[] = []
+  let paragraph = ""
+  function finishNote() {
+    if (!paragraph) return
+    const text = paragraph.replace(/\*\*(.+?)\*\*/g, "$1")
+    const han = text.match(/\p{Script=Han}/gu)?.length ?? 0
+    const latin = text.match(/\p{Script=Latin}+/gu)?.length ?? 0
+    // A short quoted label in another language should not move the whole note.
+    const language = han && han >= latin ? "zh-CN" : latin ? "en" : undefined
+    notes.push({ text, language })
+    paragraph = ""
+  }
+
+  for (const raw of body.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line || /^#{1,6}\s/.test(line)) {
+      finishNote()
+      continue
+    }
+    const item = line.match(/^(?:[-*+]|\d+[.)])\s+(.*)$/)
+    if (item) finishNote()
+    paragraph = [paragraph, item ? item[1] : line].filter(Boolean).join(" ")
+  }
+  finishNote()
+
+  const language = notes.some(note => note.language === locale) ? locale
+    : notes.find(note => note.language)?.language ?? locale
+  return {
+    language,
+    items: notes.filter(note => !note.language || note.language === language).map(note => note.text),
+  }
 }

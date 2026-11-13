@@ -141,11 +141,11 @@ test("first import shows detected question and column counts without a textual r
   assert.doesNotMatch(imported, /Replies to import|Keep 0 replies|Blank cells keep saved replies/)
 })
 
-test("the worksheet shows distinct group and question-type column controls", async () => {
+test("the worksheet shows distinct group and additional field column controls", async () => {
   const { QaImportReview } = await server.ssrLoadModule("/src/components/qa/qa-import-review.tsx")
   const { QaImportTable } = await server.ssrLoadModule("/src/components/qa/qa-import-table.tsx")
   const row = { key: "2", text: question.text, values: ["Visitor entry", question.text, "", "Confirm"], group: "Visitor entry", group_key: "column:2" }
-  const next = { ...plan, headers: ["Topic", "Question", "Response", "Request kind"], mapping: { question: 1, group: 0, replies: [2], type: 3 },
+  const next = { ...plan, headers: ["Topic", "Question", "Response", "Request kind"], mapping: { question: 1, group: 0, replies: [2], extras: [3] },
     rows: [row], table_rows: [{ ...row, kind: "question" }], matches: { "2": "new" }, column_matches: { "2": "new" }, review: undefined,
   }
   const html = renderToStaticMarkup(createElement(QaImportReview, { ...props, plan: next, list: { ...list, questions: [], columns: [] } }))
@@ -153,7 +153,8 @@ test("the worksheet shows distinct group and question-type column controls", asy
   assert.doesNotMatch(html, /“Topic” is used to group questions|<table|<details[^>]* open/)
   const table = renderToStaticMarkup(createElement(QaImportTable, { plan: next, busy: false, onRole() {}, onRow() {} }))
   assert.match(table, /Topic · Column role[^>]*>[^<]*<span[^>]*>Question group/)
-  assert.match(table, /Request kind · Column role[^>]*>[^<]*<span[^>]*>Question type/)
+  assert.match(table, /Request kind · Column role[^>]*>[^<]*<span[^>]*>Additional field/)
+  assert.doesNotMatch(table, /Question type/)
 })
 
 test("a later import omits an empty reply summary but still calls out explicitly cleared replies", async () => {

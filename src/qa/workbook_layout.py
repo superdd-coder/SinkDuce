@@ -288,7 +288,7 @@ def update_option_validations(parts, path, root, workbook, rels, meta, grid, que
     targets = {}
     for key, field in [("status", "statuses"), ("type", "types")]:
         index = layout["mapping"].get(key)
-        labels = [o["label"] for o in meta["options"][field]]
+        labels = [o["label"] for o in meta["options"].get(field, [])]
         before = [o["label"] for o in layout.get("options", {}).get(field, [])]
         if index is not None and (labels != before or added) and question_rows:
             col = grid.axis(index + 1, "column")
@@ -786,7 +786,7 @@ def write_original(blob, snapshot, meta):
                 )
 
     def label(field, oid):
-        return next((o["label"] for o in meta["options"][field] if o["id"] == oid), "")
+        return next((o["label"] for o in meta["options"].get(field, []) if o["id"] == oid), "")
 
     for qid, r in question_rows.items():
         q = questions[qid]
@@ -824,7 +824,7 @@ def write_original(blob, snapshot, meta):
         for key, value in [
             ("number", q.get("display_number", q["external_number"])),
             ("status", label("statuses", q["status"])),
-            ("type", label("types", q["type"])),
+            ("type", label("types", q.get("type", ""))),  # Existing source layout only.
         ]:
             index = layout["mapping"].get(key)
             if index is not None:

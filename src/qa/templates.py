@@ -13,8 +13,10 @@ def list_templates(collection):
 
 
 def decode(row):
+    settings = json.loads(row["settings_json"])
+    settings.pop("include_type", None)
     return {
-        **json.loads(row["settings_json"]),
+        **settings,
         "id": row["id"],
         "name": row["name"],
         "revision": row["revision"],
@@ -34,6 +36,7 @@ def save(collection, data, tid=None):
         if old and old["revision"] != data.expected_revision:
             store.fail("stale_revision")
         settings = json.loads(old["settings_json"]) if old else {}
+        settings.pop("include_type", None)
         settings.update(data.model_dump(exclude_none=True, exclude={"name", "expected_revision"}))
         logo_id = settings.get("logo_id")
         if logo_id and not asset_path(collection, "templates", "logos", logo_id).is_file():

@@ -3,30 +3,26 @@
 from io import BytesIO
 
 import openpyxl
-import pytest
 
 from tests.test_qa import create, mutate, qa_fixture  # noqa: F401
 from tests.test_qa_excel import commit, upload
 from tests.test_qa_flexible import exported, sample, upload_blob
 
 
-@pytest.mark.parametrize(
-    "field,value,column,label",
-    [("status", "closed", "E6", "Closed"), ("type", "Provide", "F6", "Provide")],
-)
-def test_preserved_option_exports_local_label_against_raw_source(qa, field, value, column, label):
+def test_preserved_status_exports_local_label_against_raw_source(qa):
     detail = create(qa)
     detail = commit(qa, detail, upload_blob(qa, detail, sample()))
     question = next(item for item in detail["questions"] if item["included"])
-    detail = mutate(qa, detail, f"/questions/{question['id']}", {field: value}, "patch")
+    detail = mutate(qa, detail, f"/questions/{question['id']}", {"status": "closed"}, "patch")
     plan = upload_blob(qa, detail, sample())
     assert not plan["review"]["unresolved"]
     detail = commit(qa, detail, plan)
     assert (
-        next(item for item in detail["questions"] if item["id"] == question["id"])[field] == value
+        next(item for item in detail["questions"] if item["id"] == question["id"])["status"]
+        == "closed"
     )
     workbook = openpyxl.load_workbook(BytesIO(exported(qa, detail)))
-    assert workbook["Register"][column].value == label
+    assert workbook["Register"]["E6"].value == "Closed"
 
 
 def test_raw_typed_source_baseline_is_separate_from_preserved_values(qa):
@@ -71,8 +67,7 @@ def test_duplicate_incoming_field_labels_reserve_existing_binding_only_once(qa):
     assert next(item["value"] for item in fields if item["id"] != fid) is None
 
 
-@pytest.mark.parametrize("field,value", [("status", "closed"), ("type", "Provide")])
-def test_preserved_option_is_reported_when_next_file_omits_question(qa, field, value):
+def test_preserved_status_is_reported_when_next_file_omits_question(qa):
     rows = [
         ["Question", "Reply", "Status", "Type"],
         [
@@ -91,7 +86,7 @@ def test_preserved_option_is_reported_when_next_file_omits_question(qa, field, v
     detail = create(qa)
     detail = commit(qa, detail, upload(qa, detail, rows))
     qid = detail["questions"][0]["id"]
-    detail = mutate(qa, detail, f"/questions/{qid}", {field: value}, "patch")
+    detail = mutate(qa, detail, f"/questions/{qid}", {"status": "closed"}, "patch")
     detail = commit(qa, detail, upload(qa, detail, rows))
     plan = upload(qa, detail, [rows[0], rows[2]])
     missing = next(item for item in plan["review"]["missing_questions"] if item["id"] == qid)

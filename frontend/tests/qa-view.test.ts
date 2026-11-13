@@ -12,16 +12,16 @@ test("omission is separate from closed status and searches complete original rep
   assert.deepEqual(filterQaQuestions(questions, "", "waiting", true).map(q => q.id), ["b"])
 })
 
-test("status, type and omission filters combine with a preserved search", () => {
+test("status and omission filters combine with a preserved search", () => {
   const questions = [
     { id: "a", included: true, status: "waiting", type: "Confirm", text: "Confirm gallery access", replies: [] },
     { id: "b", included: true, status: "waiting", type: "Provide", text: "Provide gallery map", replies: [] },
     { id: "c", included: false, status: "closed", type: "Confirm", text: "Confirm gallery hours", replies: [] },
     { id: "d", included: true, status: "waiting", type: "Confirm", text: "Confirm reception hours", replies: [] },
   ]
-  assert.deepEqual(filterQaQuestions(questions, "gallery", "waiting", true, "Confirm").map(q => q.id), ["a"])
-  assert.deepEqual(filterQaQuestions(questions, "gallery", "all", true, "all").map(q => q.id), ["a", "b", "c"])
-  assert.deepEqual(filterQaQuestions(questions, "gallery", "all", false, "all").map(q => q.id), ["a", "b"])
+  assert.deepEqual(filterQaQuestions(questions, "gallery", "waiting", true).map(q => q.id), ["a", "b"])
+  assert.deepEqual(filterQaQuestions(questions, "gallery", "all", true).map(q => q.id), ["a", "b", "c"])
+  assert.deepEqual(filterQaQuestions(questions, "gallery", "all", false).map(q => q.id), ["a", "b"])
 })
 
 test("preview navigation preserves the selected question", () => {
@@ -45,20 +45,20 @@ test("manual confirmation accepts unrecognized headings once source rows are res
   assert.equal(canConfirmQaFields({ ...plan, rows: [{ text: "  " }] } as never), false)
 })
 
-test("changing a column to theme grouping removes its question type role and survives other role edits", async () => {
+test("changing an additional field to theme grouping survives other role edits", async () => {
   const { changeColumnRole, columnRole } = await import("../src/lib/qa-import-mapping.ts")
-  const plan = { headers: ["Question", "Type", "Reply", "Progress"], mapping: { question: 0, type: 1, replies: [2], extras: [3] } }
+  const plan = { headers: ["Question", "Topic", "Reply", "Progress"], mapping: { question: 0, replies: [2], extras: [1, 3] } }
   const grouped = changeColumnRole(plan as never, 1, "group")
   assert.equal(columnRole(grouped, 1), "group")
   assert.equal(grouped.group, 1)
-  assert.equal(grouped.type, null)
+  assert.deepEqual(grouped.extras, [3])
   const updated = changeColumnRole({ ...plan, mapping: grouped } as never, 3, "status")
   assert.equal(updated.group, 1)
   assert.equal(updated.status, 3)
   assert.deepEqual(updated.extras, [])
-  const restored = changeColumnRole({ ...plan, mapping: updated } as never, 1, "type")
+  const restored = changeColumnRole({ ...plan, mapping: updated } as never, 1, "extra")
   assert.equal(restored.group, null)
-  assert.equal(restored.type, 1)
+  assert.deepEqual(restored.extras, [1])
 })
 
 test("parent choices include only same-group questions and exclude self and descendants", async () => {

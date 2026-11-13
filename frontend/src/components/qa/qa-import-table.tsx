@@ -7,7 +7,7 @@ import { columnRole, excelColumn, qaParentCandidates } from "@/lib/qa-import-map
 
 const ROW_HEIGHT = 30
 const WINDOW_ROWS = 28
-const columnRoles = ["question", "number", "reply", "status", "group", "type", "extra", "ignore"]
+const columnRoles = ["question", "number", "reply", "status", "group", "extra", "ignore"]
 const rowRoles = ["question", "child", "section", "note", "header", "continuation", "exclude", "review"]
 
 type HoverCell = { body: string; left: number; top?: number; bottom?: number }

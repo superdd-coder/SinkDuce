@@ -52,12 +52,13 @@ def test_streamed_revision_keeps_the_exact_reference_and_only_adoption_saves_it(
             return schema(
                 body="The conservatory closes at 17:00.", sources=[1], insufficient_evidence=False
             )
-        assert packet["working_draft"] == "The conservatory closes at 17:00."
+        assert packet["working_draft"] == "The conservatory is scheduled to close at 17:00."
+        assert packet["evidence"] == []
         return schema(body="Closing time is 17:00.", sources=[], insufficient_evidence=False)
 
     monkeypatch.setattr(intelligence, "generate_json", generate_json)
 
-    def send(guidance, previous=None):
+    def send(guidance, previous=None, edited=None):
         response = client.post(
             draft_path + "/generate/stream",
             json={
@@ -65,6 +66,7 @@ def test_streamed_revision_keeps_the_exact_reference_and_only_adoption_saves_it(
                 "instructions": "",
                 "guidance": guidance,
                 "previous_proposal_id": previous,
+                "edited_draft": edited,
                 "material_version_ids": [first["version_id"]],
             },
         )
@@ -73,7 +75,11 @@ def test_streamed_revision_keeps_the_exact_reference_and_only_adoption_saves_it(
         return terminal[0][1]
 
     initial = send("Use the attached visitor hours.")
-    final = send("Make the wording shorter.", initial["id"])
+    final = send(
+        "Make the wording shorter.",
+        initial["id"],
+        "The conservatory is scheduled to close at 17:00.",
+    )
     assert final["body"] == "Closing time is 17:00."
     assert final["id"] != initial["id"]
     assert final["sources"] == initial["sources"]
@@ -81,11 +87,12 @@ def test_streamed_revision_keeps_the_exact_reference_and_only_adoption_saves_it(
     assert project_queries == []
     assert client.get(list_path).json()["questions"][0]["replies"][0]["body"] == ""
 
+    adopted_body = "The closing time is 17:00."
     draft = client.put(
         draft_path,
         json={
             "version_id": payload["version_id"],
-            "body": final["body"],
+            "body": adopted_body,
             "draft_revision": 0,
             "base_cell_revision_id": final["base_cell_revision_id"],
             "proposal_id": final["id"],
@@ -96,14 +103,14 @@ def test_streamed_revision_keeps_the_exact_reference_and_only_adoption_saves_it(
         f"{list_path}/questions/{qid}/replies/{cid}",
         json={
             **payload,
-            "body": final["body"],
+            "body": adopted_body,
             "draft_revision": draft.json()["draft_revision"],
             "base_cell_revision_id": final["base_cell_revision_id"],
         },
     )
     assert saved.status_code == 200, saved.text
     reply = saved.json()["questions"][0]["replies"][0]
-    assert reply["body"] == final["body"]
+    assert reply["body"] == adopted_body
     assert reply["sources"] == final["sources"]
     archived = client.patch(
         f"{materials_path}/{newest['id']}",

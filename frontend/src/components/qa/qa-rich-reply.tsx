@@ -9,7 +9,7 @@ import { QaReplyText } from "./qa-reply-text"
 export function QaRichReply({ value, label, placeholder, ready, invalid, onChange, onFocus, onBlur, onCompositionStart }: {
   value: string; label: string; placeholder: string; ready: boolean; invalid: boolean
   onChange: (value: string, composing: boolean) => void
-  onFocus: () => void; onBlur: (withinComposer: boolean) => void; onCompositionStart: () => void
+  onFocus?: () => void; onBlur?: (withinComposer: boolean) => void; onCompositionStart?: () => void
 }) {
   const emitted = useRef(value)
   const composing = useRef(false)
@@ -21,7 +21,7 @@ export function QaRichReply({ value, label, placeholder, ready, invalid, onChang
     editorProps: {
       attributes: { class: "qa-reply-rich-input", role: "textbox", "aria-multiline": "true", "aria-label": label, "aria-invalid": String(invalid) },
       handleDOMEvents: {
-        compositionstart: () => { composing.current = true; onCompositionStart(); return false },
+        compositionstart: () => { composing.current = true; onCompositionStart?.(); return false },
         compositionend: view => {
           composing.current = false
           // The final composition transaction is delivered after this DOM event.
@@ -47,7 +47,7 @@ export function QaRichReply({ value, label, placeholder, ready, invalid, onChang
         onChange(body, false)
       }
       composing.current = false
-      onBlur(Boolean((event.target as HTMLElement)?.closest(".qa-composer")?.contains(event.relatedTarget as Node | null)))
+      onBlur?.(Boolean((event.target as HTMLElement)?.closest(".qa-composer")?.contains(event.relatedTarget as Node | null)))
     },
   })
   useEffect(() => {

@@ -25,7 +25,7 @@ export function reconcileQaSnapshot(current: QaListDetail | null, next: QaListDe
     return previous?.summary && previous.text === question.text && previous.summary !== question.summary
       ? { ...question, summary: previous.summary } : question
   })
-  const pending = stableQuestions.filter(question => question.included && (!question.summary || question.type_origin === "default")).length
+  const pending = stableQuestions.filter(question => question.included && !question.summary).length
   return share(current, {
     ...next,
     questions: stableQuestions,

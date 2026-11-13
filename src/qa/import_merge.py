@@ -42,10 +42,8 @@ class _Baselines:
             ).fetchone()
             vid = row[0] if row else None
         self.records = {}
-        self.import_parents = {}
-        self.parent_type_ids = {}
         for record in conn.execute(
-            """SELECT i.*,v.number,v.parent_id FROM qa_imports i JOIN qa_versions v ON v.id=i.committed_version_id
+            """SELECT i.* FROM qa_imports i JOIN qa_versions v ON v.id=i.committed_version_id
             WHERE i.list_id=? ORDER BY v.number DESC,i.created_at DESC,i.id DESC""",
             (lid,),
         ):
@@ -55,7 +53,6 @@ class _Baselines:
                 plan = json.loads(record["plan_json"])
             except (ValueError, TypeError):
                 continue
-            self.import_parents[record["id"]] = record["parent_id"]
             for row in plan.get("rows", []):
                 self.records.setdefault(row.get("committed_question_id"), []).append((plan, row))
 
@@ -172,23 +169,12 @@ class _Baselines:
             for key in ("status", "external_number"):
                 if key in state and q[key] != state[key]:
                     return True
-            for key, option_key in (("status", "statuses"), ("type", "types")):
-                if key == "type" and q["type_origin"] != "manual":
-                    continue
-                observed = self.field(q["question_id"], key)
-                label = next(
-                    (
-                        option["label"]
-                        for option in meta["options"][option_key]
-                        if option["id"] == q[key]
-                    ),
-                    "",
-                )
-                if observed is not None and _display(observed) != label:
-                    return True
-            if q["type_origin"] == "manual" and (
-                q["type"] != state.get("type") or state.get("type_origin") != "manual"
-            ):
+            observed = self.field(q["question_id"], "status")
+            label = next(
+                (o["label"] for o in meta["options"]["statuses"] if o["id"] == q["status"]),
+                "",
+            )
+            if observed is not None and _display(observed) != label:
                 return True
             for cid, cell in cells.items():
                 remote_reply = self.reply(q["question_id"], cid)
@@ -231,71 +217,6 @@ class _Baselines:
                     return True
             return False
         return True
-
-    def regrouped_type(self, question, header, label, options):
-        """Only undo a type still carrying the old interpretation of this source column."""
-        if not label or question["type_origin"] != "manual":
-            return False, None
-        oid = question["type"]
-        builtins = {option["id"] for option in metadata.defaults()["options"]["types"]}
-        option = next((item for item in options if item["id"] == oid), None)
-        if oid in builtins or not option:
-            return False, None
-
-        def normalized(value):
-            return " ".join(value.casefold().split())
-
-        for prior, row, valid in self.rows(question["question_id"]):
-            if not valid:
-                break
-            index = prior.get("mapping", {}).get("type")
-            if index is None:
-                continue
-            headers = prior.get("headers", [])
-            state = row["committed_state"]
-            external = row.get("external_baseline")
-            values = row.get("effective_values", row.get("values", []))
-            observed = (
-                _display(external.get("fields", {}).get(str(index)))
-                if external
-                else _display(values[index])
-                if index < len(values)
-                else ""
-            )
-            if (
-                index >= len(headers)
-                or normalized(headers[index]) != normalized(header)
-                or state.get("type_origin") != "manual"
-                or state.get("type") != oid
-                or option["label"].strip() != observed.strip()
-                or normalized(observed) != normalized(label)
-            ):
-                break
-            prior_id = prior.get("id")
-            if prior_id not in self.import_parents:
-                break
-            parent = self.import_parents[prior_id]
-            if (
-                parent
-                and self.conn.execute(
-                    """SELECT 1 FROM qa_version_questions WHERE version_id=? AND question_id=?
-                AND type_origin='manual' AND type=?""",
-                    (parent, question["question_id"], oid),
-                ).fetchone()
-            ):
-                # A repeated import may have carried a prior choice. Look for the
-                # source that introduced it instead of assuming it came from Excel.
-                continue
-            generated = False
-            if option["color"] == "#397b60":
-                if parent not in self.parent_type_ids:
-                    parent_options = (
-                        metadata.read(self.conn, parent)["options"]["types"] if parent else []
-                    )
-                    self.parent_type_ids[parent] = {item["id"] for item in parent_options}
-                generated = oid not in self.parent_type_ids[parent]
-            return True, oid if generated else None
-        return False, None
 
 
 def evaluate(conn, lid, plan, *, strict=True):
@@ -365,7 +286,7 @@ def evaluate(conn, lid, plan, *, strict=True):
         ),
         0,
     )
-    conflicts, effective, preview, regrouped_types = [], {}, {}, set()
+    conflicts, effective, preview = [], {}, {}
 
     def merge(
         row,
@@ -480,17 +401,6 @@ def evaluate(conn, lid, plan, *, strict=True):
             )
             if not unresolved_question and result["text"] != row["text"]:
                 preview.setdefault(row["key"], {})["text"] = result["text"]
-            group_col = plan["mapping"].get("group")
-            if group_col is not None and result["included"]:
-                reset, prune = baseline.regrouped_type(
-                    current,
-                    plan["headers"][group_col],
-                    row.get("group_value", ""),
-                    meta["options"]["types"],
-                )
-                result["reset_type"] = reset
-                if prune:
-                    regrouped_types.add(prune)
         values[plan["mapping"]["question"]] = result["text"]
         for index in plan["mapping"].get("replies", []):
             key, cid = str(index), column_matches.get(str(index))
@@ -538,7 +448,7 @@ def evaluate(conn, lid, plan, *, strict=True):
                 counts["kept_replies"] += 1
             else:
                 counts["updated_replies"] += 1
-        fields = [(key, plan["mapping"].get(key), None) for key in ("status", "type")]
+        fields = [("status", plan["mapping"].get("status"), None)]
         for index in plan["mapping"].get("extras", []):
             fields.append(("extra", index, field_targets[index]))
         for kind, index, fid in fields:
@@ -549,7 +459,7 @@ def evaluate(conn, lid, plan, *, strict=True):
             if kind == "extra":
                 local = deepcopy(meta["values"].get(qid, {}).get(fid, {"value": None, "kind": "s"}))
             else:
-                options = meta["options"]["statuses" if kind == "status" else "types"]
+                options = meta["options"]["statuses"]
                 local = {
                     "value": next(
                         (o["label"] for o in options if current and o["id"] == current[kind]), ""
@@ -557,8 +467,6 @@ def evaluate(conn, lid, plan, *, strict=True):
                     "kind": "s",
                 }
                 remote = {"value": values[index], "kind": "s"}
-                if kind == "type" and result.get("reset_type"):
-                    local, old = {"value": "", "kind": "s"}, None
             chosen, _ = (
                 merge(
                     row,
@@ -671,6 +579,5 @@ def evaluate(conn, lid, plan, *, strict=True):
         "archived_cells": archived_cells,
         "kept_question_ids": [qid for qid in questions if qid in kept],
         "kept_column_ids": [cid for cid in columns if cid in column_ids],
-        "regrouped_types": regrouped_types,
         "review": review,
     }

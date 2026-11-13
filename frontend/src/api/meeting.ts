@@ -126,8 +126,11 @@ export interface Meeting {
   transcript_index_error?: string
 }
 
-export const getMeetings = () =>
-  request<Meeting[]>("/meetings")
+export const getMeetings = (opts?: { includeArchived?: boolean; signal?: AbortSignal }) =>
+  request<Meeting[]>(
+    opts?.includeArchived ? "/meetings?include_archived=true" : "/meetings",
+    { signal: opts?.signal },
+  )
 
 export const getMeeting = (id: string) =>
   request<Meeting>(`/meetings/${id}`)
@@ -160,8 +163,8 @@ export interface MeetingGroup {
   last_chat_at: string
 }
 
-export const listMeetingGroups = () =>
-  request<MeetingGroup[]>("/meeting-groups")
+export const listMeetingGroups = (signal?: AbortSignal) =>
+  request<MeetingGroup[]>("/meeting-groups", { signal })
 
 export const getMeetingGroup = (id: string) =>
   request<MeetingGroup>(`/meeting-groups/${id}`)

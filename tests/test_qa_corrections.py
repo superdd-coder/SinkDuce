@@ -10,9 +10,7 @@ def test_correction_preserves_later_reply_and_old_export(qa):
     d = mutate(qa, d, "/questions", {"text": "Explain the orchard irrigation plan."})
     d = mutate(qa, d, "/questions", {"text": "Explain the greenhouse irrigation plan."})
     old, target = d["questions"]
-    d = mutate(
-        qa, d, f"/questions/{target['id']}", {"status": "closed", "type": "Clarify"}, "patch"
-    )
+    d = mutate(qa, d, f"/questions/{target['id']}", {"status": "closed"}, "patch")
     original_version = d["version"]["id"]
     plan = upload(
         qa,
@@ -59,7 +57,7 @@ def test_correction_preserves_later_reply_and_old_export(qa):
             conn,
             d["version"]["id"],
             old["id"],
-            {"summary": "Watering plan", "reply_summary": "Additional notes", "type": "Provide"},
+            {"summary": "Watering plan", "reply_summary": "Additional notes"},
         )
     eid = client.post(
         f"{base}/lists/{d['id']}/exports", json={"expected_revision": d["revision"]}
@@ -86,7 +84,6 @@ def test_correction_preserves_later_reply_and_old_export(qa):
     restored = next(q for q in current["questions"] if q["id"] == target["id"])
     assert restored["included"] is True
     assert restored["status"] == "closed"
-    assert restored["type"] == "Clarify"
     assert restored["latest_reply"] == "Additional notes saved after import."
     released = next(q for q in current["questions"] if q["id"] == old["id"])
     assert released["included"] is False and released["text"] == old["text"]

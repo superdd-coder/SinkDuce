@@ -1,6 +1,6 @@
 import type { QaImportPlan, QaMapping } from "@/api/client"
 
-const singleRoles = ["question", "number", "status", "type", "group"] as const
+const singleRoles = ["question", "number", "status", "group"] as const
 
 export function excelColumn(index: number) {
   let label = ""
@@ -21,7 +21,7 @@ export function changeColumnRole(plan: QaImportPlan, index: number, role: string
   roles[index] = role
   const single = (name: string) => roles.includes(name) ? roles.indexOf(name) : null
   const multi = (name: string) => roles.flatMap((r, i) => r === name && i >= (plan.region?.start_column || 1) - 1 ? [i] : [])
-  return { question: single("question") ?? plan.mapping.question, number: single("number"), status: single("status"), type: single("type"), group: single("group"), replies: multi("reply"), extras: multi("extra"), ignored: multi("ignore") }
+  return { question: single("question") ?? plan.mapping.question, number: single("number"), status: single("status"), group: single("group"), replies: multi("reply"), extras: multi("extra"), ignored: multi("ignore") }
 }
 
 export function canConfirmQaFields(plan: Pick<QaImportPlan, "rows" | "table_rows">) {

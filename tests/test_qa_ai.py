@@ -252,7 +252,7 @@ def test_ai_reply_is_a_proposal_and_source_ids_cannot_be_invented(qa, monkeypatc
     assert d["questions"][0]["replies"][0]["sources"][0]["version_id"] == "example_version"
 
 
-def test_annotation_refreshes_summary_without_overwriting_manual_type(qa, monkeypatch):
+def test_question_annotation_refreshes_the_summary(qa, monkeypatch):
     from src.services import services
 
     d = create(qa)
@@ -260,7 +260,6 @@ def test_annotation_refreshes_summary_without_overwriting_manual_type(qa, monkey
         qa, d, "/questions", {"text": "Please explain the fictional orchard inspection procedure."}
     )
     qid = d["questions"][0]["id"]
-    d = mutate(qa, d, f"/questions/{qid}", {"type": "Confirm"}, "patch")
 
     class LLM:
         def generate(self, *args, **kwargs):
@@ -288,4 +287,4 @@ def test_annotation_refreshes_summary_without_overwriting_manual_type(qa, monkey
     )
     assert r.status_code == 200, r.text
     assert r.json()["questions"][0]["summary"] == "Orchard inspection procedure"
-    assert r.json()["questions"][0]["type"] == "Confirm"
+    assert "type" not in r.json()["questions"][0]

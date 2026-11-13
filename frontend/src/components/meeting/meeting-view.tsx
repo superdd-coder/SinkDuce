@@ -671,10 +671,15 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     }
   }, [recorder.isRecording, hasRealtimeProvider, realtimeEnabled])
 
-  // Fetch meetings list
+  // A refresh after archiving must start after the write, even if a poll is in flight.
+  const meetingListRequest = useRef<AbortController | null>(null)
   const fetchMeetings = useCallback(async () => {
+    meetingListRequest.current?.abort()
+    const request = new AbortController()
+    meetingListRequest.current = request
     try {
-      const list = await getMeetings()
+      const list = await getMeetings({ includeArchived: true, signal: request.signal })
+      if (request.signal.aborted) return
       // Newest created first (API also sorts; keep client stable if order drifts)
       const sorted = [...list].sort((a, b) => {
         const ta = new Date(a.created_at || a.updated_at || 0).getTime()
@@ -683,18 +688,30 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       })
       setMeetings(sorted)
     } catch { /* ignore */ }
+    finally {
+      if (meetingListRequest.current === request) meetingListRequest.current = null
+    }
   }, [])
 
+  const meetingGroupsRequest = useRef<AbortController | null>(null)
   const fetchGroups = useCallback(async () => {
+    meetingGroupsRequest.current?.abort()
+    const request = new AbortController()
+    meetingGroupsRequest.current = request
     try {
-      setGroups(await listMeetingGroups())
+      const list = await listMeetingGroups(request.signal)
+      if (!request.signal.aborted) setGroups(list)
     } catch { /* ignore */ }
+    finally {
+      if (meetingGroupsRequest.current === request) meetingGroupsRequest.current = null
+    }
   }, [])
 
   // Load collections for ID -> name mapping
   useEffect(() => {
     fetchCollections()
     void fetchGroups()
+    return () => meetingGroupsRequest.current?.abort()
   }, [fetchCollections, fetchGroups])
 
   // Fetch single meeting detail
@@ -753,7 +770,8 @@ export function MeetingView({ active = true }: { active?: boolean }) {
 
   // Load meetings on mount
   useEffect(() => {
-    fetchMeetings()
+    void fetchMeetings()
+    return () => meetingListRequest.current?.abort()
   }, [fetchMeetings])
 
   // Peer changed a meeting → refresh the list, and the open meeting's detail.
@@ -762,6 +780,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   useEffect(() => {
     const offList = subscribeDomain("meetings", () => {
       void fetchMeetings()
+      void fetchGroups()
     })
     const offDetail = activeMeeting
       ? subscribeDomain(`meeting:${activeMeeting}`, () => {
@@ -772,7 +791,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       offList()
       offDetail()
     }
-  }, [fetchMeetings, fetchMeeting, activeMeeting])
+  }, [fetchMeetings, fetchGroups, fetchMeeting, activeMeeting])
 
   // Load meeting detail when active changes — keep previous paint (no blank flash)
   useEffect(() => {
@@ -888,7 +907,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       fetchMeeting(activeMeeting)
       if (transcribing) fetchTranscript(activeMeeting)
       // Keep rail status labels (Transcribing / Summarizing) in sync
-      void fetchMeetings()
+      if (!meetingListRequest.current) void fetchMeetings()
     }, 2000)
     return () => {
       if (pollingRef.current) {
@@ -915,14 +934,15 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     if (!active) return
     const listBusy = meetings.some(
       (m) =>
-        m.status === "transcribing" ||
-        m.status === "recording" ||
-        (m.processing_state && m.processing_state !== "idle") ||
-        recordingMeetingId === m.id,
+        !m.archived &&
+        (m.status === "transcribing" ||
+          m.status === "recording" ||
+          (m.processing_state && m.processing_state !== "idle") ||
+          recordingMeetingId === m.id),
     )
     if (!listBusy) return
     const id = window.setInterval(() => {
-      void fetchMeetings()
+      if (!meetingListRequest.current) void fetchMeetings()
     }, 2500)
     return () => window.clearInterval(id)
   }, [active, meetings, recordingMeetingId, fetchMeetings])
@@ -1423,7 +1443,9 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     async (m: Meeting) => {
       try {
         const next = m.archived ? await unarchiveMeeting(m.id) : await archiveMeeting(m.id)
-        applyMeeting(next)
+        setMeeting((current) =>
+          current?.id === next.id ? mergeMeetingUpdate(current, next) : current,
+        )
         // Unarchiving a member also pulls its archived group card out of the
         // archive fold — refresh both surfaces.
         await Promise.all([fetchMeetings(), fetchGroups()])
@@ -1432,7 +1454,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
         toast.error(t("common.failedWithError", { error: formatApiError(err, t) }))
       }
     },
-    [applyMeeting, fetchMeetings, fetchGroups, t],
+    [fetchMeetings, fetchGroups, t],
   )
 
   const handleCreateGroupFromMeeting = useCallback(
@@ -1910,6 +1932,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     if (recordingMeetingId) return
     const orphan = meetings.find(
       (m) =>
+        !m.archived &&
         !sessionOwnedRecordingIdsRef.current.has(m.id) &&
         !m.audio_path &&
         !m.recording_live &&
@@ -1978,6 +2001,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
             >
             <MeetingGroupStage
               groupId={paintGroupId}
+              archived={groups.find((g) => g.id === paintGroupId)?.archived}
               meetings={meetings}
               onGroupChanged={() => { void fetchGroups() }}
               onRequestDeleteGroup={(gid) => setDeleteGroupTarget(gid)}

@@ -1,16 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
   DialogHeader,
-  DialogKicker,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Copy, Check, ArrowRight, Download, RefreshCw } from "lucide-react"
+import { ArrowRight, Check, ChevronRight, Copy, Download, RefreshCw } from "lucide-react"
 import type { UpdateInfo } from "@/hooks/use-update-check"
 import { openDesktopExternalUrl } from "@/api/client"
-import { desktopDmgAssetName } from "@/lib/update-release"
+import { releaseNotesForLocale } from "@/lib/update-release"
 import {
   beginDesktopUpdate,
   desktopUpdateStatus,
@@ -21,11 +20,17 @@ import {
 import { cn } from "@/lib/utils"
 import { copyText } from "@/lib/clipboard"
 import { useT } from "@/i18n/use-t"
+import { useAppStore } from "@/stores/app-store"
 
-/** Default path: pull the Hub image (compose pins :latest). External Docker
- * users have no git repo — the private one 404s — so no git step here.
- * Source builds use docker-compose.build.yml (mentioned below the card). */
 const UPDATE_COMMAND = "docker compose pull && \\\ndocker compose up -d"
+const BUILD_COMMAND = "docker compose -f docker-compose.build.yml up -d --build"
+const UPDATE_ACTION_LABELS = [
+  "update.updateNow",
+  "update.updateChecking",
+  "update.updateDownloading",
+  "update.updateInstalling",
+  "update.updateRestarting",
+] as const
 
 interface UpdateDialogProps {
   open: boolean
@@ -34,26 +39,54 @@ interface UpdateDialogProps {
   onIgnore?: () => void
 }
 
-/** Parse markdown-ish release body into plain text highlights. */
-function formatReleaseBody(body: string): string {
-  return body
-    .replace(/^###?\s+/gm, "— ")
-    .replace(/\*\*(.+?)\*\*/g, "$1")
-    .replace(/^[-*]\s/gm, "  · ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim()
-    .slice(0, 2000)
+function versionLabel(version: string) {
+  return version === "—" ? version : `v${version.replace(/^v/i, "")}`
+}
+
+function UpdateDisclosure({ label, children, open, onOpenChange }: {
+  label: string
+  children: ReactNode
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+}) {
+  const panelId = useId()
+  const [expanded, setExpanded] = useState(false)
+  const isOpen = open ?? expanded
+
+  return (
+    <div className="pm-update-details">
+      <button
+        type="button"
+        className="pm-update-details-toggle"
+        aria-expanded={isOpen}
+        aria-controls={panelId}
+        onClick={() => (onOpenChange ?? setExpanded)(!isOpen)}
+      >
+        <ChevronRight aria-hidden />{label}
+      </button>
+      <div id={panelId} className="pm-update-details-panel" inert={!isOpen} aria-hidden={!isOpen}>
+        <div className="pm-update-details-inner">{children}</div>
+      </div>
+    </div>
+  )
 }
 
 export function UpdateDialog({ open, onOpenChange, update, onIgnore }: UpdateDialogProps) {
   const t = useT()
+  const locale = useAppStore(s => s.locale)
   const [copied, setCopied] = useState(false)
   const [updaterStatus, setUpdaterStatus] = useState<DesktopUpdateStatus | null>(null)
+  const [manualInstallOpen, setManualInstallOpen] = useState(false)
   const [restarting, setRestarting] = useState(false)
   const pollRef = useRef<number | null>(null)
-  const closeButton = useRef<HTMLButtonElement>(null)
+  const title = useRef<HTMLHeadingElement>(null)
 
-  const updaterReady = update.desktop && desktopUpdaterAvailable()
+  const updaterReady = update.desktop && typeof window !== "undefined" && desktopUpdaterAvailable()
+
+  const recordUpdaterStatus = useCallback((status: DesktopUpdateStatus) => {
+    setUpdaterStatus(status)
+    if (status.phase === "failed") setManualInstallOpen(true)
+  }, [])
 
   const stopPolling = useCallback(() => {
     if (pollRef.current !== null) {
@@ -67,7 +100,7 @@ export function UpdateDialog({ open, onOpenChange, update, onIgnore }: UpdateDia
     pollRef.current = window.setInterval(async () => {
       const status = await desktopUpdateStatus()
       if (!status) return
-      setUpdaterStatus(status)
+      recordUpdaterStatus(status)
       if (status.phase === "ready") {
         stopPolling()
         setRestarting(true)
@@ -77,7 +110,7 @@ export function UpdateDialog({ open, onOpenChange, update, onIgnore }: UpdateDia
         stopPolling()
       }
     }, 400)
-  }, [stopPolling])
+  }, [recordUpdaterStatus, stopPolling])
 
   // Resume if the shell is mid-flight (dialog reopened while it downloads).
   useEffect(() => {
@@ -90,33 +123,33 @@ export function UpdateDialog({ open, onOpenChange, update, onIgnore }: UpdateDia
         status.phase === "downloading" ||
         status.phase === "installing"
       ) {
-        setUpdaterStatus(status)
+        recordUpdaterStatus(status)
         startPolling()
       } else if (status.phase === "failed" || status.phase === "none_available") {
-        setUpdaterStatus(status)
+        recordUpdaterStatus(status)
       }
     })
     return () => {
       cancelled = true
       stopPolling()
     }
-  }, [updaterReady, startPolling, stopPolling])
+  }, [updaterReady, recordUpdaterStatus, startPolling, stopPolling])
 
   const handleUpdateNow = useCallback(async () => {
-    setUpdaterStatus({ phase: "checking" })
+    recordUpdaterStatus({ phase: "checking" })
     try {
       await beginDesktopUpdate()
     } catch (err) {
       // Surface the shell's real rejection reason (ACL, missing command, …)
       // instead of a blanket "unsupported shell" claim.
-      setUpdaterStatus({
+      recordUpdaterStatus({
         phase: "failed",
         message: String(err).slice(0, 300) || "invoke rejected",
       })
       return
     }
     startPolling()
-  }, [startPolling])
+  }, [recordUpdaterStatus, startPolling])
 
   const handleCopy = async () => {
     try {
@@ -128,7 +161,13 @@ export function UpdateDialog({ open, onOpenChange, update, onIgnore }: UpdateDia
     }
   }
 
-  const releaseNotes = formatReleaseBody(update.releaseBody)
+  function handleDownload() {
+    const url = update.downloadUrl
+    if (!url) return
+    void openDesktopExternalUrl(url).catch(() => window.open(url, "_blank", "noopener,noreferrer"))
+  }
+
+  const releaseNotes = releaseNotesForLocale(update.releaseBody, locale)
 
   const updaterBusy =
     restarting ||
@@ -138,15 +177,17 @@ export function UpdateDialog({ open, onOpenChange, update, onIgnore }: UpdateDia
         updaterStatus.phase === "installing" ||
         updaterStatus.phase === "ready"))
 
-  let updateLabel = t("update.updateNow")
+  const downloading = updaterStatus?.phase === "downloading"
+  let updateLabel: typeof UPDATE_ACTION_LABELS[number] = "update.updateNow"
   let updatePercent: number | null = null
   let updatePercentUnknown = false
   if (restarting) {
-    updateLabel = t("update.updateRestarting")
+    updateLabel = "update.updateRestarting"
+    updatePercent = 100
   } else if (updaterStatus?.phase === "checking") {
-    updateLabel = t("update.updateChecking")
-  } else if (updaterStatus?.phase === "downloading") {
-    updateLabel = t("update.updateDownloading")
+    updateLabel = "update.updateChecking"
+  } else if (downloading) {
+    updateLabel = "update.updateDownloading"
     if (updaterStatus.total) {
       updatePercent = Math.min(
         100,
@@ -156,139 +197,117 @@ export function UpdateDialog({ open, onOpenChange, update, onIgnore }: UpdateDia
       updatePercentUnknown = true
     }
   } else if (updaterStatus?.phase === "installing" || updaterStatus?.phase === "ready") {
-    updateLabel = t("update.updateInstalling")
+    updateLabel = "update.updateInstalling"
+    updatePercent = 100
   }
 
   const updaterFailed = updaterStatus?.phase === "failed"
   const updaterNoneAvailable = updaterStatus?.phase === "none_available"
 
+  const notesList = (
+    <ul className="pm-update-notes" lang={releaseNotes.language}>
+      {releaseNotes.items.map((note, index) => <li key={index}>{note}</li>)}
+    </ul>
+  )
+  const downloadButton = (
+    <Button
+      type="button"
+      size="sm"
+      variant={updaterReady ? "outline" : "default"}
+      className={updaterReady ? undefined : "pm-update-primary"}
+      disabled={!update.downloadUrl}
+      onClick={handleDownload}
+    >
+      <Download aria-hidden />
+      {update.downloadUrl ? t("update.downloadInstaller") : t("update.installerNotReady")}
+    </Button>
+  )
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className={cn(
-          "pm-dialog pm-dialog--silk pm-update-dialog",
-          "sm:max-w-lg min-h-[min(70vh,32rem)] max-h-[min(90vh,44rem)]",
-          "flex flex-col gap-0 overflow-hidden p-0",
-          "!animate-none data-open:!animate-none data-closed:!animate-none",
-        )}
-        overlayClassName="pm-dialog-overlay--silk"
-        initialFocus={closeButton}
-      >
-        <DialogHeader className="pm-update-dialog-head shrink-0">
-          <DialogKicker>{t("update.release")}</DialogKicker>
-          <DialogTitle>{t("update.updateAvailable")}</DialogTitle>
+      <DialogContent className="pm-update-dialog" initialFocus={title}>
+        <DialogHeader className="pm-update-dialog-head">
+          <DialogTitle ref={title} tabIndex={-1}>{t("update.updateAvailable")}</DialogTitle>
         </DialogHeader>
 
-        <div className="pm-update-dialog-body min-h-0 flex-1 overflow-y-auto">
-          {/* Version path */}
-          <div className="pm-update-ver-row" aria-label={t("update.versionChange")}>
-            <span className="pm-update-ver-chip is-muted">
-              <span className="pm-update-ver-chip-label">{t("update.current")}</span>
-              <span className="pm-update-ver-chip-val">
-                v{update.currentVersion.replace(/^v/, "")}
-              </span>
-            </span>
-            <ArrowRight className="pm-update-ver-arrow" strokeWidth={1.75} aria-hidden />
-            <span className="pm-update-ver-chip is-new">
-              <span className="pm-update-ver-chip-label">{t("update.latest")}</span>
-              <span className="pm-update-ver-chip-val">
-                {update.latestVersion.startsWith("v")
-                  ? update.latestVersion
-                  : `v${update.latestVersion}`}
-              </span>
-            </span>
-          </div>
+        <div className="pm-update-dialog-body">
+          <section className="pm-update-version-card" aria-label={t("update.versionChange")}>
+            <div className="pm-update-installed">
+              <span>{t("update.current")}</span>
+              <strong>{versionLabel(update.currentVersion)}</strong>
+            </div>
+            <ArrowRight size={16} strokeWidth={1.5} aria-hidden />
+            <div className="pm-update-version">
+              <span>{t("update.latest")}</span>
+              <strong>{versionLabel(update.latestVersion)}</strong>
+            </div>
+          </section>
 
-          {releaseNotes ? (
-            <section
-              className="pm-update-card pm-update-card--notes"
-              aria-label={t("update.releaseNotes")}
-            >
-              <h3 className="pm-update-card-label">{t("update.whatsNew")}</h3>
-              <div className="pm-update-notes">{releaseNotes}</div>
-            </section>
-          ) : null}
-
-          {update.desktop ? (
-            <section className="pm-update-card" aria-label={t("update.howToUpdate")}>
-              <h3 className="pm-update-card-label">{t("update.howToUpdate")}</h3>
-              <p className="pm-update-help">
-                {t("update.desktopHelp", {
-                  file: desktopDmgAssetName(update.latestVersion),
-                })}
-              </p>
+          {releaseNotes.items.length > 0 && (releaseNotes.language === locale ? (
+            <section className="pm-update-highlights" aria-label={t("update.releaseNotes")}>
+              <h3>{t("update.whatsNew")}</h3>
+              {notesList}
             </section>
           ) : (
-            <section className="pm-update-card" aria-label={t("update.howToUpdate")}>
-              <div className="pm-update-card-head-row">
-                <h3 className="pm-update-card-label">{t("update.howToUpdate")}</h3>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className={cn(
-                    "pm-update-cmd-copy",
-                    copied && "is-copied",
-                  )}
-                  onClick={() => { void handleCopy() }}
-                >
-                  {copied ? (
-                    <>
-                      <Check className="h-3.5 w-3.5" strokeWidth={2} />
-                      {t("common.copied")}
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-3.5 w-3.5" strokeWidth={1.75} />
-                      {t("common.copy")}
-                    </>
-                  )}
-                </Button>
+            <UpdateDisclosure label={t("update.originalReleaseNotes")}>
+              {notesList}
+            </UpdateDisclosure>
+          ))}
+
+          {update.desktop ? (
+            <UpdateDisclosure
+              label={t("update.manualInstall")}
+              open={manualInstallOpen}
+              onOpenChange={setManualInstallOpen}
+            >
+              <div className="pm-update-details-content">
+                <p>{t("update.desktopHelp")}</p>
+                {updaterReady && downloadButton}
               </div>
-              <p className="pm-update-help">
-                {t("update.dockerHelp")}
-              </p>
-              <div className="pm-update-cmd">
-                <pre className="pm-update-cmd-pre">{UPDATE_COMMAND}</pre>
-              </div>
-              <p className="pm-update-help" style={{ marginTop: "0.65rem" }}>
-                {t("update.buildFromSource", {
-                  command:
-                    "docker compose -f docker-compose.build.yml up -d --build",
-                })}
-              </p>
+            </UpdateDisclosure>
+          ) : (
+            <section className="pm-update-docker" aria-label={t("update.howToUpdate")}>
+              <p>{t("update.dockerHelp")}</p>
+              <pre className="pm-update-command"><code>{UPDATE_COMMAND}</code></pre>
+              <UpdateDisclosure label={t("update.buildFromSource")}>
+                <pre className="pm-update-command"><code>{BUILD_COMMAND}</code></pre>
+              </UpdateDisclosure>
             </section>
           )}
         </div>
 
-        {updaterStatus?.phase === "downloading" ? (
-          <div className="pm-update-progress" aria-hidden>
+        <div className="pm-update-dialog-foot">
+          <div
+            className="pm-update-progress"
+            role={downloading ? "progressbar" : undefined}
+            aria-hidden={!downloading || undefined}
+            aria-label={downloading ? t("update.updateDownloading") : undefined}
+            aria-valuenow={downloading ? updatePercent ?? undefined : undefined}
+          >
             <div
               className={cn("pm-update-progress-fill", updatePercentUnknown && "is-unknown")}
               style={updatePercentUnknown ? undefined : { width: `${updatePercent ?? 0}%` }}
             />
           </div>
-        ) : null}
+          {updaterFailed && (
+            <div className="pm-update-feedback is-error">
+              <p role="alert">{t("update.updateFailed")}</p>
+              {updaterStatus?.message && updaterStatus.message !== "unsupported-shell" && (
+                <UpdateDisclosure label={t("update.errorDetails")}>
+                  <p className="pm-update-error-text">{updaterStatus.message}</p>
+                </UpdateDisclosure>
+              )}
+            </div>
+          )}
+          {updaterNoneAvailable && <p className="pm-update-feedback" role="status">{t("update.alreadyLatest")}</p>}
 
-        {/* Plain footer — avoid DialogFooter flex-col-reverse / justify-end defaults */}
-        <div className="pm-update-dialog-foot shrink-0">
-          {updaterFailed ? (
-            <p className="pm-update-foot-error">
-              {t("update.updateFailed")}
-              {updaterStatus?.message && updaterStatus.message !== "unsupported-shell" ? (
-                <span>（{updaterStatus.message}）</span>
-              ) : null}
-            </p>
-          ) : updaterNoneAvailable ? (
-            <p className="pm-update-foot-note">{t("update.alreadyLatest")}</p>
-          ) : null}
           <div className="pm-update-foot-actions">
             {onIgnore && (
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="pm-update-foot-link pm-update-foot-ignore"
+                className="pm-update-ignore"
                 disabled={updaterBusy}
                 onClick={() => {
                   onIgnore()
@@ -298,91 +317,20 @@ export function UpdateDialog({ open, onOpenChange, update, onIgnore }: UpdateDia
                 {t("shell.ignoreVersion")}
               </Button>
             )}
-            {update.desktop ? (
-              <>
-                <Button
-                  ref={closeButton}
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="pm-update-foot-link"
-                  onClick={() => onOpenChange(false)}
-                >
-                  {t("common.close")}
-                </Button>
-                {updaterReady ? (
-                  <>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="pm-update-foot-link"
-                      disabled={!update.downloadUrl}
-                      onClick={() => {
-                        if (!update.downloadUrl) return
-                        void openDesktopExternalUrl(update.downloadUrl).catch(() => {
-                          window.open(update.downloadUrl!, "_blank", "noopener,noreferrer")
-                        })
-                      }}
-                    >
-                      <Download className="h-3.5 w-3.5" strokeWidth={1.75} />
-                      {update.downloadUrl
-                        ? t("update.downloadVersion", {
-                            version: update.latestVersion.startsWith("v")
-                              ? update.latestVersion
-                              : `v${update.latestVersion}`,
-                          })
-                        : t("update.installerNotReady")}
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      className="pm-update-foot-close"
-                      disabled={updaterBusy}
-                      onClick={() => {
-                        void handleUpdateNow()
-                      }}
-                    >
-                      <RefreshCw
-                        className={cn("h-3.5 w-3.5", updaterBusy && "animate-spin")}
-                        strokeWidth={1.75}
-                      />
-                      {updateLabel}
-                    </Button>
-                  </>
-                ) : (
-                  <Button
-                    type="button"
-                    size="sm"
-                    className="pm-update-foot-close"
-                    disabled={!update.downloadUrl}
-                    onClick={() => {
-                      if (!update.downloadUrl) return
-                      void openDesktopExternalUrl(update.downloadUrl).catch(() => {
-                        window.open(update.downloadUrl!, "_blank", "noopener,noreferrer")
-                      })
-                    }}
-                  >
-                    <Download className="h-3.5 w-3.5" strokeWidth={1.75} />
-                    {update.downloadUrl
-                      ? t("update.downloadVersion", {
-                          version: update.latestVersion.startsWith("v")
-                            ? update.latestVersion
-                            : `v${update.latestVersion}`,
-                        })
-                      : t("update.installerNotReady")}
-                  </Button>
-                )}
-              </>
-            ) : (
-              <Button
-                ref={closeButton}
-                type="button"
-                size="sm"
-                className="pm-update-foot-close"
-                onClick={() => onOpenChange(false)}
-              >
-                {t("common.close")}
+            {update.desktop ? (updaterReady ? (
+              <Button type="button" size="sm" className="pm-update-primary" disabled={updaterBusy}
+                onClick={() => { void handleUpdateNow() }}>
+                <RefreshCw className={cn(updaterBusy && "animate-spin")} aria-hidden />
+                <span className="pm-update-action-labels">
+                  {UPDATE_ACTION_LABELS.map(label => (
+                    <span key={label} aria-hidden={label !== updateLabel || undefined}>{t(label)}</span>
+                  ))}
+                </span>
+              </Button>
+            ) : downloadButton) : (
+              <Button type="button" size="sm" className="pm-update-primary" onClick={() => { void handleCopy() }}>
+                {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+                {copied ? t("common.copied") : t("update.copyCommand")}
               </Button>
             )}
           </div>

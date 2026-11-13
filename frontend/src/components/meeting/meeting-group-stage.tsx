@@ -40,6 +40,7 @@ function findTranscriptHit(
 
 export function MeetingGroupStage({
   groupId,
+  archived,
   meetings,
   onGroupChanged,
   onRequestDeleteGroup,
@@ -47,6 +48,7 @@ export function MeetingGroupStage({
   onToggleArchiveGroup,
 }: {
   groupId: string
+  archived?: boolean
   meetings: Meeting[]
   onGroupChanged: (g: MeetingGroup) => void
   /** Delete is confirmed by the parent dialog (cascade deletes member meetings). */
@@ -196,12 +198,10 @@ export function MeetingGroupStage({
     }
   }
 
+  const groupArchived = archived ?? group?.archived ?? false
   const handleToggleArchive = () => {
     if (!group) return
-    const next = !group.archived
-    // Flip locally so the button tracks the state; parent refreshes both lists.
-    setGroup({ ...group, archived: next })
-    onToggleArchiveGroup(group.id, next)
+    onToggleArchiveGroup(group.id, !groupArchived)
   }
 
   const metaCreated = group?.created_at
@@ -284,12 +284,12 @@ export function MeetingGroupStage({
               <button
                 type="button"
                 className="pm-meeting-card-btn"
-                title={group?.archived ? t("meeting.unarchiveGroup") : t("meeting.archiveGroup")}
-                aria-label={group?.archived ? t("meeting.unarchiveGroup") : t("meeting.archiveGroup")}
+                title={groupArchived ? t("meeting.unarchiveGroup") : t("meeting.archiveGroup")}
+                aria-label={groupArchived ? t("meeting.unarchiveGroup") : t("meeting.archiveGroup")}
                 onClick={handleToggleArchive}
               >
-                {group?.archived ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
-                <span>{group?.archived ? t("meeting.unarchiveGroup") : t("meeting.archiveGroup")}</span>
+                {groupArchived ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
+                <span>{groupArchived ? t("meeting.unarchiveGroup") : t("meeting.archiveGroup")}</span>
               </button>
               <button
                 type="button"

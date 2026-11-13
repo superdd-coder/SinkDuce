@@ -40,10 +40,16 @@ def test_dialog_branches_desktop_download_vs_docker_compose():
     text = DIALOG.read_text(encoding="utf-8")
     assert "update.desktop" in text
     assert "update.downloadUrl" in text
-    assert "desktopDmgAssetName" in text
     assert 't("update.desktopHelp"' in text
-    assert 't("update.downloadVersion"' in text
+    assert 't("update.manualInstall")' in text
+    assert 't("update.downloadInstaller")' in text
+    assert 't("update.copyCommand")' in text
     assert "docker compose pull" in text
     assert "docker compose up -d" in text
-    en = (ROOT / "frontend" / "src" / "i18n" / "en.json").read_text(encoding="utf-8")
-    assert "Cmd+Q" in en
+
+
+def test_update_dialog_uses_one_version_card_and_localizes_notes():
+    text = DIALOG.read_text(encoding="utf-8")
+    assert text.count('className="pm-update-version-card"') == 1
+    assert "releaseNotesForLocale(update.releaseBody, locale)" in text
+    assert 't("update.originalReleaseNotes")' in text

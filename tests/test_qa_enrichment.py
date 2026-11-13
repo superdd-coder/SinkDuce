@@ -1,11 +1,11 @@
-"""Derived labels survive normal edits and never replace explicit types."""
+"""Derived summaries survive ordinary edits and stay version-scoped."""
 
 import json
 
 from tests.test_qa import create, mutate, qa_fixture  # noqa: F401
 
 
-def test_compact_classification_response_updates_types_and_truncates_summary(qa, monkeypatch):
+def test_summary_without_question_type_completes_enrichment(qa, monkeypatch):
     from src.qa.pipeline import summarize
     from src.services import services
 
@@ -14,8 +14,11 @@ def test_compact_classification_response_updates_types_and_truncates_summary(qa,
     )
     qid = d["questions"][0]["id"]
 
+    calls = []
+
     class LLM:
-        def generate(self, *args, **kwargs):
+        def generate(self, prompt, **kwargs):
+            calls.append(prompt)
             return json.dumps(
                 {
                     "rows": [
@@ -23,7 +26,6 @@ def test_compact_classification_response_updates_types_and_truncates_summary(qa,
                             "key": qid,
                             "summary": "Garden " * 50,
                             "reply_summary": "",
-                            "type": "Clarify",
                         }
                     ]
                 }
@@ -31,13 +33,14 @@ def test_compact_classification_response_updates_types_and_truncates_summary(qa,
 
     monkeypatch.setattr(services, "llm", LLM())
     summarize("col_qa", d["id"], d["revision"])
+    summarize("col_qa", d["id"], d["revision"])
     result = qa[0].get(f"{qa[1]}/lists/{d['id']}").json()
-    assert result["questions"][0]["type"] == "Clarify"
-    assert len(result["questions"][0]["summary"]) <= 240
+    assert len(result["questions"][0]["summary"]) == 240
     assert result["annotation_pending"] == 0
+    assert len(calls) == 1 and '"question_types"' not in calls[0]
 
 
-def test_rename_during_classification_does_not_discard_results(qa, monkeypatch):
+def test_rename_during_summarization_does_not_discard_results(qa, monkeypatch):
     from src.qa.pipeline import summarize
     from src.services import services
 
@@ -53,7 +56,6 @@ def test_rename_during_classification_does_not_discard_results(qa, monkeypatch):
                             "key": d["questions"][0]["id"],
                             "summary": "Seed catalogue",
                             "reply_summary": "",
-                            "type": "Provide",
                         }
                     ]
                 }
@@ -63,17 +65,16 @@ def test_rename_during_classification_does_not_discard_results(qa, monkeypatch):
     summarize("col_qa", d["id"], d["revision"])
     result = qa[0].get(f"{qa[1]}/lists/{d['id']}").json()
     assert result["title"] == "Updated garden checklist"
-    assert result["questions"][0]["type"] == "Provide"
+    assert result["questions"][0]["summary"] == "Seed catalogue"
 
 
-def test_unavailable_classification_is_retryable_without_overwriting_manual_type(qa, monkeypatch):
+def test_unavailable_summarization_is_retryable(qa, monkeypatch):
     from src.services import services
 
     d = mutate(
         qa, create(qa), "/questions", {"text": "Confirm the invented greenhouse opening hours."}
     )
     qid = d["questions"][0]["id"]
-    d = mutate(qa, d, f"/questions/{qid}", {"type": "Confirm"}, "patch")
     path = f"{qa[1]}/lists/{d['id']}/annotations"
     monkeypatch.setattr(services, "llm", None)
     failed = qa[0].post(
@@ -91,7 +92,6 @@ def test_unavailable_classification_is_retryable_without_overwriting_manual_type
                             "key": qid,
                             "summary": "Opening hours",
                             "reply_summary": "",
-                            "type": "Clarify",
                         }
                     ]
                 }
@@ -104,11 +104,11 @@ def test_unavailable_classification_is_retryable_without_overwriting_manual_type
         .json()
     )
     assert ready["annotation_state"] == "ready"
-    assert ready["questions"][0]["type"] == "Confirm"
+    assert ready["questions"][0]["summary"] == "Opening hours"
     assert ready["revision"] == d["revision"]
 
 
-def test_unknown_type_does_not_become_an_ai_confirmed_other(qa, monkeypatch):
+def test_legacy_type_in_model_response_is_ignored(qa, monkeypatch):
     from src.qa.pipeline import summarize
     from src.services import services
 
@@ -132,11 +132,11 @@ def test_unknown_type_does_not_become_an_ai_confirmed_other(qa, monkeypatch):
     monkeypatch.setattr(services, "llm", LLM())
     summarize("col_qa", d["id"], d["revision"])
     result = qa[0].get(f"{qa[1]}/lists/{d['id']}").json()
-    assert result["questions"][0]["type_origin"] == "default"
-    assert result["annotation_state"] == "partial"
+    assert "type" not in result["questions"][0]
+    assert result["annotation_state"] == "ready"
 
 
-def test_editing_original_text_during_classification_discards_outdated_annotation(qa, monkeypatch):
+def test_editing_original_text_during_summarization_discards_outdated_annotation(qa, monkeypatch):
     from src.qa.pipeline import summarize
     from src.services import services
 
@@ -148,19 +148,16 @@ def test_editing_original_text_during_classification_discards_outdated_annotatio
             mutate(
                 qa, d, f"/questions/{qid}", {"text": "Provide a fictional tool inventory."}, "patch"
             )
-            return json.dumps(
-                {"rows": [{"key": qid, "summary": "Nursery schedule", "type": "Clarify"}]}
-            )
+            return json.dumps({"rows": [{"key": qid, "summary": "Nursery schedule"}]})
 
     monkeypatch.setattr(services, "llm", LLM())
     summarize("col_qa", d["id"], d["revision"])
     result = qa[0].get(f"{qa[1]}/lists/{d['id']}").json()
     assert result["questions"][0]["summary"] == ""
-    assert result["questions"][0]["type_origin"] == "default"
     assert result["annotation_pending"] == 1
 
 
-def test_classification_never_writes_to_a_historical_version(qa, monkeypatch):
+def test_summarization_never_writes_to_a_historical_version(qa, monkeypatch):
     from src.services import services
 
     d = mutate(qa, create(qa), "/questions", {"text": "Confirm the imaginary seed count."})

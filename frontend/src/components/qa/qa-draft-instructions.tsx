@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react"
-import { ArrowUp, Check, FileText, FolderOpen, Loader2, Plus, RotateCcw, Upload, X } from "lucide-react"
+import { ArrowUp, Check, FileText, FolderOpen, Loader2, Paperclip, RotateCcw, Upload, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useT } from "@/i18n/use-t"
 import { getQaMaterials, getQaMaterialVersion, retryQaMaterial, uploadQaMaterial, type QaMaterial } from "@/api/client"
@@ -20,6 +20,7 @@ export function QaDraftInstructions({ collectionId, listId, panelId, followUp, d
 }) {
   const t = useT()
   const input = useRef<HTMLInputElement>(null)
+  const textarea = useRef<HTMLTextAreaElement>(null)
   const work = useRef<AbortController | null>(null)
   const libraryRequest = useRef<AbortController | null>(null)
   const sending = useRef(false)
@@ -35,6 +36,12 @@ export function QaDraftInstructions({ collectionId, listId, panelId, followUp, d
   const [libraryFailed, setLibraryFailed] = useState(false)
 
   useEffect(() => () => { work.current?.abort(); libraryRequest.current?.abort() }, [])
+  useEffect(() => {
+    const field = textarea.current
+    if (!field || CSS.supports("field-sizing", "content")) return
+    field.style.height = "auto"
+    field.style.height = `${field.scrollHeight}px`
+  }, [guidance])
   useEffect(() => {
     const pending = attached.filter(waiting)
     if (!pending.length) return
@@ -182,26 +189,24 @@ export function QaDraftInstructions({ collectionId, listId, panelId, followUp, d
             <Button type="button" size="icon-xs" variant="ghost" disabled={blocked} aria-label={t("qa.aiRemoveAttachment", { name: item.filename })} onClick={() => setAttached(current => current.filter(entry => entry.pinnedVersion !== item.pinnedVersion))}><X /></Button>
           </li>
         })}</ul>}
-        <textarea className="pm-chat-composer-textarea" autoFocus maxLength={32767} rows={1} aria-label={t("qa.aiGuidance")} value={guidance}
-          placeholder={t(followUp ? "qa.aiRevisePlaceholder" : "qa.aiGuidancePlaceholder")}
-          onChange={event => setGuidance(event.target.value)} onKeyDown={event => {
-            if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229) return
-            event.preventDefault()
-            void submit()
-          }} />
-        <div className="pm-chat-composer-tools qa-draft-compose-tools">
-          <div className="qa-draft-compose-add">
-            <QaActionMenu label={t("qa.aiAddAttachment")} icon={<Plus />} disabled={blocked}>
-              <QaMenuItem disabled={attached.length >= maxAttachments} onClick={() => input.current?.click()}><Upload />{t("qa.aiUploadMaterial")}</QaMenuItem>
-              <QaMenuItem onClick={chooseMaterials}><FolderOpen />{t("qa.aiChooseMaterial")}</QaMenuItem>
-            </QaActionMenu>
-            {fileBusy && <span className="qa-meta" role="status">{t("qa.processing")}</span>}
-          </div>
-          <Button type="submit" size="icon-sm" className="pm-chat-composer-send" aria-label={sendLabel} title={sendLabel} disabled={!canSend}>
+        <div className="qa-draft-compose-row">
+          <QaActionMenu label={t("qa.aiAddAttachment")} icon={<Paperclip aria-hidden />} disabled={blocked}>
+            <QaMenuItem disabled={attached.length >= maxAttachments} onClick={() => input.current?.click()}><Upload />{t("qa.aiUploadMaterial")}</QaMenuItem>
+            <QaMenuItem onClick={chooseMaterials}><FolderOpen />{t("qa.aiChooseMaterial")}</QaMenuItem>
+          </QaActionMenu>
+          <textarea ref={textarea} className="qa-draft-guidance" autoFocus maxLength={32767} rows={1} aria-label={t("qa.aiGuidance")} value={guidance}
+            placeholder={t(followUp ? "qa.aiRevisePlaceholder" : "qa.aiGuidancePlaceholder")}
+            onChange={event => setGuidance(event.target.value)} onKeyDown={event => {
+              if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229) return
+              event.preventDefault()
+              void submit()
+            }} />
+          <Button type="submit" size="icon-sm" className="qa-draft-compose-send" aria-label={sendLabel} title={sendLabel} disabled={!canSend}>
             <ArrowUp aria-hidden className="size-4" strokeWidth={2} />
           </Button>
         </div>
       </div>
+      {fileBusy && <p className="qa-meta" role="status">{t("qa.processing")}</p>}
       {notice && <p className="qa-notice" role="alert">{t(notice, { count: maxAttachments })}</p>}
     </form>
   </div>

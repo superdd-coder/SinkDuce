@@ -99,9 +99,9 @@ def test_detect_main_region_and_keep_unrecognized_columns(qa):
     assert p["sheet"] == "Register"
     assert p["header_row"] == 4
     assert p["region"]["start_column"] == 2
-    assert p["mapping"]["extras"] == [6, 7]
+    assert p["mapping"]["extras"] == [5, 6, 7]
     assert p["mapping"]["status"] == 4
-    assert p["mapping"]["type"] == 5
+    assert "type" not in p["mapping"]
     assert [r["key"] for r in p["rows"]] == ["6", "7"]
     assert p["mapping_valid"] is True
     assert {r["kind"] for r in p["table_rows"]} >= {"question", "section"}
@@ -112,9 +112,10 @@ def test_custom_options_fields_and_original_layout_round_trip(qa):
     raw = sample()
     d = commit(qa, d, upload_blob(qa, d, raw))
     assert {o["label"] for o in d["options"]["statuses"]} >= {"Verified", "Deferred"}
-    assert {o["label"] for o in d["options"]["types"]} >= {"Visitor access", "Operations"}
+    assert "types" not in d["options"]
     q = d["questions"][0]
     assert {f["label"]: f["value"] for f in q["fields"]} == {
+        "Category": "Visitor access",
         "Coordinator": "Desk team",
         "Capacity": 37,
     }
@@ -131,6 +132,7 @@ def test_custom_options_fields_and_original_layout_round_trip(qa):
     assert wb.sheetnames == ["Welcome", "Register", "Calculations"]
     ws = wb["Register"]
     assert ws["D6"].value == "=Keep this as literal text" and ws["D6"].data_type == "s"
+    assert ws["F6"].value == "Visitor access"
     assert ws["H6"].value == 37 and ws["H6"].data_type == "n"
     assert ws["C6"].fill.fgColor.rgb == "00DDEEFF"
     assert ws.column_dimensions["C"].width == 52
@@ -284,7 +286,7 @@ def test_corrected_identity_moves_original_layout_and_extra_fields(qa):
     assert ws["C6"].value == q["text"] and ws["G6"].value == "Desk team"
 
 
-def test_section_type_is_inherited_in_system_without_filling_original_blanks(qa):
+def test_section_field_is_inherited_without_filling_original_blanks(qa):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.append(["Index", "Date", "Type", "Question", "Response"])
@@ -301,7 +303,7 @@ def test_section_type_is_inherited_in_system_without_filling_original_blanks(qa)
     assert p["mapping_valid"]
     d = commit(qa, d, p)
     q = d["questions"][0]
-    assert next(o["label"] for o in d["options"]["types"] if o["id"] == q["type"]) == "Exhibition"
+    assert next(f["value"] for f in q["fields"] if f["label"] == "Type") == "Exhibition"
     ws = openpyxl.load_workbook(BytesIO(exported(qa, d))).active
     assert ws["C2"].value == "Exhibition" and ws["C3"].value is None
 
@@ -335,6 +337,7 @@ def test_legacy_database_migration_keeps_questions_replies_and_foreign_keys(qa):
         "type TEXT NOT NULL CHECK(type IN ('Clarify','Provide','Confirm','Revise','Other')),",
     )
     with conn:
+        conn.execute("UPDATE qa_version_questions SET type='Other'")
         conn.execute(constrained)
         conn.execute("INSERT INTO qa_old_questions SELECT * FROM qa_version_questions")
         conn.execute("DROP TABLE qa_version_questions")
