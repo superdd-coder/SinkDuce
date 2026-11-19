@@ -45,7 +45,7 @@ class SourceImages:
             if version:
                 if not _ID.fullmatch(version):
                     return None
-                root = root / version  # Never search another version for a missing asset.
+                root = storage_paths.version_dir(collection, file_id, version)
             if not version:
                 path = storage_paths.find_image_file(collection, file_id, image_id)
                 if path and path.resolve().is_relative_to(root.resolve()) and path.stat().st_size <= MAX_ASSET_BYTES:

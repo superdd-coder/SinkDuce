@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.http_client import local_owner_client
 
 from src.file_mgmt.store import COLLECTIONS_DIR, get_db, init_collection_db
 
@@ -46,7 +47,7 @@ def test_rollback_makes_target_current_and_hard_deletes_later():
 
     coll = f"rb-{uuid.uuid4().hex[:8]}"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
     folder_id = _folder(client, coll)
 
     # v1
@@ -61,7 +62,7 @@ def test_rollback_makes_target_current_and_hard_deletes_later():
     assert v1
 
     # v2
-    with patch("src.file_mgmt.service._mark_qdrant_chunks_archived", return_value=0):
+    with patch("src.file_mgmt.files._mark_qdrant_chunks_archived", return_value=0):
         r2 = client.post(
             f"/api/file-mgmt/{coll}/files/{file_id}/versions",
             files={"file": ("a.txt", b"version two", "text/plain")},
@@ -72,7 +73,7 @@ def test_rollback_makes_target_current_and_hard_deletes_later():
     assert v2 and v2 != v1
 
     # v3
-    with patch("src.file_mgmt.service._mark_qdrant_chunks_archived", return_value=0):
+    with patch("src.file_mgmt.files._mark_qdrant_chunks_archived", return_value=0):
         r3 = client.post(
             f"/api/file-mgmt/{coll}/files/{file_id}/versions",
             files={"file": ("a.txt", b"version three", "text/plain")},
@@ -82,15 +83,15 @@ def test_rollback_makes_target_current_and_hard_deletes_later():
     v3 = r3.json().get("version_id") or r3.json().get("current_version_id")
     assert v3
 
-    root = Path("data/collections") / coll / "files" / file_id
+    root = COLLECTIONS_DIR / coll / "files" / file_id
     assert (root / v1 / "a.txt").is_file()
     assert (root / v2 / "a.txt").is_file()
     assert (root / v3 / "a.txt").is_file()
 
     with patch(
-        "src.file_mgmt.service._restore_qdrant_version_as_current", return_value=0
+        "src.file_mgmt.files._restore_qdrant_version_as_current", return_value=0
     ), patch(
-        "src.file_mgmt.service._delete_qdrant_chunks_by_version_id", return_value=0
+        "src.file_mgmt.files._delete_qdrant_chunks_by_version_id", return_value=0
     ):
         rb = client.post(
             f"/api/file-mgmt/{coll}/files/{file_id}/versions/{v1}/rollback"
@@ -131,7 +132,7 @@ def test_rollback_refuses_current_version():
 
     coll = f"rb-cur-{uuid.uuid4().hex[:8]}"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
     folder_id = _folder(client, coll)
 
     r1 = client.post(

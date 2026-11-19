@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.atomic_io import write_text_atomic
+from src.chatbox.history_access import ChatSources
 from src.reports.models import FORMAT_TYPES, MAX_CITATIONS, RENDERER_VERSION, validate_content, validate_caption_pages
 from src.reports.reviews import HIGHLIGHT_VERSION, ReviewsMixin, compute_changes, compute_verified_changes, text_changes
 from src.reports.blocks import content_hash, index_blocks, resolve_edits, apply_resolved, operation_summaries
@@ -19,6 +20,13 @@ from src.reports.decisions import DecisionsMixin, evolve, project, diff_edits
 
 _LOCK = threading.RLock()
 _ID = re.compile(r"[A-Za-z0-9_-]{1,200}\Z")
+
+
+def _require_report_sources(sources: ChatSources):
+    try:
+        sources.require_current()
+    except PermissionError:
+        raise FileNotFoundError("Report not found") from None
 
 
 class ReportStore(DecisionsMixin, ReviewsMixin):
@@ -30,6 +38,8 @@ class ReportStore(DecisionsMixin, ReviewsMixin):
         self._deleted = set()
         self._session_generations = {}
         self._session_scope = None
+        self._turn_sources = None
+        self._legacy_sources = {}
         self._block_cache = {}
 
     def start_session(self, sid):
@@ -38,7 +48,7 @@ class ReportStore(DecisionsMixin, ReviewsMixin):
             self._session_generations[sid] = uuid.uuid4().hex
             self._deleted.discard(sid)
 
-    def bind_session(self, sid):
+    def bind_session(self, sid, *, sources=None):
         """Freeze this request/worker to the current incarnation of one session."""
         with _LOCK:
             if self._session_scope is not None:
@@ -46,6 +56,8 @@ class ReportStore(DecisionsMixin, ReviewsMixin):
             bound = copy.copy(self)
             generation = self._session_generations.setdefault(sid, uuid.uuid4().hex)
             bound._session_scope = (sid, generation)
+            if sources is not None:
+                bound._turn_sources = sources
             return bound
 
     def _dir(self, sid, rid=""):
@@ -86,8 +98,35 @@ class ReportStore(DecisionsMixin, ReviewsMixin):
 
     def _meta(self, sid, rid):
         directory = self._dir(sid, rid)
-        journal = directory / 'history.json'
-        return self._json(journal)['meta'] if journal.is_file() else self._json(directory / 'meta.json')
+        path = directory / 'history.json'
+        journal = self._json(path) if path.is_file() else None
+        if journal is None:
+            path = directory / 'meta.json'
+        meta = journal['meta'] if journal is not None else self._json(path)
+        if '_source_access' not in meta:
+            # Older reports predate stored scope. Reconstruct it from every immutable revision
+            # because history, restoration and review views can all display previous text.
+            cache_key = (path, meta['revision'], path.stat().st_mtime_ns)
+            if cache_key not in self._legacy_sources:
+                refs = ChatSources()
+                revisions = (journal_records(journal) if journal is not None else
+                             (self._raw_read(sid, rid, n) for n in range(1, meta['revision'] + 1)))
+                for record in revisions:
+                    refs.include(record.get('citations'))
+                if len(self._legacy_sources) >= 128:
+                    self._legacy_sources.pop(next(iter(self._legacy_sources)))
+                self._legacy_sources[cache_key] = refs.metadata()
+            meta['_source_access'] = self._legacy_sources[cache_key]
+        scope = meta['_source_access']
+        if not isinstance(scope, dict) or any(
+            key not in {'source_collections', 'source_domains'} or not isinstance(ids, list)
+            or not all(isinstance(i, str) and i for i in ids) for key, ids in scope.items()
+        ):
+            raise ValueError('Invalid report source metadata')
+        refs = ChatSources()
+        refs.include(scope)
+        _require_report_sources(refs)
+        return meta
 
     def _raw_read(self, sid, rid, revision):
         directory = self._dir(sid, rid)
@@ -129,8 +168,16 @@ class ReportStore(DecisionsMixin, ReviewsMixin):
                 previous = self._meta(sid, rid)
                 if expected_revision != previous["revision"]:
                     raise ValueError("Report version conflict; read the latest revision before editing")
-            elif len(self.list(sid)) >= 100:
+            elif sum(1 for folder in directory.parent.glob('*')
+                     if (folder / 'history.json').is_file() or (folder / 'meta.json').is_file()) >= 100:
                 raise ValueError("This conversation already has 100 reports")
+            sources = ChatSources()
+            if previous:
+                sources.include(previous['_source_access'])
+            if self._turn_sources is not None:
+                sources.include(self._turn_sources.metadata())
+            sources.include(used)
+            _require_report_sources(sources)
             now = datetime.now(timezone.utc).isoformat()
             revision = (previous["revision"] if previous else 0) + 1
             meta = {"id": rid, "session_id": sid, "title": title.strip(), "revision": revision,
@@ -166,7 +213,7 @@ class ReportStore(DecisionsMixin, ReviewsMixin):
                 operations = {key: value for key, value in operations.items() if value in retained}
             if operation_key:
                 operations[operation_key] = revision
-            head = {**meta, "operations": operations}
+            head = {**meta, "operations": operations, "_source_access": sources.metadata()}
             path = directory / 'history.json'
             if parent:
                 if path.is_file():
@@ -251,12 +298,14 @@ class ReportStore(DecisionsMixin, ReviewsMixin):
     def read(self, sid, rid, revision=None):
         with _LOCK:
             self._alive(sid)
-            self._dir(sid, rid)
+            meta = self._meta(sid, rid)
             if revision is None:
-                revision = self._meta(sid, rid)["revision"]
+                revision = meta["revision"]
             if type(revision) is not int or revision < 1:
                 raise ValueError("Invalid report revision")
             record = self._raw_read(sid, rid, revision)
+            if self._turn_sources is not None:
+                self._turn_sources.include(meta['_source_access'])
             self._with_blocks(sid, rid, record)
             if revision > 1 and "parent_revision" not in record and 'restored_from' not in record:
                 try:

@@ -11,7 +11,8 @@ import threading
 import uuid
 from pathlib import Path
 from typing import Any
-from concurrent.futures import ThreadPoolExecutor
+from src.async_ctx import ContextThreadPoolExecutor
+from src.tasks.task_manager import check_cancelled
 
 from src.tasks.task_manager import Task, task_manager
 from src.services import services
@@ -24,29 +25,38 @@ from src.rag.summary_manager import SummaryManager
 
 logger = logging.getLogger(__name__)
 
+class _IngestPool(ContextThreadPoolExecutor):
+    """Recheck the submitting task when delayed work reaches a worker."""
+    def submit(self, fn, /, *args, **kwargs):
+        def run():
+            check_cancelled()
+            return fn(*args, **kwargs)
+        return super().submit(run)
+
+
 # MinerU/local parse is slow and would starve chunk if they share a pool.
 # Parse matches upload concurrency (5); chunk/sparse stay on a small CPU pool.
 # Summary + Context orchestration uses a dedicated pool; ingest LLM calls
 # share a process-wide cap (Settings Parallel, default 50).
-_embed_executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="embed-worker")
-_parse_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="parse-worker")
+_embed_executor = _IngestPool(max_workers=20, thread_name_prefix="embed-worker")
+_parse_executor = _IngestPool(max_workers=5, thread_name_prefix="parse-worker")
 # Local (MinerU-less) parse is pdfminer — pure-Python and GIL-bound. Running
 # it on the wide pool starved the event loop on small hosts (whole backend
 # unresponsive) and 5 concurrent page-image renders spiked RAM. Cloud parse
 # (httpx releases the GIL) keeps the wide pool; local parse gets a
 # CPU-sized pool instead.
-_local_parse_executor = ThreadPoolExecutor(
+_local_parse_executor = _IngestPool(
     max_workers=max(1, min(3, (os.cpu_count() or 2) // 2)),
     thread_name_prefix="local-parse-worker",
 )
-_cpu_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cpu-worker")
-_enrich_executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="enrich-worker")
+_cpu_executor = _IngestPool(max_workers=4, thread_name_prefix="cpu-worker")
+_enrich_executor = _IngestPool(max_workers=32, thread_name_prefix="enrich-worker")
 # Separate pools so one file's OCR never blocks that file's Vision.
 # OCR is CPU-heavy (RapidOCR ONNX): 3 file workers match 3 engines.
 # Vision is I/O-bound: files enter like Summary (enrich pool size) and
 # individual image calls compete for ingest_request_limiter.
-_ocr_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="ocr-worker")
-_vision_executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="vision-worker")
+_ocr_executor = _IngestPool(max_workers=3, thread_name_prefix="ocr-worker")
+_vision_executor = _IngestPool(max_workers=32, thread_name_prefix="vision-worker")
 # Do not wait forever for OCR/Vision before embed/store.
 IMAGE_JOB_DEADLINE_SEC = 180.0
 
@@ -60,6 +70,7 @@ class _MonotonicProgress:
         self._value = float(getattr(task, "progress", 0) or 0)
 
     def set(self, pct: float, msg: str) -> None:
+        check_cancelled()
         with self._lock:
             self._value = max(self._value, min(100.0, float(pct)))
             self._task.progress = self._value
@@ -1170,9 +1181,7 @@ async def _judge_conflict_pairs(
         async with sem:
             for attempt in range(_CONFLICT_JUDGE_RETRIES):
                 try:
-                    raw = await loop.run_in_executor(
-                        None,
-                        lambda: llm.generate(
+                    raw = await asyncio.to_thread(lambda: llm.generate(
                             prompt,
                             max_tokens=256,
                             temperature=0.0,
@@ -1349,8 +1358,7 @@ async def consolidate_handler(task: Task, collection: str) -> dict:
     config = services.db.get_collection_config(collection)
     enriching_llm = _get_enriching_llm(config)
     loop = asyncio.get_running_loop()
-    raw = await loop.run_in_executor(
-        None, lambda: enriching_llm.generate(CONSOLIDATION_PROMPT.format(summaries=summaries_text), max_tokens=8192, temperature=0.0, thinking=False)
+    raw = await asyncio.to_thread(lambda: enriching_llm.generate(CONSOLIDATION_PROMPT.format(summaries=summaries_text), max_tokens=8192, temperature=0.0, thinking=False)
     )
     logger.info("[CONSOLIDATE] LLM returned %d chars", len(raw))
     collection_summary, conflicts = parse_consolidation_response(
@@ -1366,8 +1374,7 @@ async def consolidate_handler(task: Task, collection: str) -> dict:
     project_desc = ""
     try:
         logger.info("[CONSOLIDATE] Generating project description for '%s'...", collection_name)
-        desc_raw = await loop.run_in_executor(
-            None, lambda: enriching_llm.generate(
+        desc_raw = await asyncio.to_thread(lambda: enriching_llm.generate(
                 PROJECT_DESCRIPTION_PROMPT.format(summaries=summaries_text, project_name=collection_name),
                 max_tokens=512,
                 temperature=0.0,
@@ -1778,8 +1785,7 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
         # Cloud parse → wide I/O pool (GIL released in httpx); local parse →
         # small CPU pool so GIL-bound pdfminer can't starve the event loop.
         # The pick reads Qdrant/collection config — keep it off the loop too.
-        parse_pool = await loop.run_in_executor(
-            None, lambda: (
+        parse_pool = await asyncio.to_thread(lambda: (
                 _parse_executor if _is_mineru_ready(path, collection)
                 else _local_parse_executor
             )
@@ -2232,7 +2238,7 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
         t_embed_store = time.time()
         batcher.flush()
         if batcher._futures:
-            embeddings = await loop.run_in_executor(None, batcher.wait_all, chunks)
+            embeddings = await asyncio.to_thread(batcher.wait_all, chunks)
             sparse_vectors = await loop.run_in_executor(
                 _cpu_executor, _do_sparse, batcher.get_all_texts(chunks), collection,
             )
@@ -2253,6 +2259,7 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
 
         # ── Stage 4: Storage ──
         def _do_store():
+            check_cancelled()
             update(92, "Storing...")
             task.stage = "storing"
             ids = []
@@ -2328,10 +2335,9 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
             detail="Writing vectors",
             started_at=t_embed_store,
         )
-        await loop.run_in_executor(None, _do_store)
+        await asyncio.to_thread(_do_store)
         if pending_summary is not None:
-            await loop.run_in_executor(
-                None, _store_structured_summary, [pending_summary], doc, config, collection,
+            await asyncio.to_thread(_store_structured_summary, [pending_summary], doc, config, collection,
             )
         t_store_end = time.time()
         ingest_trace.update(
@@ -2427,7 +2433,7 @@ async def meeting_transcript_index_handler(task: Task, meeting_id: str, **kwargs
 
     logger.info("[TX_INDEX] task start meeting=%s task=%s", meeting_id, task.id)
     loop = asyncio.get_running_loop()
-    n = await loop.run_in_executor(None, index_from_store, meeting_id)
+    n = await asyncio.to_thread(index_from_store, meeting_id)
     logger.info("[TX_INDEX] task done meeting=%s packs=%d", meeting_id, n)
     return {"message": "Transcript index ready", "meeting_id": meeting_id, "packs": n}
 
@@ -2449,7 +2455,7 @@ async def meeting_summary_handler(task: Task, meeting_id: str, **kwargs) -> dict
     )
     loop = asyncio.get_running_loop()
     try:
-        await loop.run_in_executor(None, _do_meeting_summary, meeting_id)
+        await asyncio.to_thread(_do_meeting_summary, meeting_id)
         return {"message": "Summary generated", "meeting_id": meeting_id}
     except Exception:
         store.update_meeting(
@@ -2483,7 +2489,7 @@ async def meeting_extract_handler(task: Task, meeting_id: str, receipts: list, *
     )
     loop = asyncio.get_running_loop()
     try:
-        await loop.run_in_executor(None, _do_meeting_extract, meeting_id, receipts)
+        await asyncio.to_thread(_do_meeting_extract, meeting_id, receipts)
         return {"message": "Extract complete", "meeting_id": meeting_id}
     except Exception:
         store.update_meeting(
@@ -2579,18 +2585,17 @@ async def doc_summary_handler(task: Task, collection: str, source: str) -> dict:
     loop = asyncio.get_running_loop()
     # If using parsed text, read it directly instead of re-parsing
     if file_path.name == "parsed.txt":
-        doc_content = await loop.run_in_executor(None, file_path.read_text, "utf-8")
+        doc_content = await asyncio.to_thread(file_path.read_text, "utf-8")
         doc_content = doc_content.strip()
     else:
-        doc = await loop.run_in_executor(None, parse_file, file_path)
+        doc = await asyncio.to_thread(parse_file, file_path)
         doc_content = (doc.content or "").strip()
     if not doc_content:
         raise ValueError("File has no extractable text content")
 
     config = services.db.get_collection_config(collection)
     enriching_llm = _get_enriching_llm(config)
-    doc_summary = await loop.run_in_executor(
-        None, lambda: generate_structured_summary(enriching_llm, doc_content)
+    doc_summary = await asyncio.to_thread(lambda: generate_structured_summary(enriching_llm, doc_content)
     )
     logger.info("[DOC_SUMMARY] Generated: data=%d, facts=%d, insights=%d",
                 len(doc_summary.get("data", [])), len(doc_summary.get("facts", [])), len(doc_summary.get("insights", [])))
@@ -2669,7 +2674,7 @@ async def sparse_recalc_handler(task, collection: str) -> dict:
 
     logger.info("[SparseRecalc] Starting recalc for collection=%s", collection)
     loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, run_sparse_recalc, services.db, collection)
+    result = await asyncio.to_thread(run_sparse_recalc, services.db, collection)
     logger.info("[SparseRecalc] Completed: %s", result)
     # Batch uploads keep bumping the counter while this rebuild ran — if the
     # drift is already past the threshold again, queue the next pass now.

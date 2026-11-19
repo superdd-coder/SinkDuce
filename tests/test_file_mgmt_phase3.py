@@ -10,6 +10,7 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.http_client import local_owner_client
 
 from src.file_mgmt.store import COLLECTIONS_DIR, init_collection_db, get_db
 
@@ -95,7 +96,7 @@ def test_file_path_add_remove():
     from src.main import app
 
     _setup_collection("p3-1")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     # Get a folder to add the file to
     resp = client.get("/api/file-mgmt/p3-1/folders")
@@ -152,7 +153,7 @@ def test_attach_generates_derived_paths():
     from src.main import app
 
     _setup_collection("p3-2")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, "p3-2")
 
@@ -223,7 +224,7 @@ def test_attach_main_chain_node():
     from src.main import app
 
     _setup_collection("p3-3")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, "p3-3")
 
@@ -271,7 +272,7 @@ def test_detach_removes_derived_paths():
     from src.main import app
 
     _setup_collection("p3-4")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, "p3-4")
 
@@ -355,7 +356,7 @@ def test_promote_path():
     from src.main import app
 
     _setup_collection("p3-5")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, "p3-5")
 
@@ -438,7 +439,7 @@ def test_demote_plain_folder_path_keeps_path():
     from src.main import app
 
     _setup_collection("p3-5b")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     # plain user folder (not a group/branch derived target)
     resp = client.post(
@@ -479,7 +480,7 @@ def test_demote_drops_pin_when_derived_sibling_exists():
     from src.main import app
 
     _setup_collection("p3-5c")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, "p3-5c")
     resp = client.post(
@@ -537,7 +538,7 @@ def test_unique_constraint():
     from src.main import app
 
     _setup_collection("p3-6")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, "p3-6")
 
@@ -596,7 +597,7 @@ def test_message_crud():
     from src.main import app
 
     _setup_collection("p3-7")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     # get a folder
     resp = client.get("/api/file-mgmt/p3-7/folders")
@@ -645,7 +646,7 @@ def test_system_message_protected():
     from src.main import app
 
     _setup_collection("p3-8")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     # Insert a system message directly into DB
     conn = get_db("p3-8")
@@ -682,7 +683,7 @@ def test_folder_messages_aggregation():
     from src.main import app
 
     _setup_collection("p3-9")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, "p3-9")
 
@@ -753,7 +754,7 @@ def test_is_greyed_calculation():
     from src.main import app
 
     _setup_collection("p3-10")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, "p3-10")
 
@@ -842,7 +843,7 @@ def test_end_to_end():
     from src.main import app
 
     _setup_collection("p3-11")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, "p3-11")
 
@@ -953,7 +954,7 @@ def test_list_files_endpoint():
     from src.main import app
 
     _setup_collection("p3-12")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     # create folder
     resp = client.post(
@@ -1008,7 +1009,7 @@ def test_list_archived_files():
     from src.main import app
 
     _setup_collection("p3-13")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     fid = uuid.uuid4().hex
     _create_file_record("p3-13", fid, archived=1)

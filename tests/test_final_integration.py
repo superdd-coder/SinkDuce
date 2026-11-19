@@ -27,7 +27,7 @@ class TestIntegration:
             catalog=MagicMock(), decomposer=dec,
             aggregator=MagicMock(), llm=MagicMock(),
         )
-        result = svc.run("Alpha project payment", generate_answer=True)
+        result = svc.run("Alpha project payment", collections=["col_a"], generate_answer=True)
         assert result.answer and "<search_results>" in result.answer
 
     def test_no_answer(self):

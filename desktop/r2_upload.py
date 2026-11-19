@@ -7,6 +7,8 @@ Requires S3-style R2 credentials; the wrangler OAuth login cannot drive boto3.
 Usage (repo root):
   python3 desktop/r2_upload.py \
     --dmg desktop/dist/SinkDuce-macos-arm64-vX.Y.Z.dmg \
+    --app-tar-gz desktop/dist/SinkDuce-macos-arm64-vX.Y.Z.app.tar.gz \
+    --app-tar-gz-sig desktop/dist/SinkDuce-macos-arm64-vX.Y.Z.app.tar.gz.sig \
     --version X.Y.Z
 
 Reads config from env or desktop/r2.env (KEY=VALUE):
@@ -18,7 +20,7 @@ Reads config from env or desktop/r2.env (KEY=VALUE):
 Uploads, flat at the bucket root:
   SinkDuce-macos-arm64-vX.Y.Z.dmg         (immutable, 1d cache)
   SinkDuce-macos-arm64-vX.Y.Z.dmg.sha256
-  SinkDuce-macos-arm64-vX.Y.Z.app.tar.gz  (in-app updater payload, optional)
+  SinkDuce-macos-arm64-vX.Y.Z.app.tar.gz  (signed installer and updater payload)
   SinkDuce-macos-arm64-vX.Y.Z.app.tar.gz.sig
   latest.json                             ({version,tag,asset,sha256,size,
                                             updated_at, pub_date, platforms})
@@ -104,13 +106,13 @@ def main() -> int:
     ap.add_argument(
         "--app-tar-gz",
         type=Path,
-        default=None,
+        required=True,
         help="signed in-app updater payload (…app.tar.gz); requires --app-tar-gz-sig",
     )
     ap.add_argument(
         "--app-tar-gz-sig",
         type=Path,
-        default=None,
+        required=True,
         help="minisign signature for the payload; required with --app-tar-gz",
     )
     ap.add_argument(
@@ -120,11 +122,6 @@ def main() -> int:
         help="CHANGELOG.md to pull the `## vX.Y.Z` release-notes section from",
     )
     args = ap.parse_args()
-
-    if args.app_tar_gz is not None and args.app_tar_gz_sig is None:
-        ap.error("--app-tar-gz needs --app-tar-gz-sig")
-    if args.app_tar_gz is None and args.app_tar_gz_sig is not None:
-        ap.error("--app-tar-gz-sig needs --app-tar-gz")
 
     try:
         import boto3
@@ -137,11 +134,11 @@ def main() -> int:
         sys.exit(f"r2_upload: missing {dmg}")
     version = args.version.lstrip("vV")
     asset = f"SinkDuce-macos-arm64-v{version}.dmg"
-    tar_gz: Path | None = args.app_tar_gz
-    tar_gz_sig: Path | None = args.app_tar_gz_sig
-    if tar_gz is not None and not tar_gz.is_file():
+    tar_gz: Path = args.app_tar_gz
+    tar_gz_sig: Path = args.app_tar_gz_sig
+    if not tar_gz.is_file() or not tar_gz.stat().st_size:
         sys.exit(f"r2_upload: missing {tar_gz}")
-    if tar_gz_sig is not None and not tar_gz_sig.is_file():
+    if not tar_gz_sig.is_file() or not tar_gz_sig.read_text(encoding="ascii").strip():
         sys.exit(f"r2_upload: missing {tar_gz_sig}")
 
     cfg = load_config()
@@ -196,35 +193,29 @@ def main() -> int:
         ),
     ]
 
-    if tar_gz is not None and tar_gz_sig is not None:
-        tar_gz_asset = tar_gz.name
-        # The .sig file body IS the base64 blob the updater expects verbatim.
-        signature = tar_gz_sig.read_text(encoding="utf-8").strip()
-        latest["platforms"] = {
-            "darwin-aarch64": {
-                "signature": signature,
-                "url": f"{cfg['public_base']}/{tar_gz_asset}",
-            }
+    tar_gz_asset = f"SinkDuce-macos-arm64-v{version}.app.tar.gz"
+    # The .sig file body IS the base64 blob the updater expects verbatim.
+    signature = tar_gz_sig.read_text(encoding="utf-8").strip()
+    latest["platforms"] = {
+        "darwin-aarch64": {
+            "signature": signature,
+            "url": f"{cfg['public_base']}/{tar_gz_asset}",
         }
-        jobs.append(
-            (
-                tar_gz_asset,
-                tar_gz,
-                {"ContentType": "application/gzip", "CacheControl": "public, max-age=86400"},
-            )
+    }
+    jobs.append(
+        (
+            tar_gz_asset,
+            tar_gz,
+            {"ContentType": "application/gzip", "CacheControl": "public, max-age=86400"},
         )
-        jobs.append(
-            (
-                tar_gz_asset + ".sig",
-                tar_gz_sig,
-                {"ContentType": "text/plain", "CacheControl": "public, max-age=86400"},
-            )
+    )
+    jobs.append(
+        (
+            tar_gz_asset + ".sig",
+            tar_gz_sig,
+            {"ContentType": "text/plain", "CacheControl": "public, max-age=86400"},
         )
-    else:
-        print(
-            "r2_upload: WARN no --app-tar-gz/--app-tar-gz-sig — in-app update will "
-            "not be offered for this release (DMG download only)"
-        )
+    )
 
     jobs.append(
         (

@@ -231,12 +231,16 @@ async def stream_events(
     sub = bus.subscribe(loop=asyncio.get_running_loop())
 
     from src.identity import get_actor
+    from src.pairing.service import device_stream_guard
 
     actor = get_actor()
+    still_authorized = device_stream_guard(actor)
 
     async def generate():
         try:
             async for frame, data in iter_event_frames(bus, sub, since, actor=actor):
+                if not still_authorized():
+                    return
                 if frame == ":":
                     yield ": keepalive\n\n"
                 else:

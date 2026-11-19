@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.http_client import local_owner_client
 
 from src.file_mgmt.store import COLLECTIONS_DIR, init_collection_db, get_db
 
@@ -134,7 +135,7 @@ def test_end_chain_greyed():
 
     coll = "p5-greyed"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, coll)
     group = _create_group(client, coll, "Financial")
@@ -240,7 +241,7 @@ def test_end_chain_archive_candidate():
 
     coll = "p5-archive-cand"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, coll)
     group = _create_group(client, coll, "Legal")
@@ -335,7 +336,7 @@ def test_toggle_archive():
 
     coll = "p5-toggle-arch"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     group = _create_group(client, coll, "TestGroup")
     group_folder_id = group["folder_id"]
@@ -382,7 +383,7 @@ def test_unarchive():
 
     coll = "p5-unarchive"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     group = _create_group(client, coll, "TestGroup")
     group_folder_id = group["folder_id"]
@@ -439,7 +440,7 @@ def test_archived_virtual_view():
 
     coll = "p5-archived-view"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     group = _create_group(client, coll, "TestGroup")
     group_folder_id = group["folder_id"]
@@ -484,7 +485,7 @@ def test_is_greyed_after_end_chain():
 
     coll = "p5-greyed-list"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, coll)
     group = _create_group(client, coll, "Financial")
@@ -570,7 +571,7 @@ def test_promote_protects_from_grey():
 
     coll = "p5-promote"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, coll)
     group = _create_group(client, coll, "Legal")
@@ -641,7 +642,7 @@ def test_delete_node_with_file():
 
     coll = "p5-del-node-file"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, coll)
     group = _create_group(client, coll, "Financial")
@@ -712,7 +713,7 @@ def test_delete_node_multi_attach():
 
     coll = "p5-del-multi"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, coll)
     group = _create_group(client, coll, "Legal")
@@ -769,7 +770,7 @@ def test_delete_branch_start_node_cascades_branch():
 
     coll = "p5-del-start-anchor"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, coll)
     start = _create_node(client, coll, main_id, "Branch Start", order=1, node_type="start")
@@ -792,7 +793,7 @@ def test_delete_merge_node_clears_merge_fk():
 
     coll = "p5-del-merge-anchor"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, coll)
     start = _create_node(client, coll, main_id, "Start", order=1, node_type="start")
@@ -834,7 +835,7 @@ def test_end_to_end():
 
     coll = "p5-e2e"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, coll)
     group = _create_group(client, coll, "Financial")

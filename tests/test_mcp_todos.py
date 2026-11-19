@@ -23,22 +23,10 @@ def _unwrap(out):
 
 
 @pytest.fixture(autouse=True)
-def _no_elicit_capable_client(monkeypatch):
-    """让删除类工具在本文件里**能正常跑**（本文件测的是工具本身，不是确认）。
-
-    确认机制是 **A 案**（在 Agent 侧用 ``elicit`` 问，见 ``src/hub/confirm.py``）：
-    - 客户端**支持** elicit → 问用户，拒绝则拦下；
-    - 客户端**不支持**（或没有会话）→ 放行，但结果带 ``warning``。
-
-    测试环境没有真实 MCP 客户端，所以这里**显式**钉住"不支持"这一支 —— 比依赖
-    "环境里恰好没有会话"更稳（否则哪天测试环境有了会话，这些用例会突然开始等用户点确认）。
-
-    **这不是把闸门测掉**：确认逻辑本身在 ``tests/test_hub_confirm.py`` 里用
-    **真客户端**覆盖了支持/不支持两条路；覆盖面（哪些工具挂了闸）也在那里断言。
-    """
-    from src.hub import confirm as hub_confirm
-
-    monkeypatch.setattr(hub_confirm, "client_supports_elicit", lambda session=None: False)
+def _approved_client(monkeypatch):
+    """Exercise tool behavior after approval. Real MCP decisions have a separate suite."""
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr("src.hub.confirm.request_confirmation", AsyncMock(return_value=None))
 
 
 @pytest.fixture(autouse=True)

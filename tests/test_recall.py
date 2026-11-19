@@ -9,9 +9,10 @@ from unittest.mock import MagicMock, patch, PropertyMock
 import time
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.http_client import local_owner_client
 
-from src.config import EmbeddingConfig, EmbeddingProviderConfig
+from src.config import AppConfig, EmbeddingConfig, EmbeddingProviderConfig
+from src.rag.direct_query import DirectQueryModule
 
 
 # ── Schemas ────────────────────────────────────────────────
@@ -105,7 +106,7 @@ def test_recall_params_normal_collection():
     """GET /recall/params returns expected structure for normal collection."""
     from src.main import app
 
-    client = TestClient(app)
+    client = local_owner_client(app)
     # Mock the services.db.get_collection_config to return normal mode
     with patch("src.api.routes.recall.services") as mock_svc:
         mock_svc.db.get_collection_config.return_value = {
@@ -130,7 +131,7 @@ def test_recall_params_no_reranker():
     """GET /recall/params reports has_reranker=False when reranker is None."""
     from src.main import app
 
-    client = TestClient(app)
+    client = local_owner_client(app)
     with patch("src.api.routes.recall.services") as mock_svc:
         mock_svc.db.get_collection_config.return_value = {
             "chunk_mode": "parent_child",
@@ -151,7 +152,7 @@ def test_recall_search_normal_mode():
     from src.main import app
     from src.rag.retriever import RetrievedChunk
 
-    client = TestClient(app)
+    client = local_owner_client(app)
     mock_chunks = [
         RetrievedChunk(text="chunk 1", score=0.9, metadata={"source": "a.txt", "chunk_index": 0}),
         RetrievedChunk(text="chunk 2", score=0.7, metadata={"source": "b.txt", "chunk_index": 1}),
@@ -170,12 +171,14 @@ def test_recall_search_normal_mode():
             "top_k": 10,
         }
         mock_svc.db.get_vector_size.return_value = 512
+        mock_svc.config = AppConfig()
         mock_svc.config.embedding = EmbeddingConfig(providers=[
             EmbeddingProviderConfig(id="emb-1", provider="local", model="test", dimensions=512, is_default=True)
         ])
         mock_svc.retriever.retrieve.return_value = mock_chunks
         mock_svc.reranker = None
         mock_svc.embedding = mock_embedding
+        mock_svc.direct_query = DirectQueryModule(mock_svc.retriever, mock_svc.db, mock_svc.reranker)
 
         resp = client.post(
             "/api/recall/search",
@@ -200,7 +203,7 @@ def test_recall_search_normal_mode_with_reranker():
     from src.main import app
     from src.rag.retriever import RetrievedChunk
 
-    client = TestClient(app)
+    client = local_owner_client(app)
     mock_chunks = [
         RetrievedChunk(text="chunk 1", score=0.5, metadata={"source": "a.txt", "chunk_index": 0}),
         RetrievedChunk(text="chunk 2", score=0.3, metadata={"source": "b.txt", "chunk_index": 1}),
@@ -222,6 +225,7 @@ def test_recall_search_normal_mode_with_reranker():
             "rerank_top_k": 2,
         }
         mock_svc.db.get_vector_size.return_value = 512
+        mock_svc.config = AppConfig()
         mock_svc.config.embedding = EmbeddingConfig(providers=[
             EmbeddingProviderConfig(id="emb-1", provider="local", model="test", dimensions=512, is_default=True)
         ])
@@ -229,6 +233,7 @@ def test_recall_search_normal_mode_with_reranker():
         mock_svc.reranker = MagicMock()
         mock_svc.reranker.rerank.return_value = reranked
         mock_svc.embedding = mock_embedding
+        mock_svc.direct_query = DirectQueryModule(mock_svc.retriever, mock_svc.db, mock_svc.reranker)
 
         resp = client.post(
             "/api/recall/search",
@@ -245,49 +250,30 @@ def test_recall_search_normal_mode_with_reranker():
 
 
 def test_recall_search_agentic_mode():
-    """POST /recall/search with use_agent=True uses AgenticRAG."""
+    """The decomposed search passes selected libraries and returns its evidence trace."""
     from src.main import app
-    from src.rag.agent import AgentResult
+    from src.rag.agentic_query import AgenticQueryResult
+    from src.rag.retriever import RetrievedChunk
 
-    client = TestClient(app)
-    mock_result = AgentResult(
-        answer="test answer",
-        sources=[{"text": "src1", "score": 0.9, "metadata": {"source": "a.txt", "chunk_index": 0}}],
-        iterations=2,
-        query_used="rewritten query",
-    )
-
-    mock_embedding = MagicMock()
-    mock_embedding.embed_query.return_value = [0.1] * 512
-    mock_agent = MagicMock()
-    mock_agent.run.return_value = mock_result
-
-    with patch("src.api.routes.recall.services") as mock_svc, \
-         patch("src.services.services", mock_svc), \
-         patch("src.rag.collection_utils.create_embedding_provider", return_value=mock_embedding), \
-         patch("src.rag.agent.AgenticRAG", return_value=mock_agent):
-        mock_svc.db.collection_exists.return_value = True
-        mock_svc.db.get_collection_config.return_value = {
-            "chunk_mode": "normal",
-        }
-        mock_svc.db.get_vector_size.return_value = 512
-        mock_svc.config.embedding = EmbeddingConfig(provider="local", model="test", dimensions=512)
-        mock_svc.reranker = None
-        mock_svc.embedding = mock_embedding
-
-        resp = client.post(
-            "/api/recall/search",
-            json={"query": "test", "collections": ["default"], "use_agent": True, "top_k": 5},
+    chunk = RetrievedChunk(text="src1", score=0.9, metadata={"source": "a.txt", "id": "one"})
+    trace = [{"stage": "retrieve"}, {"stage": "aggregate"}]
+    with patch("src.api.routes.recall.services") as svc, patch("src.api.routes.recall.get_embedding_overrides", return_value={}):
+        svc.db.collection_exists.return_value = True
+        svc.db.get_collection_config.return_value = {"chunk_mode": "normal"}
+        svc.agentic_query.run.return_value = AgenticQueryResult(
+            answer=None, all_chunks=[chunk], retained_chunks=[chunk], trace=trace,
         )
+        resp = local_owner_client(app).post("/api/recall/search", json={
+            "query": "test", "collections": ["default"], "use_agent": True, "top_k": 5,
+        })
         assert resp.status_code == 200
         data = resp.json()
-        assert data["agent_iterations"] == 2
-        assert len(data["results"]) == 1
-        assert data["results"][0]["text"] == "src1"
-        mock_agent.run.assert_called_once()
-        # Verify rerank_top_k and max_iterations were passed to AgenticRAG
-        call_args, call_kwargs = mock_agent.run.call_args
-        assert call_kwargs.get("top_k") == 5
+        assert data["retrieval_trace"] == trace
+        assert [row["text"] for row in data["results"]] == ["src1"]
+        assert data["results"][0]["used_in_context"] is True
+        svc.agentic_query.run.assert_called_once()
+        assert svc.agentic_query.run.call_args.kwargs["collections"] == ["default"]
+        assert svc.agentic_query.run.call_args.kwargs["top_k"] == 5
 
 
 # ── Recall search: multi-collection ────────────────────────
@@ -298,7 +284,7 @@ def test_recall_search_multi_collection():
     from src.main import app
     from src.rag.retriever import RetrievedChunk
 
-    client = TestClient(app)
+    client = local_owner_client(app)
     chunks_col1 = [RetrievedChunk(text="col1 chunk", score=0.9, metadata={"source": "a.txt", "chunk_index": 0})]
     chunks_col2 = [RetrievedChunk(text="col2 chunk", score=0.8, metadata={"source": "b.txt", "chunk_index": 0})]
 
@@ -314,11 +300,13 @@ def test_recall_search_multi_collection():
             "top_k": 10,
         }
         mock_svc.db.get_vector_size.return_value = 512
+        mock_svc.config = AppConfig()
         mock_svc.config.embedding = EmbeddingConfig(provider="local", model="test", dimensions=512)
         # multi_collection_retrieve calls retriever.retrieve for each collection
-        mock_svc.retriever.retrieve.side_effect = [chunks_col1, chunks_col2]
+        mock_svc.retriever.retrieve.side_effect = lambda query, *, collection, **kw: {"col1": chunks_col1, "col2": chunks_col2}[collection]
         mock_svc.reranker = None
         mock_svc.embedding = mock_embedding
+        mock_svc.direct_query = DirectQueryModule(mock_svc.retriever, mock_svc.db, mock_svc.reranker)
 
         resp = client.post(
             "/api/recall/search",
@@ -340,7 +328,7 @@ def test_recall_search_includes_timing():
     from src.main import app
     from src.rag.retriever import RetrievedChunk
 
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     mock_embedding = MagicMock()
     mock_embedding.embed_query.return_value = [0.1] * 512
@@ -373,7 +361,7 @@ def test_recall_search_collection_not_found():
     """POST /recall/search returns empty results for non-existent collection."""
     from src.main import app
 
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     with patch("src.api.routes.recall.services") as mock_svc:
         mock_svc.db.collection_exists.return_value = False
@@ -398,7 +386,7 @@ def test_recall_benchmark_basic():
     from src.main import app
     from src.rag.retriever import RetrievedChunk
 
-    client = TestClient(app)
+    client = local_owner_client(app)
     mock_chunks = [
         RetrievedChunk(text="result", score=0.9, metadata={"source": "a.txt", "chunk_index": 0}),
     ]
@@ -445,7 +433,7 @@ def test_recall_benchmark_empty_queries():
     """POST /recall/benchmark with no queries returns zero totals."""
     from src.main import app
 
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     with patch("src.api.routes.recall.services") as mock_svc:
         mock_svc.db.collection_exists.return_value = True
@@ -662,7 +650,7 @@ def test_generate_eval_cases_skips_archived_points():
     """POST generate only feeds non-archived current chunks to the LLM sampler."""
     from src.main import app
 
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     points = [
         {

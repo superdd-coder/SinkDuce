@@ -8,7 +8,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.http_client import local_owner_client
 
 from src.db.sessions import SessionStore, Session, Message
 
@@ -28,7 +28,7 @@ class TestSessionAPI:
         """POST /api/sessions with defaults."""
         from src.main import app
 
-        client = TestClient(app)
+        client = local_owner_client(app)
         with patch("src.api.routes.sessions.services") as mock_svc:
             mock_svc.session_store = store
             resp = client.post("/api/sessions", json={})
@@ -44,7 +44,7 @@ class TestSessionAPI:
         """POST /api/sessions with title and collections."""
         from src.main import app
 
-        client = TestClient(app)
+        client = local_owner_client(app)
         with patch("src.api.routes.sessions.services") as mock_svc:
             mock_svc.session_store = store
             resp = client.post(
@@ -63,7 +63,7 @@ class TestSessionAPI:
         s1 = store.create_session(title="first")
         s2 = store.create_session(title="second")
 
-        client = TestClient(app)
+        client = local_owner_client(app)
         with patch("src.api.routes.sessions.services") as mock_svc:
             mock_svc.session_store = store
             resp = client.get("/api/sessions")
@@ -83,7 +83,7 @@ class TestSessionAPI:
         store.add_message(s.id, "user", "hello")
         store.add_message(s.id, "assistant", "hi there")
 
-        client = TestClient(app)
+        client = local_owner_client(app)
         with patch("src.api.routes.sessions.services") as mock_svc:
             mock_svc.session_store = store
             resp = client.get(f"/api/sessions/{s.id}")
@@ -101,7 +101,7 @@ class TestSessionAPI:
 
         s = store.create_session(title="old title")
 
-        client = TestClient(app)
+        client = local_owner_client(app)
         with patch("src.api.routes.sessions.services") as mock_svc:
             mock_svc.session_store = store
             resp = client.patch(f"/api/sessions/{s.id}", json={"title": "new title"})
@@ -115,7 +115,7 @@ class TestSessionAPI:
 
         s = store.create_session()
 
-        client = TestClient(app)
+        client = local_owner_client(app)
         with patch("src.api.routes.sessions.services") as mock_svc:
             mock_svc.session_store = store
             resp = client.delete(f"/api/sessions/{s.id}")
@@ -129,7 +129,7 @@ class TestSessionAPI:
         """GET on nonexistent session returns 404."""
         from src.main import app
 
-        client = TestClient(app)
+        client = local_owner_client(app)
         with patch("src.api.routes.sessions.services") as mock_svc:
             mock_svc.session_store = store
             resp = client.get("/api/sessions/nonexistent-id")
@@ -139,7 +139,7 @@ class TestSessionAPI:
         """POST with invalid JSON returns 422."""
         from src.main import app
 
-        client = TestClient(app)
+        client = local_owner_client(app)
         with patch("src.api.routes.sessions.services") as mock_svc:
             mock_svc.session_store = store
             resp = client.post("/api/sessions", json={"invalid_field": "x"})
@@ -176,7 +176,7 @@ class TestGenerateSessionTitle:
 
         llm = FakeLLM()
         agent = type("A", (), {"_llm": llm})()
-        client = TestClient(app)
+        client = local_owner_client(app)
         with patch.object(sess_mod, "services") as mock_svc:
             mock_svc.session_store = store
             mock_svc.chatbox_agent = agent
@@ -201,7 +201,7 @@ class TestGenerateSessionTitle:
                 raise RuntimeError("provider rejected thinking extra_body")
 
         agent = type("A", (), {"_llm": BoomLLM()})()
-        client = TestClient(app)
+        client = local_owner_client(app)
         with patch.object(sess_mod, "services") as mock_svc:
             mock_svc.session_store = store
             mock_svc.chatbox_agent = agent

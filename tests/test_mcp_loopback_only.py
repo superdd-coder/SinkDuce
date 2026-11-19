@@ -96,7 +96,7 @@ class TestIntegration:
 
         实测过旧行为：`192.168.110.146:18901/mcp` + member 钥匙 = **200**。
         """
-        key = service.ensure_local_key()
+        key = service.issue_token(name="paired-device", role="admin", is_local=True)
         probe = TestClient(
             client.app, base_url=LAN_BASE, headers={"X-Pairing-Token": key["token"]}
         )
@@ -108,7 +108,7 @@ class TestIntegration:
 
     def test_404_body_has_no_hint_of_mcp(self, client):
         """响应体只说明「没有这个路径」，不带任何「这里有什么」的线索。"""
-        key = service.ensure_local_key()
+        key = service.issue_token(name="paired-device", role="admin", is_local=True)
         resp = TestClient(
             client.app, base_url=LAN_BASE, headers={"X-Pairing-Token": key["token"]}
         ).post("/mcp")
@@ -130,6 +130,6 @@ class TestIntegration:
 
     def test_api_still_accepts_key_on_lan(self, client):
         """对照：钥匙在 /api 上照旧好使（证明收敛没有误伤）。"""
-        key = service.ensure_local_key()
+        key = service.issue_token(name="paired-device", role="admin", is_local=True)
         resp = client.get("/api/pairing/tokens", headers={"X-Pairing-Token": key["token"]})
         assert resp.status_code == 200

@@ -54,8 +54,15 @@ def _setup(monkeypatch, tmp_path):
     monkeypatch.setattr(meeting_store, "MEETINGS_DIR", tmp_path)
     # 配对门卫拦 WS：给本测试一个隔离的钥匙目录并签发一把钥匙（否则 1008）
     monkeypatch.setattr(pairing_store, "PAIRING_DIR", tmp_path / "pairing")
-    token = pairing_service.issue_token(name="rt-test", is_local=True)["token"]
-    meeting = meeting_store.create_meeting("rt resilience")
+    from src.identity import Actor, reset_actor, set_actor
+
+    key = pairing_service.issue_token(name="rt-test", is_local=True)
+    token = key["token"]
+    context = set_actor(Actor(id=key["id"], kind="key", role_id="member"))
+    try:
+        meeting = meeting_store.create_meeting("rt resilience")
+    finally:
+        reset_actor(context)
     provider = _FakeProvider()
     fake_service = MagicMock()
     fake_service.get_active_realtime_provider_meta.return_value = {

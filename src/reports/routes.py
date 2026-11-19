@@ -36,7 +36,8 @@ def _read(sid, rid, revision):
 
 @router.get("/sessions/{session_id}/reports")
 def list_reports(session_id: str):
-    return [{k: v for k, v in report.items() if k != "operations"} for report in _store(session_id).list(session_id)]
+    return [{k: v for k, v in report.items() if k not in {"operations", "_source_access"}}
+            for report in _store(session_id).list(session_id)]
 
 
 @router.get("/sessions/{session_id}/reports/{report_id}/revisions")

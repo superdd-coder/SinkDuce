@@ -123,12 +123,12 @@ class TestRealListenerStacks:
         status, _ = _get(f"http://{lan}:{server['external_port']}/api/pairing/local-key")
         assert status == 401
 
-    def test_loopback_client_is_trusted_on_either_port(self, server):
-        # 回环来源即本机（桌面语义），两个端口都放行——本机永远进得去
+    def test_external_listener_requires_pairing_even_for_local_proxy(self, server):
+        # A reverse proxy can reach the external listener from loopback.
         status_local, _ = _get(f"http://127.0.0.1:{server['entry_port']}/api/pairing/tokens")
         status_external, _ = _get(f"http://127.0.0.1:{server['external_port']}/api/pairing/tokens")
         assert status_local == 200
-        assert status_external == 200
+        assert status_external == 401
 
     def test_external_port_refuses_other_api_without_key(self, server):
         lan = _lan_ip()
@@ -137,7 +137,7 @@ class TestRealListenerStacks:
         status, _ = _get(f"http://{lan}:{server['external_port']}/api/collections")
         assert status == 401
 
-    def test_key_from_local_entry_opens_external_api(self, server):
+    def test_owner_key_stays_on_local_entry(self, server):
         lan = _lan_ip()
         if not lan:
             pytest.skip("no non-loopback address to simulate a LAN peer")
@@ -146,8 +146,7 @@ class TestRealListenerStacks:
             f"http://{lan}:{server['external_port']}/api/pairing/box",
             {"X-Pairing-Token": key["token"]},
         )
-        assert status == 200, body
-        assert body["box_id"]
+        assert status == 401, body
 
     def test_local_key_file_written_for_recovery(self, server):
         _get(f"http://127.0.0.1:{server['entry_port']}/api/pairing/local-key")

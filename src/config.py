@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -390,6 +390,7 @@ class MinerUConfig(BaseModel):
     enabled: bool = False
     api_token: str = ""
     base_url: str = "https://mineru.net/api/v4"
+    transfer_origins: list[str] = Field(default_factory=list)
     model_version: str = "pipeline"  # pipeline | vlm | MinerU-HTML
     is_ocr: bool = False
     enable_formula: bool = True

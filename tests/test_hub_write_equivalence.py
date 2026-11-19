@@ -22,7 +22,7 @@ import urllib.request
 
 import pytest
 
-BASE = "http://127.0.0.1:18900"
+from tests.e2e_config import HUB_TEST_URL as BASE, HUB_SELF_URL, hub_test_instance_ready
 
 
 # ── 1. 纯函数层：多步转发器 ───────────────────────────────────
@@ -384,6 +384,8 @@ class TestReviewFixes:
 
         ctx = type("Ctx", (), {})()
         ctx.session = sess
+        from unittest.mock import AsyncMock
+        monkeypatch.setattr("src.hub.confirm.request_confirmation", AsyncMock(return_value=None))
         out = asyncio.run(delete_document(collection="tasks", source="completed", ctx=ctx))
         text = json.dumps(out if isinstance(out, str) else getattr(out, "structuredContent", out))
         assert "reserved" in text, text
@@ -488,16 +490,8 @@ class TestConfirmBeforeForward:
 # ── 3. 真机层：写一对、比形状、清理 ───────────────────────────
 
 
-def _has_service() -> bool:
-    try:
-        with urllib.request.urlopen(f"{BASE}/health", timeout=3) as r:
-            return r.status == 200
-    except Exception:
-        return False
-
-
 pytestmark_live = pytest.mark.skipif(
-    not _has_service(), reason="需要 18900 在跑（真机写类等价性）"
+    not hub_test_instance_ready(), reason="Set SINKDUCE_TEST_INSTANCE_URL to a disposable instance for live Hub tests"
 )
 
 
@@ -518,7 +512,7 @@ def _rest(path: str, method="GET", body=None):
 
 class _Mcp:
     """一条 MCP 会话（复用：switch_box 是会话级状态）。不声明 elicit 能力
-    → 走 A 案「放行 + warning」分支，测试无需点确认卡。"""
+    → 服务端应拒绝需要人工确认的删除。"""
 
     def __init__(self):
         import httpx
@@ -568,7 +562,7 @@ def self_hub():
     _put([
         *[{"box_id": b["box_id"], "box_name": b["box_name"], "addr": b["addr"],
            "last_checked": b.get("last_checked", "")} for b in original],
-        {"box_id": "__write_equiv__", "box_name": "WriteSelf", "addr": BASE, "token": ""},
+        {"box_id": "__write_equiv__", "box_name": "WriteSelf", "addr": HUB_SELF_URL, "token": ""},
     ])
     yield
     _put([{"box_id": b["box_id"], "box_name": b["box_name"], "addr": b["addr"],
@@ -628,14 +622,16 @@ class TestLiveWriteEquivalence:
         assert not lu.get("error") and not fu.get("error"), (lu, fu)
         assert fu["updated_fields"] == ["content"]
 
-        # delete 有确认卡：本测试客户端不支持 elicit → A 案放行 + warning
+        # 旧客户端无法确认时，两条路径都保留笔记。
         ld, fd = self._pair(
             s, "delete_note",
             {"collection": col, "note_id": loc["id"]},
             {"collection": col, "note_id": fwd["id"]},
         )
-        assert not ld.get("error") and not fd.get("error"), (ld, fd)
-        assert fd.get("confirmed") is False  # A 案 warning 挂上了（远端删除也提示）
+        assert ld.get("code") == fd.get("code") == "confirmation_required"
+        for note in (loc, fwd):
+            assert _rest(f"/api/notes/{col}/{note['id']}")["id"] == note["id"]
+            _rest(f"/api/notes/{col}/{note['id']}", "DELETE")
 
     def test_note_refuses_bad_collection_with_same_message(self, self_hub):
         """坏库 id：本地与转发必须**同样报错**（precheck 防「静默建孤儿笔记」）。"""
@@ -682,8 +678,9 @@ class TestLiveWriteEquivalence:
             s, "delete_hot_words_library",
             {"library_id": loc["id"]}, {"library_id": fwd["id"]},
         )
-        assert not ld.get("error") and not fd.get("error"), (ld, fd)
-        assert fd.get("id") == fwd["id"]
+        assert ld.get("code") == fd.get("code") == "confirmation_required"
+        for library in (loc, fwd):
+            _rest("/api/hot-words/" + library["id"], "DELETE")
 
     # ── todos ──────────────────────────────────────────────
 
@@ -729,8 +726,7 @@ class TestLiveWriteEquivalence:
                 {"collection": col,
                  "todo_ids": [t["todo_id"] for t in fwd["todos"]]},
             )
-            assert not ld.get("error") and not fd.get("error"), (ld, fd)
-            assert fd["deleted"] is True and fd["total"] == 2
+            assert ld.get("code") == fd.get("code") == "confirmation_required"
         finally:
             _rest(f"/api/collections/{col}", "DELETE")
 
@@ -759,7 +755,7 @@ class TestLiveWriteEquivalence:
             after = _rest(f"/api/file-mgmt/{col}/db-status")
             assert after.get("initialized") is False, "拒绝的探测/调用竟然把远端 DB 建出来了"
         finally:
-            s.call("delete_collection", {"collection": col})
+            _rest("/api/collections/" + col, "DELETE")
 
     # ── meetings ───────────────────────────────────────────
 
@@ -795,8 +791,7 @@ class TestLiveWriteEquivalence:
                 s, "delete_meeting",
                 {"meeting_id": loc["id"]}, {"meeting_id": fwd["id"]},
             )
-            assert not ld.get("error") and not fd.get("error"), (ld, fd)
-            assert "cleaned_allocations" in fd, fd  # REST 对齐新增的契约字段
+            assert ld.get("code") == fd.get("code") == "confirmation_required"
         finally:
             # 兜底：断言在中途失败时也不留孤儿（批次 3 审查发现早前失败运行
             # 泄漏过 4 个 __verify_loc__ 会议）。已被上面删掉的会 404，忽略。
@@ -830,7 +825,7 @@ class TestLiveWriteEquivalence:
         finally:
             for col_id in (loc.get("id"), fwd.get("id")):
                 if col_id:
-                    s.call("delete_collection", {"collection": col_id})
+                    _rest("/api/collections/" + col_id, "DELETE")
 
     def test_create_collection_honors_sparse_and_provider_ids(self, self_hub):
         """审查 HIGH：REST 建库曾静默丢 sparse_llm_tokenize / *_provider_id ——
@@ -847,7 +842,7 @@ class TestLiveWriteEquivalence:
             assert cfg.get("sparse_llm_tokenize") is False, cfg.get("sparse_llm_tokenize")
             assert cfg.get("chunk_size") == 333
         finally:
-            s.call("delete_collection", {"collection": fwd["id"]})
+            _rest("/api/collections/" + fwd["id"], "DELETE")
 
     def test_forwarded_list_tasks_refuses_bad_status(self, self_hub):
         s = _Mcp()
@@ -867,10 +862,7 @@ class TestLiveWriteEquivalence:
             {"collection": col, "source": "__verify_missing__.pdf"},
             {"collection": col, "source": "__verify_missing2__.pdf"},
         )
-        # 两边都是「成功但 0 块」（本地语义如此 —— 幂等删除）
-        assert not loc.get("error") and not fwd.get("error"), (loc, fwd)
-        assert fwd["deleted_chunks"] == 0
-        assert fwd["source"] == "__verify_missing2__.pdf"
+        assert loc.get("code") == fwd.get("code") == "confirmation_required"
 
     # ── tasks ──────────────────────────────────────────────
 
@@ -898,7 +890,7 @@ class TestLiveWriteEquivalence:
             assert "not found" in (missing.get("error") or ""), missing
             assert got.get("status") in ("pending", "processing", "completed", "failed"), got
         finally:
-            s.call("delete_collection", {"collection": col})
+            _rest("/api/collections/" + col, "DELETE")
 
     def test_clear_completed_counts(self, self_hub):
         """REST 对齐后 removed/remaining 计数必须在（工具契约字段）。"""

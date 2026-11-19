@@ -4,6 +4,7 @@ import json
 import os
 import socket
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 from src.config import DATA_DIR
@@ -17,6 +18,15 @@ def _tokens_path() -> Path:
 
 def _box_path() -> Path:
     return PAIRING_DIR / "box.json"
+
+
+@contextmanager
+def token_transaction():
+    """Serialize credential changes, including last-seen refresh and revocation."""
+    from src.atomic_io import file_lock
+
+    with file_lock(_tokens_path()):
+        yield
 
 
 def load() -> list[dict]:

@@ -104,7 +104,7 @@ def _patch_route_config(monkeypatch, providers):
 
 
 def test_set_active_route_scopes_exclusivity(monkeypatch):
-    from fastapi.testclient import TestClient
+    from tests.http_client import local_owner_client
 
     from src.main import app
 
@@ -113,7 +113,7 @@ def test_set_active_route_scopes_exclusivity(monkeypatch):
     lt2 = _lt("lt-2", active=False)
     _patch_route_config(monkeypatch, [asr, lt1, lt2])
 
-    client = TestClient(app)
+    client = local_owner_client(app)
     # Translation default switches lt-1 → lt-2; ASR default untouched.
     resp = client.post("/api/transcription/realtime-providers/lt-2/set-active")
     assert resp.status_code == 200
@@ -129,7 +129,7 @@ def test_set_active_route_scopes_exclusivity(monkeypatch):
 
 
 def test_set_active_route_builtin_keeps_translation(monkeypatch):
-    from fastapi.testclient import TestClient
+    from tests.http_client import local_owner_client
 
     from src.main import app
 
@@ -137,7 +137,7 @@ def test_set_active_route_builtin_keeps_translation(monkeypatch):
     lt1 = _lt("lt-1", active=True)
     cfg = _patch_route_config(monkeypatch, [asr, lt1])
 
-    client = TestClient(app)
+    client = local_owner_client(app)
     resp = client.post("/api/transcription/realtime-providers/builtin-local-rt/set-active")
     assert resp.status_code == 200
     assert lt1.is_active is True, "local ASR switch must keep the translation default"

@@ -116,6 +116,21 @@ class TestLegacyTrustPathsRemoved:
 # ── service：发放 / 校验 / 吊销 / 过期 / 配额 ────────────────────
 
 
+def test_container_entry_requires_host_gateway(monkeypatch, tmp_path):
+    route = tmp_path / "route"
+    route.write_text("eth0 00000000 010012AC 0003 0 0 0 00000000\n")
+    monkeypatch.setattr(service, "_IPV4_ROUTES", route, raising=False)
+    monkeypatch.setattr(service, "_in_container", lambda: True)
+    monkeypatch.setattr(service, "local_entry_port", lambda: 18900)
+    scope = {"server": ("0.0.0.0", 18900), "headers": [(b"host", b"localhost")]}
+    for peer, allowed in [("172.18.0.1", True), ("172.18.0.8", False)]:
+        request = {**scope, "client": (peer, 53000)}
+        assert service.is_local_scope(request) is allowed
+        assert (service.local_key_access(request) == service.LOCAL_KEY_GRANT) is allowed
+    route.unlink()
+    assert not service.is_local_scope({**scope, "client": ("172.18.0.1", 53000)})
+
+
 class TestUnlimitedKeys:
     def test_no_device_key_quota(self):
         for i in range(7):
@@ -213,6 +228,7 @@ def container_client(monkeypatch):
     from src.main import app
 
     monkeypatch.setattr("src.config.in_container", lambda: True)
+    monkeypatch.setattr(service, "_host_gateway_peer", lambda peer: peer == "172.17.0.1")
     return TestClient(app, base_url=LOCAL_BASE, client=("172.17.0.1", 50000))
 
 
@@ -258,6 +274,7 @@ class TestLocalKeyDesktopNoLeak:
 
         monkeypatch.setattr(service, "local_entry_port", lambda: 18900)
         monkeypatch.setattr("src.config.in_container", lambda: True)
+        monkeypatch.setattr(service, "_host_gateway_peer", lambda peer: peer == "172.17.0.1")
         c = TestClient(app, base_url="http://172.17.0.1:18900", client=("172.17.0.1", 55555))
         resp = c.get(service.LOCAL_KEY_PATH, headers={"Host": "127.0.0.1:18900"})
         assert resp.status_code == 200
@@ -386,7 +403,7 @@ class TestBoxEndpoints:
         assert resp.status_code == 401
 
     def test_box_rename_with_valid_token_ok(self, client):
-        first = service.issue_token(name="first", is_local=True)
+        first = service.issue_token(name="first", role="admin", is_local=True)
         resp = client.put(
             "/api/pairing/box",
             json={"box_name": "改个名"},
@@ -397,7 +414,7 @@ class TestBoxEndpoints:
 
     def test_box_rename_response_shape_matches_get(self, client):
         # 回归：PUT 返回必须与 GET 同构（含 addresses），否则前端渲染崩溃
-        first = service.issue_token(name="first", is_local=True)
+        first = service.issue_token(name="first", role="admin", is_local=True)
         resp = client.put(
             "/api/pairing/box",
             json={"box_name": "书房盒子"},
@@ -485,11 +502,11 @@ class TestLocalKeyEndpoint:
         b = local_client.get(service.LOCAL_KEY_PATH).json()["token"]
         assert a == b
 
-    def test_handed_out_key_opens_the_gated_api(self, local_client, client):
+    def test_handed_out_key_requires_local_entry(self, local_client, client):
         token = local_client.get(service.LOCAL_KEY_PATH).json()["token"]
-        # 同一把钥匙，从局域网端口（非本机）访问受保护端点 → 放行
-        resp = client.get("/api/pairing/tokens", headers={"X-Pairing-Token": token})
-        assert resp.status_code == 200
+        headers = {"X-Pairing-Token": token}
+        assert local_client.get("/api/pairing/tokens", headers=headers).status_code == 200
+        assert client.get("/api/pairing/tokens", headers=headers).status_code == 401
 
     def test_external_port_is_refused(self, client):
         # 对外端口上，门卫在到达路由前就 401（端点不可从外部枚举）
@@ -827,6 +844,7 @@ class TestHealthInContainer:
         from src.config import health_payload
 
         monkeypatch.delenv("SINKDUCE_CONTAINER", raising=False)
+        monkeypatch.setattr("src.config._CONTAINER_MARKERS", ())
         monkeypatch.setattr("src.config.is_desktop_runtime", lambda: False)
         body = health_payload()
         assert "in_container" not in body
@@ -935,7 +953,7 @@ class TestSlidingTtl:
 
 class TestIssueRouteTtl:
     def test_issue_invalid_ttl_maps_400(self, client):
-        key = service.ensure_local_key()
+        key = service.issue_token(name="paired-device", role="admin", is_local=True)
         resp = client.post(
             "/api/pairing/issue",
             headers={"X-Pairing-Token": key["token"]},
@@ -945,7 +963,7 @@ class TestIssueRouteTtl:
         assert resp.json()["detail"]["code"] == "invalid_ttl"
 
     def test_issue_with_ttl_roundtrip(self, client):
-        key = service.ensure_local_key()
+        key = service.issue_token(name="paired-device", role="admin", is_local=True)
         resp = client.post(
             "/api/pairing/issue",
             headers={"X-Pairing-Token": key["token"]},

@@ -63,6 +63,21 @@ jobs:
         run: SINKDUCE_EDITION=community python -m pytest -q tests/test_full_community.py tests/test_community_artifacts.py tests/test_open_core_community.py tests/test_edition_migration.py tests/test_identity_rbac.py tests/test_identity_api.py tests/test_pairing.py tests/test_pairing_set_role.py
       - name: Enterprise permissions
         run: SINKDUCE_EDITION=enterprise python -m pytest -q tests/test_identity_rbac.py tests/test_identity_api.py tests/test_pairing.py tests/test_pairing_set_role.py
+      - name: Security regressions for both editions
+        shell: bash
+        run: |
+          for edition in community enterprise; do
+            SINKDUCE_EDITION="$edition" SINKDUCE_DATA="$RUNNER_TEMP/security-$edition" \
+              python -m pytest -q tests/test_core_security_boundaries.py \
+              tests/test_pairing_local_port_e2e.py tests/test_mcp_loopback_only.py \
+              tests/test_collection_tool_scope.py tests/test_hub_confirm.py \
+              tests/test_session_api.py tests/test_recall.py tests/test_recall_migration.py \
+              tests/test_agentic_query.py tests/test_query_scope.py tests/test_rag_evidence_stages.py \
+              tests/test_chat_tool_acl.py tests/test_meeting_catalog_tools.py tests/test_chat_user_identity.py \
+              tests/test_chat_report_api.py \
+              tests/test_upload_task_recovery.py tests/test_mineru_token_expiry.py \
+              tests/test_desktop_install_security.py tests/test_secrets.py
+          done
       - name: Community Python wheel contains retained management modules
         run: |
           mkdir -p development_doc/wheel-check

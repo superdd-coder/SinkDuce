@@ -20,6 +20,6 @@ swiftc -O -swift-version 5 -parse-as-library \
   -framework ScreenCaptureKit \
   -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$PLIST" \
   -o sinkduce-sysaudio \
-  main.swift CaptureState.swift
+  main.swift CaptureState.swift RequestPolicy.swift
 chmod 755 sinkduce-sysaudio
 echo "built $(pwd)/sinkduce-sysaudio"

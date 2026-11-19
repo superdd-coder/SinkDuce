@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import MagicMock, patch
-from fastapi.testclient import TestClient
+from tests.http_client import local_owner_client
 
 from src.rag.retriever import RetrievedChunk
 from src.rag.agentic_query import AgenticQueryResult
@@ -11,7 +11,7 @@ from src.rag.agentic_query import AgenticQueryResult
 @pytest.fixture
 def client():
     from src.main import app
-    return TestClient(app)
+    return local_owner_client(app)
 
 
 def _patch_services():

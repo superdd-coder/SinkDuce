@@ -30,6 +30,7 @@ import uuid
 from pathlib import Path
 
 from src.config import DATA_DIR
+from src.paths import assert_resource_id
 
 logger = logging.getLogger("file_mgmt.storage_paths")
 
@@ -41,17 +42,24 @@ _layout_migrated: set[str] = set()
 _storage_labels_repaired: set[str] = set()
 
 
+def _storage_child(root: Path, name: str) -> Path:
+    path = root / assert_resource_id(name)
+    if path.is_symlink():
+        raise ValueError("invalid storage directory")
+    return path
+
+
 def files_dir(collection_id: str) -> Path:
-    return COLLECTIONS_DIR / collection_id / "files"
+    return _storage_child(_storage_child(COLLECTIONS_DIR, collection_id), "files")
 
 
 def managed_file_dir(collection_id: str, file_id: str) -> Path:
-    return files_dir(collection_id) / file_id
+    return _storage_child(files_dir(collection_id), file_id)
 
 
 def version_dir(collection_id: str, file_id: str, version_id: str) -> Path:
     """Directory for one version's blob + sidecars."""
-    return managed_file_dir(collection_id, file_id) / version_id
+    return _storage_child(managed_file_dir(collection_id, file_id), version_id)
 
 
 def storage_basename(storage_file_id: str | None) -> str:
@@ -75,12 +83,12 @@ def _is_content_blob_name(name: str) -> bool:
 
 def _iter_content_blobs(directory: Path) -> list[Path]:
     """List content files in *directory* (non-recursive)."""
-    if not directory.is_dir():
+    if directory.is_symlink() or not directory.is_dir():
         return []
     out: list[Path] = []
     try:
         for f in sorted(directory.iterdir()):
-            if f.is_file() and _is_content_blob_name(f.name):
+            if not f.is_symlink() and f.is_file() and _is_content_blob_name(f.name):
                 out.append(f)
     except OSError:
         return []
@@ -101,7 +109,7 @@ def discover_content_blob(
     if not root.is_dir():
         return None
     if version_id:
-        found = _iter_content_blobs(root / version_id)
+        found = _iter_content_blobs(version_dir(collection_id, file_id, version_id))
         if found:
             return found[0]
     # Flat layout under file_id (notes/meetings ingest)
@@ -138,22 +146,13 @@ def resolve_version_blob(
         return None
 
     candidates: list[Path] = []
-
-    if version_id and name:
-        candidates.append(root / version_id / name)
-    if version_id and storage_file_id and "/" in str(storage_file_id).replace("\\", "/"):
-        # Relative path under file_id (e.g. "{version_id}/{name}")
-        rel = str(storage_file_id).replace("\\", "/").lstrip("/")
-        candidates.append(root / rel)
+    vdir = version_dir(collection_id, file_id, version_id) if version_id else None
+    if vdir and name:
+        candidates.append(vdir / name)
     if name:
         candidates.append(root / name)  # legacy flat
-    if version_id:
-        # Any content file under this version dir (DB name may be a display label)
-        for f in _iter_content_blobs(root / version_id):
-            if not name or f.name == name:
-                candidates.append(f)
-            else:
-                candidates.append(f)
+    if vdir:
+        candidates.extend(_iter_content_blobs(vdir))
 
     seen: set[str] = set()
     for p in candidates:
@@ -162,7 +161,7 @@ def resolve_version_blob(
             continue
         seen.add(key)
         try:
-            if p.is_file():
+            if not p.is_symlink() and p.is_file() and _is_content_blob_name(p.name):
                 return p
         except OSError:
             continue
@@ -223,19 +222,14 @@ def write_version_blob_stream(
 
 def _write_blob(collection_id, file_id, version_id, filename, writer) -> tuple[Path, str]:
     safe_name = Path(filename).name
-    if not safe_name:
+    if not _is_content_blob_name(safe_name):
         from fastapi import HTTPException
 
         raise HTTPException(400, "Invalid filename")
-    if safe_name in {"parsed.txt"} or safe_name.endswith(".extracted.txt"):
-        from fastapi import HTTPException
-
-        raise HTTPException(400, f"Invalid storage name: {safe_name}")
-
     vdir = version_dir(collection_id, file_id, version_id)
     vdir.mkdir(parents=True, exist_ok=True)
     save_path = vdir / safe_name
-    if save_path.exists():
+    if save_path.exists() or save_path.is_symlink():
         stem, suf = save_path.stem, save_path.suffix
         save_path = vdir / f"{stem}_{uuid.uuid4().hex[:8]}{suf}"
         safe_name = save_path.name
@@ -338,30 +332,46 @@ def find_image_file(
     extensions: tuple[str, ...] = ("png", "jpg", "jpeg", "gif", "webp", "bmp"),
 ) -> Path | None:
     """Locate ``images/{image_id}.{ext}`` under version dirs or legacy flat."""
+    from src.identity import get_actor
+    from src.identity.visibility import is_collection_visible
+    try:
+        assert_resource_id(image_id)
+        assert_resource_id(file_id)
+    except ValueError:
+        return None
+    actor = get_actor()
     roots: list[Path] = []
     if collection_id:
-        roots.append(managed_file_dir(collection_id, file_id))
+        if not is_collection_visible(actor, collection_id):
+            return None
+        try:
+            roots.append(managed_file_dir(collection_id, file_id))
+        except ValueError:
+            return None
     else:
         cols = COLLECTIONS_DIR
         if cols.is_dir():
             for col_dir in cols.iterdir():
-                if col_dir.is_dir():
-                    roots.append(col_dir / "files" / file_id)
+                if col_dir.is_dir() and not col_dir.is_symlink() and is_collection_visible(actor, col_dir.name):
+                    try:
+                        roots.append(managed_file_dir(col_dir.name, file_id))
+                    except ValueError:
+                        continue
 
     for root in roots:
         if not root.is_dir():
             continue
         def _lookup(img_dir: Path) -> Path | None:
-            if not img_dir.is_dir():
+            if img_dir.is_symlink() or not img_dir.is_dir():
                 return None
             for ext in extensions:
                 p = img_dir / f"{image_id}.{ext}"
-                if p.is_file():
+                if not p.is_symlink() and p.is_file():
                     return p
             # Office extracts (x-wmf / emf / tiff) before we normalize to png
             try:
                 for p in img_dir.glob(f"{image_id}.*"):
-                    if p.is_file():
+                    if not p.is_symlink() and p.is_file():
                         return p
             except OSError:
                 return None
@@ -373,7 +383,7 @@ def find_image_file(
         # Version dirs: files/{file_id}/{version_id}/images/
         try:
             for child in root.iterdir():
-                if not child.is_dir():
+                if child.is_symlink() or not child.is_dir():
                     continue
                 found = _lookup(child / "images")
                 if found is not None:

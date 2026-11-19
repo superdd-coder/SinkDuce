@@ -242,14 +242,12 @@ jobs:
           SHA=$(shasum -a 256 "$DMG" | cut -d' ' -f1)
           SIZE=$(stat -f%z "$DMG")
           printf '%s  %s\n' "$SHA" "$DMG" > "$DMG.sha256"
-          UPDATER=0
-          if [[ -f "$TARGZ" && -f "$TARGZ.sig" ]]; then
-            UPDATER=1
-          else
-            echo "WARN updater payload missing — latest.json will offer DMG only"
+          if [[ ! -s "$TARGZ" || ! -s "$TARGZ.sig" ]]; then
+            echo "The signed updater archive and its signature are required for publication" >&2
+            exit 1
           fi
           VERSION="$VER" DMG="$DMG" SHA="$SHA" SIZE="$SIZE" TARGZ="$TARGZ" \
-            UPDATER="$UPDATER" PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             NOTES="$NOTES" \
             R2_PUBLIC_BASE="${{ env.R2_PUBLIC_BASE }}" \
           python3 - <<'PY'
@@ -267,15 +265,14 @@ jobs:
           notes = os.environ.get("NOTES", "").strip()
           if notes:
               latest["notes"] = notes
-          if os.environ["UPDATER"] == "1":
-              targz = os.environ["TARGZ"]
-              sig = open(targz + ".sig").read().strip()
-              latest["platforms"] = {
-                  "darwin-aarch64": {
-                      "signature": sig,
-                      "url": os.environ["R2_PUBLIC_BASE"] + "/" + targz,
-                  }
+          targz = os.environ["TARGZ"]
+          sig = open(targz + ".sig").read().strip()
+          latest["platforms"] = {
+              "darwin-aarch64": {
+                  "signature": sig,
+                  "url": os.environ["R2_PUBLIC_BASE"] + "/" + targz,
               }
+          }
           with open("latest.json", "w") as fh:
               fh.write(json.dumps(latest, indent=2) + "\n")
           PY
@@ -285,15 +282,11 @@ jobs:
             --content-disposition "attachment; filename=\"$DMG\"" --cache-control "public, max-age=86400"
           aws s3 cp "$DMG.sha256" "s3://sinkduce-releases/$DMG.sha256" \
             --endpoint-url "$ENDPOINT" --content-type "text/plain" --cache-control "public, max-age=86400"
-          if [[ "$UPDATER" == "1" ]]; then
-            aws s3 cp "$TARGZ" "s3://sinkduce-releases/$TARGZ" \
-              --endpoint-url "$ENDPOINT" --content-type "application/gzip" --cache-control "public, max-age=86400"
-            aws s3 cp "$TARGZ.sig" "s3://sinkduce-releases/$TARGZ.sig" \
-              --endpoint-url "$ENDPOINT" --content-type "text/plain" --cache-control "public, max-age=86400"
-          fi
-          # One-line installer: version-independent (resolves latest.json itself),
-          # so it only changes when the script changes. curl never sets the
-          # quarantine xattr, so this install path never meets Gatekeeper.
+          aws s3 cp "$TARGZ" "s3://sinkduce-releases/$TARGZ" \
+            --endpoint-url "$ENDPOINT" --content-type "application/gzip" --cache-control "public, max-age=86400"
+          aws s3 cp "$TARGZ.sig" "s3://sinkduce-releases/$TARGZ.sig" \
+            --endpoint-url "$ENDPOINT" --content-type "text/plain" --cache-control "public, max-age=86400"
+          # Keep the existing installer URL available for older documentation.
           aws s3 cp ../../desktop/install.sh "s3://sinkduce-releases/install.sh" \
             --endpoint-url "$ENDPOINT" --content-type "text/plain; charset=utf-8" --cache-control "public, max-age=300"
           # latest.json lands last: everything it points at is already public.

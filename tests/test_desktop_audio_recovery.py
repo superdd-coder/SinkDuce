@@ -121,6 +121,25 @@ def test_audio_settings_are_local_only(desktop_client, monkeypatch):
 
 
 @pytest.mark.skipif(shutil.which("swiftc") is None, reason="Swift compiler unavailable")
+def test_audio_http_requests_require_the_native_proxy(tmp_path):
+    source = ROOT / "desktop/sysaudio/RequestPolicy.swift"
+    harness = tmp_path / "main.swift"
+    harness.write_text('''
+let valid = ["Host: 127.0.0.1:18950", "X-SinkDuce-Audio-Proxy: 1"]
+assert(AudioRequestPolicy.allows(method: "GET", path: "/pcm", headers: valid))
+assert(AudioRequestPolicy.allows(method: "GET", path: "/health", headers: [valid[0]]))
+assert(!AudioRequestPolicy.allows(method: "GET", path: "/pcm", headers: [valid[0]]))
+assert(!AudioRequestPolicy.allows(method: "GET", path: "/pcm", headers: valid + ["Origin: https://example.test"]))
+assert(!AudioRequestPolicy.allows(method: "POST", path: "/stop", headers: valid + ["Sec-Fetch-Site: cross-site"]))
+assert(!AudioRequestPolicy.allows(method: "GET", path: "/pcm", headers: valid + [valid[0]]))
+assert(!AudioRequestPolicy.allows(method: "GET", path: "/pcm", headers: ["Host: example.test", valid[1]]))
+''')
+    binary = tmp_path / "request-test"
+    subprocess.run(["swiftc", str(source), str(harness), "-o", str(binary)], check=True, capture_output=True)
+    subprocess.run([str(binary)], check=True)
+
+
+@pytest.mark.skipif(shutil.which("swiftc") is None, reason="Swift compiler unavailable")
 def test_native_permission_and_attempt_state(tmp_path):
     source = ROOT / "desktop/sysaudio/CaptureState.swift"
     assert source.exists(), "Native pending-permission and capture-attempt state must be testable without TCC"

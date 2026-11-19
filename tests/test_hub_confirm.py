@@ -1,17 +1,7 @@
-"""MCP 写操作确认 —— **A 案：在 Agent 侧问**（2026-09-18 用户拍板）。
+"""Exercise destructive operations over a real MCP client session.
 
-## 这个文件要钉住的三件事
-
-1. **确认属于 Agent 侧，不属于盒子**。第一版把卡做在盒子网页上 —— 那是错的
-   （主体错位：驱使 Agent 的人坐在 Agent 客户端；而且做成"没有浏览器就拒绝"会把
-   headless Agent 的删除功能整个堵死）。所以这里**不再有任何进程内 SSE/浏览器确认**。
-2. **`elicit` 可用时**：拒绝/取消 → 拦下；同意 → 放行。
-3. **`elicit` 不可用**（老客户端）→ **放行**，但结果里必须带 ``warning`` ——
-   放行不是静默。
-
-⚠️ **验证方式很关键**：确认逻辑读的是**会话的能力声明**，所以必须用真客户端
-（``mcp.client.streamable_http`` + ``ClientSession``）跑，不能只调 Python 方法。
-第一版就是因为只调 Python 方法而"全绿"，真客户端上完全不生效（见交接档 §3.6）。
+An explicit affirmative response permits dispatch. Decline, cancellation, or a
+client without interactive confirmation must leave the user's content intact.
 """
 
 from __future__ import annotations
@@ -92,7 +82,7 @@ def _stub_services(monkeypatch):
 
     确认层测的是「有没有问、问了之后放不放行」，所以把**库存在性**与
     **真实删除动作**桩掉，让请求能走到工具正文并成功返回 —— 这样才能断言
-    「放行后确实执行了 + 带了 warning」。
+    「确认后确实执行了」。
     """
     # ⚠️ 要打在**工具模块里的那个名字**上，不是 `src.mcp.common`：
     # 工具是 `from src.mcp.common import ... require_collection ...` 静态导入的，
@@ -239,42 +229,27 @@ class TestClientSupportsElicit:
         assert "col_abc" in seen[0], seen
 
 
-# ── ★ 客户端**不支持** elicit：放行 + 明确警告 ──────────────────
+# ── ★ 旧客户端必须在界面完成删除 ──────────────────
 
 
 class TestClientWithoutElicit:
-    def test_proceeds_but_warns(self, live_server):
-        """**A 案的核心行为**：老客户端上**照常执行**，但结果必须带 warning。
+    @pytest.mark.parametrize(("name", "args"), [
+        ("delete_collection", {"collection": "col_x"}),
+        ("delete_note", {"collection": "col_x", "note_id": "n"}),
+        ("delete_document", {"collection": "col_x", "source": "sample.txt"}),
+        ("delete_hot_words_library", {"library_id": "practice"}),
+        ("delete_todo", {"collection": "col_x", "todo_id": "sample"}),
+        ("delete_meeting", {"meeting_id": "practice"}),
+    ])
+    def test_unsupported_client_receives_ui_guidance(self, live_server, name, args):
+        out, seen = _call(live_server, name, args, elicit=False)
+        assert not seen
+        assert out.get("code") == "confirmation_required"
+        assert "SinkDuce" in out["error"] and "id" not in out
 
-        - 执行（不是拒绝）→ 不因为客户端没实现 elicit 就把删除功能堵死；
-        - 带 ``warning`` → 放行不是静默，模型看得到、也该转告用户。
-        """
-        out, seen = _call(
-            live_server, "delete_note",
-            {"collection": "col_x", "note_id": "n"},
-            elicit=False,
-        )
-        assert not seen, "客户端没声明能力，不该收到 elicit"
-        blob = json.dumps(out, ensure_ascii=False)
-        assert "confirmation_declined" not in blob, "A 案下不该拦：" + blob
-        assert out.get("id") == "n", "应该真的执行了：" + blob
-        assert out.get("confirmed") is False, blob
-        assert "irreversible" in str(out.get("warning", "")), blob
-
-    def test_no_warning_when_the_operation_failed(self, live_server):
-        """**核心**：操作失败时**不能**贴「未确认就执行」的提示。
-
-        那条提示是「它没经确认就跑了」—— 如果操作本身失败了（目标不存在），
-        说它"跑了"是假信息。实测发现过（"Note not found" 结果上挂着那条 warning）。
-        """
-        out, _ = _call(
-            live_server, "delete_note",
-            {"collection": "col_x", "note_id": "__missing_note__"},
-            elicit=False,
-        )
-        assert "not found" in json.dumps(out, ensure_ascii=False), out
-        assert "confirmed" not in out, f"失败结果不该贴未确认提示：{out}"
-        assert "warning" not in out, f"失败结果不该贴 warning：{out}"
+    def test_missing_target_is_not_inspected_before_confirmation(self, live_server):
+        out, _ = _call(live_server, "delete_note", {"collection": "col_x", "note_id": "__missing_note__"}, elicit=False)
+        assert out.get("code") == "confirmation_required"
 
     def test_ungated_tool_gets_no_confirmation_mark(self, live_server):
         """未闸的工具（这里用 Hub 原语 list_boxes）不该被贴确认标记。"""

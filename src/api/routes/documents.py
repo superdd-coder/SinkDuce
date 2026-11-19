@@ -11,6 +11,8 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from src.api.errors import ApiError
+from src.api.file_responses import UPLOAD_HEADERS
+from src.paths import assert_resource_id, confine
 
 from src.services import services
 from src.parsers import parse_directory
@@ -93,7 +95,10 @@ class IngestRetryRequest(BaseModel):
 COLLECTIONS_DIR = DATA_DIR / "collections"
 
 def _files_dir(collection_id: str) -> Path:
-    return COLLECTIONS_DIR / collection_id / "files"
+    root = confine(COLLECTIONS_DIR / assert_resource_id(collection_id), COLLECTIONS_DIR)
+    if root != (COLLECTIONS_DIR.resolve() / collection_id):
+        raise ValueError("invalid collection directory")
+    return confine(root / "files", root)
 
 # 注册任务处理器
 task_manager.register_handler("upload", upload_handler)
@@ -112,11 +117,11 @@ async def upload_document(
     collection: str = "default",
 ):
     """上传文件 - 异步队列处理"""
-    _assert_col_write(collection, "file.upload")
     # Resolve collection: try as ID first, then display name
     col_meta = (collection_store.get_collection_meta(collection)
                 or collection_store.find_collection_by_name(collection))
     collection_id = col_meta["id"] if col_meta else collection
+    _assert_col_write(collection_id, "file.upload")
 
     # Check allowed file types for this collection
     col_config = services.db.get_collection_config(collection_id) if services.db.collection_exists(collection_id) else {}
@@ -236,8 +241,8 @@ async def get_tasks(
     RBAC：任务列表含 collection / filename，属跨库聚合——必须按可见集收窄，
     否则不可见库的存在与文件名会从这里漏出去。
     """
-    if collection:
-        _assert_col_visible(collection)
+    from src.identity import get_actor
+    from src.tasks.access import filter_visible_tasks
     # Resolve collection ID (try ID first, then display name)
     collection_id = None
     if collection:
@@ -245,17 +250,13 @@ async def get_tasks(
                     or collection_store.find_collection_by_name(collection))
         collection_id = col_meta["id"] if col_meta else collection
 
-    tasks = task_manager.get_all_tasks(collection_id)
+        _assert_col_visible(collection_id)
+
+    tasks = filter_visible_tasks(get_actor(), task_manager.get_all_tasks(collection_id))
     result = []
     for t in tasks:
         ttype, targs = task_manager._task_args.get(t.id, ("unknown", {}))
         entry = t.to_dict_with_type(ttype)
-        # RBAC：全局任务列表（无 collection 过滤）要按可见集收窄——任务条目带
-        # collection/filename，等于把不可见库的存在与文件名漏出去。
-        if collection_id is None:
-            task_col = entry.get("collection") or targs.get("collection")
-            if task_col and not _visible_collection_ids_contain(task_col):
-                continue
         # 多端同步：Ingesting 锁以 file_id 为键从服务端任务状态派生（见 events 设计 §9），
         # 所以任务列表必须告诉前端每个任务属于哪个文件。file_id 住在 kwargs 里，
         # 只有这里能拿到。非入库任务没有它，返回 None。
@@ -276,8 +277,8 @@ async def get_tasks(
     return {
         "tasks": result,
         "total": len(result),
-        "pending": len(task_manager.get_pending_tasks(collection_id)),
-        "processing": len(task_manager.get_processing_tasks(collection_id)),
+        "pending": sum(t.status.value == "pending" for t in tasks),
+        "processing": sum(t.status.value == "processing" for t in tasks),
     }
 
 
@@ -299,19 +300,21 @@ async def get_task(task_id: str):
 @router.delete("/documents/tasks/completed", dependencies=[Depends(require_module("tasks"))])
 async def clear_completed_tasks():
     """清除已完成的任务"""
-    before = len(task_manager.tasks)
-    task_manager.clear_completed_tasks()
-    after = len(task_manager.tasks)
+    from src.identity import get_actor
+    from src.tasks.access import clear_manageable_tasks
+
+    removed, remaining = clear_manageable_tasks(get_actor())
     # 多端同步：其他设备也要把已完成任务清掉（见 events 设计 §5）。
     from src.events.emit import emit
 
-    emit("task.cleared", scope={"collection_id": None})
+    if removed:
+        emit("task.cleared", scope={"collection_id": None})
     # removed/remaining：MCP 工具契约（clear_completed_tasks）返回这两个计数，
     # 放在 REST 上让跨盒子转发拿到的与本地同形（加字段，向后兼容）。
     return {
         "message": "Cleared completed tasks",
-        "removed": before - after,
-        "remaining": after,
+        "removed": removed,
+        "remaining": remaining,
     }
 
 
@@ -319,11 +322,11 @@ async def clear_completed_tasks():
 async def cancel_task(task_id: str):
     """取消正在运行的任务"""
     from src.identity import get_actor
-    from src.tasks.access import can_see_task
+    from src.tasks.access import can_manage_task
 
     # RBAC：看不见的任务不能取消（**在动手之前**判——破坏先于授权是最糟的）。
     _t = task_manager.get_task(task_id)
-    if not _t or not can_see_task(get_actor(), task_id, _t):
+    if not _t or not can_manage_task(get_actor(), task_id, _t):
         raise ApiError(404, "task_not_found", "Task not found")
     if task_manager.cancel_task(task_id):
         # 多端同步：任务状态变了，其他设备要跟着刷新（见 events 设计 §5）。
@@ -338,11 +341,11 @@ async def cancel_task(task_id: str):
 async def retry_task(task_id: str):
     """重试失败的任务"""
     from src.identity import get_actor
-    from src.tasks.access import can_see_task
+    from src.tasks.access import can_manage_task
 
     # RBAC：看不见的任务不能重试（同为写操作，同样在动手之前判）。
     _t = task_manager.get_task(task_id)
-    if not _t or not can_see_task(get_actor(), task_id, _t):
+    if not _t or not can_manage_task(get_actor(), task_id, _t):
         raise ApiError(404, "task_not_found", "Task not found")
     task = task_manager.retry_task(task_id)
     if task:
@@ -410,11 +413,11 @@ def _resolve_retry_file_path(collection_id: str, kwargs: dict) -> str | None:
 @router.get("/documents/ingest-history")
 def get_ingest_history(collection: str):
     """Upload history for a collection: every file ingest with status, stage, error."""
-    _assert_col_visible(collection)
     # Resolve collection: try as ID first, then display name
     col_meta = (collection_store.get_collection_meta(collection)
                 or collection_store.find_collection_by_name(collection))
     collection_id = col_meta["id"] if col_meta else collection
+    _assert_col_visible(collection_id)
     return {
         "records": history_store.list_records(collection_id),
         "counts": history_store.status_counts(collection_id),
@@ -428,6 +431,7 @@ def retry_ingest_history(record_id: str, body: IngestRetryRequest):
                 or collection_store.find_collection_by_name(body.collection))
     collection_id = col_meta["id"] if col_meta else body.collection
 
+    _assert_col_write(collection_id, "file.upload")
     record = history_store.get_record(collection_id, record_id)
     if record is None:
         raise ApiError(404, "record_not_found", "Ingest history record not found")
@@ -473,11 +477,11 @@ async def upload_folder(
     collection: str = "default",
 ):
     """上传文件夹 - 异步队列处理"""
-    _assert_col_write(collection, "file.upload")
     # Resolve collection: try as ID first, then display name
     col_meta = (collection_store.get_collection_meta(collection)
                 or collection_store.find_collection_by_name(collection))
     collection_id = col_meta["id"] if col_meta else collection
+    _assert_col_write(collection_id, "file.upload")
 
     if not services.db.collection_exists(collection_id):
         services.db.create_collection(collection_id, vector_size=services.embedding.dimensions)
@@ -541,17 +545,17 @@ def get_document_image(collection: str, file_id: str, image_id: str):
         headers={
             "Content-Disposition": f'inline; filename="{img_path.name}"',
             "Content-Length": str(len(content)),
-            "Cache-Control": "public, max-age=86400",
+            **UPLOAD_HEADERS,
         },
     )
 
 @router.delete("/documents/{collection}/{doc_source:path}")
 async def delete_document(collection: str, doc_source: str):
-    _assert_col_write(collection, "file.delete")
     # Resolve collection: try as ID first, then display name
     col_meta = (collection_store.get_collection_meta(collection)
                 or collection_store.find_collection_by_name(collection))
     collection_id = col_meta["id"] if col_meta else collection
+    _assert_col_write(collection_id, "file.delete")
 
     logger.info("[DELETE] Deleting document '%s' from collection='%s'", doc_source, collection_id)
     deleted_count = services.db.delete_by_filter(collection_id, key="source", value=doc_source)
@@ -815,6 +819,13 @@ def _find_file_path(
     """
     from src.collections.file_index import load_for_read as load_file_index
 
+    if collection_id:
+        assert_resource_id(collection_id, name="collection")
+    if source.startswith("__file__:"):
+        assert_resource_id(source.removeprefix("__file__:"), name="file_id")
+    if version_id:
+        assert_resource_id(version_id, name="version_id")
+
     # Explicit version pin — never fall through to current if missing.
     if (
         (storage_file or version_id)
@@ -929,7 +940,8 @@ def _find_file_path(
                     exc_info=True,
                 )
             # Legacy flat last chance for this basename only
-            p_flat = _files_dir(collection_id) / fid / safe
+            root = confine(_files_dir(collection_id) / fid, _files_dir(collection_id))
+            p_flat = confine(root / safe, root)
             if p_flat.is_file():
                 return p_flat
             # Do not hard-fail when version_id was also tried above — fall through
@@ -943,11 +955,11 @@ def _find_file_path(
         d: Path, *, current_name: str | None = None
     ) -> Path | None:
         """Best path inside a version dir (or legacy flat managed file dir)."""
-        if not d.is_dir():
+        if not d.is_dir() or d.is_symlink():
             return None
         if current_name:
             cur = d / Path(current_name).name
-            if cur.is_file() and cur.name != "parsed.txt":
+            if cur.is_file() and not cur.is_symlink() and cur.name != "parsed.txt":
                 if prefer_original:
                     # Raw: always the real blob (docx/xlsx/pptx/pdf/md/…)
                     return cur
@@ -957,22 +969,23 @@ def _find_file_path(
                 parsed = d / "parsed.txt"
                 if (
                     suffix not in {".pdf", ".txt", ".md", ".csv", ".tsv"}
-                    and parsed.is_file()
+                    and parsed.is_file() and not parsed.is_symlink()
                     and parsed.stat().st_mtime >= cur.stat().st_mtime
                 ):
                     return parsed
                 return cur
         # Legacy: PDF first for iframe
         for f in sorted(d.iterdir()):
-            if f.is_file() and f.suffix.lower() == ".pdf":
+            if f.is_file() and not f.is_symlink() and f.suffix.lower() == ".pdf":
                 return f
         if not prefer_original:
             parsed = d / "parsed.txt"
-            if parsed.is_file():
+            if parsed.is_file() and not parsed.is_symlink():
                 return parsed
         for f in sorted(d.iterdir()):
             if (
                 f.is_file()
+                and not f.is_symlink()
                 and f.name != "parsed.txt"
                 and not f.name.endswith(".extracted.txt")
             ):
@@ -1047,6 +1060,8 @@ def preview_file(
     version_id: str | None = None,
 ):
     # Handle full paths - extract just the name part
+    if collection:
+        _assert_col_visible(collection)
     # Note: __file__:{id} uses colon — do not Path().name-strip the source key
     source_key = filename
     if not filename.startswith("__") and "/" in filename:
@@ -1167,7 +1182,7 @@ def preview_file(
             "Content-Disposition": _content_disposition_inline(file_path.name),
             "Content-Length": str(len(content)),
             "Accept-Ranges": "bytes",
-            "X-Content-Type-Options": "nosniff",
+            **UPLOAD_HEADERS,
             # ASCII-only: File Viewer uses this for extension routing when present
             "X-File-Name": safe_ascii_name,
         },
@@ -1219,6 +1234,8 @@ def get_extracted_text(
     Optional *version_id* pins Qdrant stitch to that version when multiple
     history rows share the same storage basename (legacy overwrite case).
     """
+    if collection:
+        _assert_col_visible(collection)
     source_key = filename
     if not filename.startswith("__") and "/" in filename:
         source_key = Path(filename).name

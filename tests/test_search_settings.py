@@ -28,7 +28,9 @@ def test_agent_passes_sparse_preprocessing_model_when_enabled():
     vf = MagicMock()
     vf.run.return_value = VariantFetcherResult()
     llm = MagicMock()
-    service = AgenticQueryService(MagicMock(), vf, MagicMock(), MagicMock(), Aggregator(llm), llm)
+    router = MagicMock()
+    router.route_collections.return_value = ["col"]
+    service = AgenticQueryService(MagicMock(), vf, MagicMock(), router, Aggregator(llm), llm)
     service.run("fact", collections=["col"], decompose=False, generate_answer=False,
                 sparse_llm_tokenize=True)
     assert vf.run.call_args.kwargs.get("llm_for_sparse") is llm

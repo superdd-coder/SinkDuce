@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.http_client import local_owner_client
 
 GONE = {
     "error": "Gone",
@@ -18,7 +18,7 @@ GONE = {
 @pytest.fixture
 def client():
     from src.main import app
-    return TestClient(app)
+    return local_owner_client(app)
 
 
 class TestDeprecatedQueryRoutes:

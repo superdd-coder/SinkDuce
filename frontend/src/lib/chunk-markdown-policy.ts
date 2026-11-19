@@ -1,4 +1,4 @@
-import type { ExtraProps } from "react-markdown"
+import { defaultUrlTransform, type ExtraProps } from "react-markdown"
 
 type Element = NonNullable<ExtraProps["node"]>
 type Parent = Pick<Element, "children">
@@ -26,7 +26,7 @@ const DOCUMENT_ATTRIBUTES: Record<string, readonly string[]> = {
  * attributes after HTML parsing; ReactMarkdown also applies its safe URL
  * transform before creating React elements.
  */
-function keepChunkElement(element: Element): boolean {
+function keepChunkElement(element: Element, editorColors: boolean): boolean {
   if (!DOCUMENT_TAGS.has(element.tagName)) return false
   const original = element.properties
   if (element.tagName === "input" && original.type !== "checkbox") return false
@@ -39,6 +39,15 @@ function keepChunkElement(element: Element): boolean {
     }
   }
   if (element.tagName === "input") properties.disabled = true
+  for (const key of ["href", "src"]) {
+    if (typeof properties[key] === "string") properties[key] = defaultUrlTransform(properties[key])
+  }
+  if (editorColors && ["span", "mark"].includes(element.tagName) && typeof original.style === "string") {
+    const colors = original.style.split(";").map(rule => rule.trim()).filter(rule =>
+      /^(?:color|background-color)\s*:\s*(?:#[0-9a-f]{3,8}|[a-z]+|(?:rgb|hsl)a?\([\d.,%\s/+-]+\))$/i.test(rule)
+    )
+    if (colors.length) properties.style = colors.join(";")
+  }
   if (element.tagName === "code" && Array.isArray(original.className)) {
     properties.className = original.className.filter((name) => typeof name === "string" && /^language-[\w+-]+$/.test(name))
   }
@@ -56,13 +65,13 @@ function keepChunkElement(element: Element): boolean {
 }
 
 /** Run immediately after rehypeRaw so parsed HTML cannot bypass the policy. */
-export function rehypeChunkPolicy() {
+export function rehypeChunkPolicy({ editorColors = false }: { editorColors?: boolean } = {}) {
   return (tree: unknown) => {
     const cleanChildren = (parent: Parent) => {
       for (let i = 0; i < parent.children.length;) {
         const node = parent.children[i]
         if (node.type === "element") {
-          if (!keepChunkElement(node)) {
+          if (!keepChunkElement(node, editorColors)) {
             parent.children.splice(i, 1)
             continue
           }

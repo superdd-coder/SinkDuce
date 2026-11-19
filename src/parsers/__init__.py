@@ -36,6 +36,11 @@ def parse_file(path: Path) -> ParsedDocument:
     if parser is None:
         supported = ", ".join(sorted(PARSERS.keys()))
         raise ValueError(f"Unsupported file format: {ext}. Supported: {supported}")
+    if ext in {".docx", ".xlsx", ".pptx"}:
+        from src.parsers.archive_limits import checked_archive
+
+        with path.open("rb") as stream, checked_archive(stream):
+            return parser.parse(path)
     return parser.parse(path)
 
 
@@ -44,7 +49,7 @@ def parse_directory(path: Path) -> list[ParsedDocument]:
     logger = logging.getLogger(__name__)
     docs = []
     for file in sorted(path.rglob("*")):
-        if file.is_file() and file.suffix.lower() in PARSERS:
+        if not file.is_symlink() and file.is_file() and file.suffix.lower() in PARSERS:
             try:
                 docs.append(parse_file(file))
             except Exception as e:

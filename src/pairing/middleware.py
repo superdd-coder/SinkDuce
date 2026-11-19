@@ -42,7 +42,7 @@ from . import service
 _GATED_PREFIXES = ("/api", "/mcp")
 
 # /mcp 额外一条更强的规则：**只认本机**（见模块 docstring「/mcp 收敛回环」）。
-_MCP_PREFIX = "/mcp"
+_MCP_PREFIXES = ("/mcp", "/api/mcp")
 
 
 def _is_gated_path(path: str) -> bool:
@@ -50,7 +50,7 @@ def _is_gated_path(path: str) -> bool:
 
 
 def _is_mcp_path(path: str) -> bool:
-    return path == _MCP_PREFIX or path.startswith(_MCP_PREFIX + "/")
+    return any(path == prefix or path.startswith(prefix + "/") for prefix in _MCP_PREFIXES)
 
 
 def should_allow(*, path: str, is_local: bool, token_valid: bool, local_key: bool = False) -> bool:
@@ -182,10 +182,11 @@ class PairingGateMiddleware:
                 return
 
         is_local = service.is_local_scope(scope)
-        from src.edition import has_permission_management
-        if not is_local and rec is not None and not has_permission_management():
-            # A restricted core profile preserves the meaning of historical keys.
-            if rec.get("role", "member") != "member" or rec.get("name") == service.LOCAL_KEY_NAME:
+        if not is_local and rec is not None:
+            from src.identity.roles import get_role
+
+            role = get_role(rec.get("role"))
+            if not rec.get("id") or rec.get("name") == service.LOCAL_KEY_NAME or not role or not role.assignable:
                 rec = None
         allowed = should_allow(
             path=path,
@@ -198,7 +199,7 @@ class PairingGateMiddleware:
             # 将来 RBAC = 在此按 rec["role"] 与路径规则判定 401/403，业务端点零改动。
             if rec is not None:
                 state = scope.setdefault("state", {})
-                state["pairing"] = {"key_id": rec.get("id"), "role": rec.get("role", "owner")}
+                state["pairing"] = {"key_id": rec["id"], "role": rec.get("role")}
             # 事件溯源（多端同步）：把调用者身份绑进请求上下文，emit_event 据此填 origin。
             # 后台线程没有请求上下文，origin 留空 = 该事件发给所有客户端（正确语义）。
             from src.events import context as _event_context
@@ -216,9 +217,9 @@ class PairingGateMiddleware:
                 actor = Actor(id="local", kind="local", role_id="owner")
             elif rec is not None:
                 actor = Actor(
-                    id=str(rec.get("id") or "key"),
+                    id=str(rec["id"]),
                     kind="key",
-                    role_id=rec.get("role") or "owner",
+                    role_id=rec["role"],
                 )
             else:
                 # 理论上到不了（allowed 由 local / token / local_key 三者之一成立）。
@@ -253,27 +254,24 @@ class PairingGateMiddleware:
 # 逐个 deps 的 actor-None 兜底（那正是给测试留的口子），不如在启动时把
 # 整张路由表验一遍：违例直接拒绝启动，把静默洞变成一行报错。
 # 主 app 与远程模式瘦壳共用（从 src/main.py 原样搬迁，行为不变）。
-_ALLOWED_UNGATED_PREFIXES = ("/api", "/mcp")
 _ALLOWED_UNGATED_EXACT = {"/health", "/{full_path:path}"}
 
 
 def assert_gate_route_coverage(app) -> None:
+    from fastapi import routing
     from starlette.routing import Mount
 
     offenders: list[str] = []
-    for route in app.router.routes:
-        if isinstance(route, Mount):
-            if route.path not in ("/assets",):
-                offenders.append(f"mount {route.path}")
-            continue
-        path = getattr(route, "path", None)
-        if not isinstance(path, str):
-            continue
-        if path in _ALLOWED_UNGATED_EXACT:
-            continue
-        if path.startswith(_ALLOWED_UNGATED_PREFIXES):
-            continue
-        offenders.append(path)
+    iter_routes = getattr(routing, "iter_route_contexts", iter)
+    for route in iter_routes(app.router.routes):
+        # Lazy includes expose the prefixed WebSocket/Starlette route separately.
+        effective = getattr(route, "starlette_route", None) or route
+        path = getattr(effective, "path", None)
+        if isinstance(getattr(route, "original_route", route), Mount):
+            if path != "/assets":
+                offenders.append(f"mount {path}")
+        elif not isinstance(path, str) or (path not in _ALLOWED_UNGATED_EXACT and not _is_gated_path(path)):
+            offenders.append(path or type(route).__name__)
     if offenders:
         raise RuntimeError(
             "Routes outside the pairing gate detected: "

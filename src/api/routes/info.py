@@ -409,6 +409,9 @@ async def set_doc_summary_include(collection: str, source: str, body: dict):
     Kept for non-file sources and any remaining callers.
     """
     collection_id = _resolve_collection_id(collection)
+    from src.identity import authorize, get_actor
+
+    authorize(get_actor(), "file.update", {"collection_id": collection_id})
     include = body.get("include", True)
     logger.info(
         "[INFO] SET include/definitive=%s for source='%s' in collection='%s'",
@@ -485,6 +488,9 @@ async def generate_doc_summary(
     provided; otherwise 400.
     """
     collection_id = _resolve_collection_id(collection)
+    from src.identity import authorize, get_actor
+
+    authorize(get_actor(), "file.update", {"collection_id": collection_id})
     logger.info(
         "[INFO] Generate doc-summary for collection='%s' source='%s' version_id=%r",
         collection_id,
@@ -606,6 +612,9 @@ def _get_enriching_llm(config: dict):
 async def trigger_consolidation(collection: str):
     """Manually trigger consolidation."""
     collection_id = _resolve_collection_id(collection)
+    from src.identity import authorize, get_actor
+
+    authorize(get_actor(), "file.update", {"collection_id": collection_id})
     logger.info("[INFO] POST consolidate triggered for collection='%s'", collection_id)
     try:
         task = task_manager.create_task(

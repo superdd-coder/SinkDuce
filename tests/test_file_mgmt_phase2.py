@@ -9,6 +9,7 @@ import shutil
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.http_client import local_owner_client
 
 from src.file_mgmt.store import COLLECTIONS_DIR, init_collection_db
 
@@ -64,7 +65,7 @@ def test_folder_crud():
     from src.main import app
 
     _setup_collection("p2-1")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     # create
     resp = client.post(
@@ -129,7 +130,7 @@ def test_system_folder_protected():
     from src.main import app
 
     _setup_collection("p2-2")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     resp = client.get("/api/file-mgmt/p2-2/folders")
     tree = resp.json()
@@ -163,7 +164,7 @@ def test_group_folder_flat():
     from src.main import app
 
     _setup_collection("p2-3")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     # create a group (auto-creates a user_group folder)
     resp = client.post(
@@ -191,7 +192,7 @@ def test_group_create_bind_existing():
     from src.main import app
 
     _setup_collection("p2-4")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     # create plain folder
     resp = client.post(
@@ -224,7 +225,7 @@ def test_group_create_new():
     from src.main import app
 
     _setup_collection("p2-5")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     resp = client.post(
         "/api/file-mgmt/p2-5/groups",
@@ -251,7 +252,7 @@ def test_group_delete():
     from src.main import app
 
     _setup_collection("p2-6")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     resp = client.post(
         "/api/file-mgmt/p2-6/groups",
@@ -279,7 +280,7 @@ def test_chain_create():
     from src.main import app
 
     _setup_collection("p2-7")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, "p2-7")
 
@@ -315,7 +316,7 @@ def test_main_chain_protected():
     from src.main import app
 
     _setup_collection("p2-8")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, "p2-8")
 
@@ -340,7 +341,7 @@ def test_branch_start_anchor_cannot_move_off_main():
     from src.main import app
 
     _setup_collection("p2-8b")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, "p2-8b")
     parent = _create_node(client, "p2-8b", main_id, "fork-here", order=1)
@@ -389,7 +390,7 @@ def test_node_crud():
     from src.main import app
 
     _setup_collection("p2-9")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, "p2-9")
 
@@ -433,7 +434,7 @@ def test_node_reorder():
     from src.main import app
 
     _setup_collection("p2-10")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, "p2-10")
 
@@ -463,7 +464,7 @@ def test_optimistic_lock():
     from src.main import app
 
     _setup_collection("p2-11")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     # create folder (version 1)
     resp = client.post(
@@ -495,7 +496,7 @@ def test_end_to_end():
     from src.main import app
 
     _setup_collection("p2-12")
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_id = _get_main_chain_id(client, "p2-12")
 

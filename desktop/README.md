@@ -22,7 +22,7 @@ git checkout vX.Y.Z
 
 `upload` pushes the DMG to the GitHub Release **and** to Cloudflare R2
 (bucket `sinkduce-releases`, public at https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev —
-DMG + `.sha256` + `latest.json`). R2 needs a one-time `desktop/r2.env`
+DMG, checksum, signed updater archive, signature, and `latest.json`). R2 needs a one-time `desktop/r2.env`
 (copy from `desktop/r2.env.template`, paste an R2 API token's S3 keys).
 Retry R2 only: `./desktop/desktop_release upload-r2`.
 
@@ -45,23 +45,19 @@ existing permission settings through the same retained management modules.
 
 First run downloads Qdrant v1.13.2 and may take several minutes (frontend build + Python venv + Tauri compile).
 
-## One-line installer (quarantine-free first install)
+## Signed desktop installer
 
-`desktop/install.sh` is uploaded to R2 by the dmg job:
+Run the installer from the project repository.
 
 ```bash
-curl -fsSL https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/superdd-coder/SinkDuce/main/desktop/install.sh | sh
 ```
 
-- curl never sets the `com.apple.quarantine` xattr, so Gatekeeper never fires
-  on this path — no Open Anyway, no right-click dance, on every macOS version.
-- Version-independent: the script resolves the current release from
-  `latest.json` on every run. Re-running it upgrades in place (it quits the
-  running app first). Only re-upload it when the script itself changes.
-- Messages are bilingual (zh + en). Non-admin users fall back to
-  `~/Applications` automatically; sha256 is verified before install.
-
-Manual push (no release needed): `wrangler r2 object put sinkduce-releases/install.sh --file desktop/install.sh`
+The script verifies the signed updater archive using the public key embedded in
+the desktop updater. It downloads a checksum-pinned Minisign verifier into a
+temporary directory, checks the app identity and version, and stages the new
+bundle beside the installed app before replacement. Non-admin users can
+install into their own Applications directory.
 
 ## What the .app does
 
@@ -81,9 +77,7 @@ Models still download in-app to that folder. They are not inside the `.app`.
 
 ## After export
 
-- First open: if Gatekeeper blocks a locally built DMG, run
-  `xattr -dr com.apple.quarantine /Applications/SinkDuce.app` — right-click →
-  Open no longer exists on macOS 15+; end users should use the one-line installer instead
+- A local build may require approval in **System Settings → Privacy & Security** on first launch.
 - Do not run the .app and Docker `app` against the same data directory
 - Microphone permission is requested the first time you live-transcribe
 - Meeting recordings use an existing ScreenCaptureKit grant for system audio, with an audio-only Core Audio fallback. To enable ScreenCaptureKit, add the installed SinkDuce app in **System Settings → Privacy & Security → Screen & System Audio Recording**.

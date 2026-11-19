@@ -44,6 +44,7 @@ def can_grant_role(issuer_role, target_role) -> bool:
     return True
 
 
+@core.store.token_transaction()
 def set_token_role(rec_id: str, role: str, *, issuer_role: str | None = None) -> dict | None:
     """改一把已发出钥匙的角色（返回更新后的记录；找不到 → None）。
 

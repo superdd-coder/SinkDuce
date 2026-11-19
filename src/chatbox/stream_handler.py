@@ -44,6 +44,12 @@ class ChatStreamHandler:
         report_changes: list[dict] = []
         citations: list[dict] = []
         qa_projects: set[str] = set()
+        from src.chatbox.history_access import ChatSources
+        from src.identity import get_actor
+        from src.pairing.service import device_stream_guard
+
+        sources = ChatSources(collections=set(collections or []))
+        stream_allowed = device_stream_guard(get_actor(), sources.require_current)
         saw_done = False
         try:
             async for event in self._agent.chat_stream(
@@ -54,6 +60,12 @@ class ChatStreamHandler:
                 **({"report_reviews": report_reviews} if report_reviews else {}),
             ):
                 event_type = event.get("type", "unknown")
+                if event_type == "_source_access":
+                    sources.include(event)
+                    sources.require_current()
+                    continue
+                if not stream_allowed():
+                    raise PermissionError("Conversation access expired")
                 if event_type == "token":
                     answer_parts.append(str(event.get("content") or ""))
                 elif event_type == "done":
@@ -108,6 +120,7 @@ class ChatStreamHandler:
                         **({"note_changes": note_changes} if note_changes else {}),
                         **({"citations": citations} if citations else {}),
                         **({"report_changes": report_changes} if report_changes else {}),
+                        **sources.metadata(),
                         **({"qa_projects": sorted(qa_projects)} if qa_projects else {}),
                     )
                 except Exception:

@@ -553,15 +553,15 @@ def _ws_setup(monkeypatch, tmp_path, provider):
 
 
 def test_ws_translation_target_flow(monkeypatch, tmp_path):
-    from fastapi.testclient import TestClient
+    from tests.http_client import local_owner_client
 
     from src.main import app
 
     fake = _FakeTranslateProvider()
     meeting = _ws_setup(monkeypatch, tmp_path, fake)
-    client = TestClient(app)
+    client = local_owner_client(app)
     with client.websocket_connect(
-        f"/api/meetings/{meeting.id}/realtime-transcribe?translation_target=zh"
+        str(client.base_url.copy_with(scheme="ws").join(f"/api/meetings/{meeting.id}/realtime-transcribe?translation_target=zh"))
     ) as ws:
         provider_msg = ws.receive_json()
         assert provider_msg["type"] == "provider"
@@ -583,7 +583,7 @@ def test_ws_translation_target_flow(monkeypatch, tmp_path):
 
 
 def test_ws_translation_unavailable_sends_error(monkeypatch, tmp_path):
-    from fastapi.testclient import TestClient
+    from tests.http_client import local_owner_client
 
     from src.main import app
 
@@ -603,9 +603,9 @@ def test_ws_translation_unavailable_sends_error(monkeypatch, tmp_path):
     monkeypatch.setattr(meeting_store, "MEETINGS_DIR", tmp_path)
     meeting = meeting_store.create_meeting("lt err")
 
-    client = TestClient(app)
+    client = local_owner_client(app)
     with client.websocket_connect(
-        f"/api/meetings/{meeting.id}/realtime-transcribe?translation_target=zh"
+        str(client.base_url.copy_with(scheme="ws").join(f"/api/meetings/{meeting.id}/realtime-transcribe?translation_target=zh"))
     ) as ws:
         msg = ws.receive_json()
         assert msg["type"] == "provider"
@@ -623,7 +623,7 @@ def test_active_provider_info_reports_translation_support(monkeypatch):
     from src.config import TranscriptionProviderConfig
     import src.config as config_mod
     from src.main import app
-    from fastapi.testclient import TestClient
+    from tests.http_client import local_owner_client
 
     dash = TranscriptionProviderConfig(
         id="dash-rt3",
@@ -643,7 +643,7 @@ def test_active_provider_info_reports_translation_support(monkeypatch):
     )
     monkeypatch.setattr(config_mod, "get_config", lambda: fake_cfg)
 
-    resp = TestClient(app).get("/api/transcription/active-provider-info")
+    resp = local_owner_client(app).get("/api/transcription/active-provider-info")
     assert resp.status_code == 200
     # DashScope ASR key alone → no translation capability (no auto-borrow)
     assert resp.json()["realtime"]["supports_realtime_translation"] is False
@@ -656,7 +656,7 @@ def test_active_provider_info_reports_translation_support(monkeypatch):
         api_key="sk-lt",
     )
     fake_cfg.transcription.realtime_providers = [lt, dash]
-    resp = TestClient(app).get("/api/transcription/active-provider-info")
+    resp = local_owner_client(app).get("/api/transcription/active-provider-info")
     assert resp.json()["realtime"]["supports_realtime_translation"] is True
 
     # local-only → no translation capability
@@ -665,5 +665,5 @@ def test_active_provider_info_reports_translation_support(monkeypatch):
     )
     fake_cfg.transcription.active_realtime_provider = local
     fake_cfg.transcription.realtime_providers = [local]
-    resp = TestClient(app).get("/api/transcription/active-provider-info")
+    resp = local_owner_client(app).get("/api/transcription/active-provider-info")
     assert resp.json()["realtime"]["supports_realtime_translation"] is False

@@ -71,8 +71,12 @@ def _dict_to_note(data: dict) -> Note:
 
 def _find_note_dir(note_id: str) -> Path | None:
     """Find a note directory, trying both flat and legacy paths."""
-    # Flat path (current)
-    ndir = NOTES_DIR / note_id
+    from src.paths import confine
+
+    try:
+        ndir = _note_dir(note_id)
+    except ValueError:
+        return None
     if ndir.is_dir():
         return ndir
     # Legacy: search collection subdirectories
@@ -81,7 +85,7 @@ def _find_note_dir(note_id: str) -> Path | None:
             if col_dir.is_dir():
                 candidate = col_dir / note_id
                 if candidate.is_dir():
-                    return candidate
+                    return confine(candidate, NOTES_DIR)
     return None
 
 
@@ -161,28 +165,38 @@ def create_note(collection: str, title: str) -> Note:
     return note
 
 
-def get_note(note_id: str) -> Note | None:
-    ndir = _find_note_dir(note_id)
-    if ndir is None:
-        return None
-    data = _read_json(ndir / "meta.json")
+def _read_visible_note(directory: Path) -> Note | None:
+    from src.identity import get_actor
+    from src.identity.visibility import is_collection_visible
+
+    data = _read_json(directory / "meta.json")
     if data is None:
         return None
-    return _dict_to_note(data)
+    note = _dict_to_note(data)
+    return note if is_collection_visible(get_actor(), note.collection) else None
+
+
+def get_note(note_id: str) -> Note | None:
+    directory = _find_note_dir(note_id)
+    return _read_visible_note(directory) if directory else None
 
 
 def list_notes(collection: str | None = None) -> list[Note]:
     """List notes, optionally filtered by collection."""
+    from src.identity import get_actor
+    from src.identity.visibility import is_collection_visible
+
+    actor = get_actor()
     if not NOTES_DIR.exists():
         return []
     notes: list[Note] = []
     for entry in NOTES_DIR.iterdir():
-        if not entry.is_dir():
+        if entry.is_symlink() or not entry.is_dir():
             continue
         data = _read_json(entry / "meta.json")
         if data is not None:
             note = _dict_to_note(data)
-            if collection is None or note.collection == collection:
+            if (collection is None or note.collection == collection) and is_collection_visible(actor, note.collection):
                 notes.append(note)
     notes.sort(key=lambda n: n.updated_at, reverse=True)
     return notes
@@ -251,7 +265,7 @@ def delete_note(note_id: str) -> bool:
 
 def get_content(note_id: str) -> str | None:
     ndir = _find_note_dir(note_id)
-    if ndir is None:
+    if ndir is None or _read_visible_note(ndir) is None:
         return None
     content_path = ndir / "content.md"
     if not content_path.exists():
@@ -282,7 +296,7 @@ def save_content(note_id: str, content: str) -> str:
 
 def get_distillation(source_note_id: str) -> str | None:
     ndir = _find_note_dir(source_note_id)
-    if ndir is None:
+    if ndir is None or _read_visible_note(ndir) is None:
         return None
     dist_path = ndir / "distillation.md"
     if not dist_path.exists():
@@ -364,6 +378,25 @@ def get_references(note_id: str) -> list[dict]:
     return refs if isinstance(refs, list) else []
 
 
+def can_reference(source_id: str) -> bool:
+    from src.identity import get_actor
+    from src.identity.visibility import is_meeting_visible
+    from src.notes.service import parse_meeting_source_id
+
+    meeting = parse_meeting_source_id(source_id)
+    if meeting:
+        return is_meeting_visible(get_actor(), meeting[0])
+    return get_note(source_id) is not None
+
+
+def visible_references(note_id: str) -> list[dict]:
+    return [ref for ref in get_references(note_id) if can_reference(ref.get("source_note_id", ""))]
+
+
+def visible_backlinks(note_id: str) -> list[str]:
+    return [target for target in get_referenced_by(note_id) if get_note(target) is not None]
+
+
 def save_references(note_id: str, refs: list[dict]) -> None:
     ndir = _find_note_dir(note_id)
     if ndir is None:
@@ -419,7 +452,7 @@ def build_propagation_chain(note_id: str, visited: set[str] | None = None) -> li
     visited.add(note_id)
 
     links = []
-    referenced_by = get_referenced_by(note_id)
+    referenced_by = visible_backlinks(note_id)
     note = get_note(note_id)
     source_title = note.title if note else note_id
 

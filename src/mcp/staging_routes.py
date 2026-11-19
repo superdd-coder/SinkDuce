@@ -216,7 +216,7 @@ async def direct_upload(request: Request):
         "task_id": task.id,
         "file_id": file_id,
         "filename": safe_name,
-        "size_bytes": len(raw),
+        "size_bytes": upload_size,
         "collection": collection,
     }
 
@@ -430,11 +430,6 @@ async def stage_content(request: Request):
     file_path = body.get("file_path", "")
     if file_path:
         path = Path(file_path)
-        if not path.is_file():
-            return JSONResponse(
-                status_code=400,
-                content={"error": f"File not found: {file_path}"},
-            )
         try:
             from src.paths import assert_readable_data_file
 
@@ -451,11 +446,18 @@ async def stage_content(request: Request):
             )
         filename = body.get("filename") or resolved.name
         try:
-            raw = resolved.read_bytes()
-        except Exception as exc:
+            if not resolved.is_file():
+                return JSONResponse(status_code=400, content={"error": "File not found"})
+            if resolved.stat().st_size > _STAGING_MAX_BYTES:
+                return JSONResponse(status_code=413, content={"error": "Payload too large"})
+            with resolved.open("rb") as source:
+                raw = source.read(_STAGING_MAX_BYTES + 1)
+            if len(raw) > _STAGING_MAX_BYTES:
+                return JSONResponse(status_code=413, content={"error": "Payload too large"})
+        except OSError:
             return JSONResponse(
                 status_code=400,
-                content={"error": f"Failed to read file: {exc}"},
+                content={"error": "Failed to read file"},
             )
         result = await _stage(filename, raw)
         if "error" in result:

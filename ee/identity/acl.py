@@ -10,12 +10,22 @@ from src.identity.acl import (AclError, BASE_TIER, COLLECTION_TIERS, DOMAIN_TIER
 def load_domain_acl() -> dict[str, dict[str, list[str]]]:
     try:
         raw = json.loads(core.DOMAIN_ACL_PATH.read_text(encoding="utf-8"))
+        domains = raw.get("domains", raw)
+        if not isinstance(domains, dict):
+            raise ValueError("invalid domain ACL")
+        for domain in DOMAIN_TIERS:
+            if domain in domains and (not isinstance(domains[domain], dict) or
+                    any(not isinstance(v, list) or not all(isinstance(x, str) for x in v)
+                        for v in domains[domain].values())):
+                raise ValueError("invalid domain ACL tiers")
+        acl = _normalize_domain_acl(raw)
+        validate_domain_acl(acl)
+        return acl
     except FileNotFoundError:
         return default_domain_acl()
     except Exception:
-        core.logger.exception("domain_acl.json unreadable; using defaults")
-        return default_domain_acl()
-    return _normalize_domain_acl(raw)
+        core.logger.error("Cannot read domain ACL; limiting access to administrators")
+        return {d: {t: _with_implicit([]) for t in tiers} for d, tiers in DOMAIN_TIERS.items()}
 
 
 def validate_domain_acl(acl: dict[str, dict[str, list[str]]]) -> None:
@@ -114,7 +124,16 @@ def collection_acl(collection_id: str) -> dict[str, list[str]]:
         # （真实存在的库）逐一调用本函数，而"点名一个不存在/非法 id"的路径有
         # ``require_collection`` 先做存在性校验。
         return default_collection_acl()
-    return _normalize_collection_acl(meta.get("acl"))
+    if "acl" not in meta:
+        return default_collection_acl()
+    raw = meta["acl"]
+    if not isinstance(raw, dict) or any(
+        not isinstance(raw[t], list) or not all(isinstance(v, str) for v in raw[t])
+        for t in COLLECTION_TIERS if t in raw
+    ):
+        core.logger.error("Cannot read collection ACL; denying access")
+        return _deny_all_collection_acl()
+    return _normalize_collection_acl(raw)
 
 
 def save_collection_acl(

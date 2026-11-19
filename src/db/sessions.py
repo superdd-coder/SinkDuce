@@ -340,7 +340,7 @@ class SessionStore:
         with self._lock:
             conn = self._get_conn()
             rows = conn.execute(
-                "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC",
+                "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC",
                 (session_id,),
             ).fetchall()
         return [self._row_to_message(r) for r in rows]
@@ -404,7 +404,8 @@ class SessionStore:
 
         Pass ``limit=None`` for the full unwindowed history (UI / trim / counts).
         """
-        all_msgs = self._fetch_all_messages(session_id)
+        from src.chatbox.history_access import authorized_history
+        all_msgs = authorized_history(self._fetch_all_messages(session_id))
         if limit is None:
             return all_msgs
         return self._apply_dialogue_window(all_msgs, max_dialogue=limit)

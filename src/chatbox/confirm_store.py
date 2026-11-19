@@ -14,12 +14,15 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from src.identity.actor import Actor, get_actor
+
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class _PendingConfirm:
     payload: dict[str, Any]
+    requester: Actor = field(default_factory=get_actor)
     event: threading.Event = field(default_factory=threading.Event)
     approved: bool | None = None
     # Optional decision detail carried from the HTTP resolve back to the
@@ -47,13 +50,13 @@ class ChatConfirmStore:
     ) -> bool:
         with self._guard:
             item = self._pending.get(confirm_id)
-        if item is None:
-            return False
-        item.approved = bool(approved)
-        if override:
-            item.override = override
-        item.event.set()
-        return True
+            if item is None or item.requester != get_actor() or item.approved is not None:
+                return False
+            item.approved = bool(approved)
+            if override:
+                item.override = override
+            item.event.set()
+            return True
 
     async def wait_result(
         self, confirm_id: str, timeout: float | None = None

@@ -336,36 +336,48 @@ def save_audio(meeting_id: str, file_bytes: "bytes | BinaryIO", ext: str, origin
     meeting = get_meeting(meeting_id)
     if meeting is None:
         raise FileNotFoundError(f"Meeting {meeting_id} not found")
-    # Delete old audio file if replacing
-    if meeting.audio_path:
-        old_path = Path(meeting.audio_path)
-        if old_path.exists():
-            old_path.unlink()
-            logger.info("Deleted old audio: %s for meeting %s", old_path, meeting_id)
-    # Use original filename if provided, otherwise fall back to audio.{ext}
-    if original_filename and "." in original_filename:
-        safe_name = original_filename.replace("/", "_").replace("\\", "_")
-        audio_path = _meeting_dir(meeting_id) / safe_name
-    else:
-        audio_path = _meeting_dir(meeting_id) / f"audio.{ext}"
-    size = 0
-    if isinstance(file_bytes, (bytes, bytearray)):
-        size = len(file_bytes)
-        audio_path.write_bytes(file_bytes)
-    else:
-        # 流式：音频文件可到几百 MB，分块落盘避免整块进 RAM。
-        import shutil
+    from src.atomic_io import file_lock
+    from src.identity import authorize, get_actor
+    from src.paths import assert_resource_id, confine
 
-        with open(audio_path, "wb") as out:
-            while True:
-                chunk = file_bytes.read(1024 * 1024)
-                if not chunk:
-                    break
-                size += len(chunk)
-                out.write(chunk)
-    fix_webm_duration(audio_path)
-    update_meeting(meeting_id, audio_path=str(audio_path))
-    logger.info("Saved audio: %s (%d bytes) for meeting %s", audio_path, size, meeting_id)
+    authorize(get_actor(), "meeting.update", {"created_by": meeting.created_by})
+    meeting_dir = _meeting_dir(meeting_id)
+    uploads = confine(meeting_dir / "audio", meeting_dir)
+    # Keep user filenames in their own directory, separate from meeting state.
+    filename = Path((original_filename or "").replace("\\", "/")).name
+    if not filename or filename in {".", ".."} or "." not in filename:
+        filename = f"audio.{assert_resource_id(ext, name='audio extension')}"
+    directory = uploads / uuid.uuid4().hex
+    directory.mkdir(parents=True)
+    audio_path = directory / filename
+    try:
+        with audio_path.open("xb") as out:
+            if isinstance(file_bytes, (bytes, bytearray)):
+                out.write(file_bytes)
+            else:
+                shutil.copyfileobj(file_bytes, out, length=1024 * 1024)
+        fix_webm_duration(audio_path)
+        with file_lock(uploads):
+            previous = get_meeting(meeting_id)
+            update_meeting(meeting_id, audio_path=str(audio_path))
+    except BaseException:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
+
+    if previous and previous.audio_path:
+        try:
+            old = Path(previous.audio_path).resolve()
+            # Legacy recordings were stored directly in the meeting directory.
+            legacy = old.parent == meeting_dir and old.suffix.lower() in {
+                ".aac", ".aiff", ".amr", ".flac", ".m4a", ".m4v", ".mkv", ".mov",
+                ".mp3", ".mp4", ".mpeg", ".oga", ".ogg", ".opus", ".wav", ".webm", ".wma",
+            }
+            if old != audio_path and (old.is_relative_to(uploads) or legacy):
+                old.unlink(missing_ok=True)
+                if old.parent.parent == uploads:
+                    old.parent.rmdir()
+        except (OSError, RuntimeError):
+            logger.warning("Could not remove the previous recording for %s", meeting_id)
     return str(audio_path)
 
 
@@ -641,7 +653,9 @@ def apply_section_tags(
 
 
 def section_md_path(meeting_id: str, tab_id: str) -> Path:
-    return _meeting_dir(meeting_id) / f"{tab_id}.md"
+    from src.paths import assert_resource_id
+
+    return _meeting_dir(meeting_id) / f"{assert_resource_id(tab_id, name='tab_id')}.md"
 
 
 def save_section_md(meeting_id: str, tab_id: str, content: str) -> str:
@@ -708,6 +722,10 @@ def get_section_md(meeting_id: str, tab_id: str) -> str | None:
 
 def translation_md_path(meeting_id: str, tab_id: str, lang: str) -> Path:
     """Path of a translated summary: `{tab_id}_{LANG}.md` (never ingested)."""
+    from src.paths import assert_resource_id
+
+    assert_resource_id(tab_id, name="tab_id")
+    assert_resource_id(lang, name="language")
     return _meeting_dir(meeting_id) / f"{tab_id}_{lang.upper()}.md"
 
 

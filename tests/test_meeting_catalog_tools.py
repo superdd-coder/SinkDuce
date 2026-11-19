@@ -35,9 +35,10 @@ class TestToolAllowlists:
             props = lookup["function"]["parameters"]["properties"]
             assert "meeting_ids" in props
 
-    def test_meeting_qc_lookup_only_no_catalog(self):
+    def test_meeting_qc_allows_summary_and_transcript_without_catalog(self):
         names = {t["function"]["name"] for t in tools_for_mode("direct", is_meeting=True)}
-        assert names == {"lookup_meeting_transcript", "create_note", "list_collections"}
+        assert names == {"lookup_meeting_transcript", "read_meeting_summary", "create_note", "list_collections"}
+        assert names == allowed_tool_names("direct", is_meeting=True)
         assert "list_meeting_catalog" not in allowed_tool_names("direct", is_meeting=True)
         lookup = tools_for_mode("direct", is_meeting=True)[0]
         assert "meeting_ids" not in lookup["function"]["parameters"]["properties"]

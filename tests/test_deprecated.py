@@ -5,7 +5,7 @@ Run: pytest tests/test_deprecated.py -v --tb=short
 
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
+from tests.http_client import local_owner_client
 
 
 class TestDeprecatedEndpoints:
@@ -13,7 +13,7 @@ class TestDeprecatedEndpoints:
         """POST /api/query returns 410 Gone."""
         from src.main import app
 
-        client = TestClient(app)
+        client = local_owner_client(app)
         resp = client.post("/api/query", json={"question": "test"})
         assert resp.status_code == 410
         assert resp.json()["error"] == "Gone"
@@ -22,7 +22,7 @@ class TestDeprecatedEndpoints:
         """POST /api/query/stream returns 410 Gone."""
         from src.main import app
 
-        client = TestClient(app)
+        client = local_owner_client(app)
         resp = client.post("/api/query/stream", json={"question": "test"})
         assert resp.status_code == 410
         assert resp.json()["error"] == "Gone"
@@ -31,7 +31,7 @@ class TestDeprecatedEndpoints:
         """410 responses include Deprecation and Sunset headers."""
         from src.main import app
 
-        client = TestClient(app)
+        client = local_owner_client(app)
         resp = client.post("/api/query", json={"question": "test"})
         assert resp.headers.get("Deprecation") == "true"
         assert "Sunset" in resp.headers

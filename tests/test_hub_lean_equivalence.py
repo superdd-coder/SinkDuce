@@ -23,7 +23,7 @@ import urllib.request
 
 import pytest
 
-BASE = "http://127.0.0.1:18900"
+from tests.e2e_config import HUB_TEST_URL as BASE, HUB_SELF_URL, hub_test_instance_ready
 
 
 # ── 1. 投影函数（离线） ───────────────────────────────────────
@@ -145,16 +145,8 @@ class TestLeanHelpers:
 # ── 真机层公共 ────────────────────────────────────────────────
 
 
-def _has_service() -> bool:
-    try:
-        with urllib.request.urlopen(f"{BASE}/health", timeout=3) as r:
-            return r.status == 200
-    except Exception:
-        return False
-
-
 pytestmark_live = pytest.mark.skipif(
-    not _has_service(), reason="需要 18900 在跑（lean 真机测试）"
+    not hub_test_instance_ready(), reason="Set SINKDUCE_TEST_INSTANCE_URL to a disposable instance for live Hub tests"
 )
 
 
@@ -211,7 +203,7 @@ def self_hub():
     _put([
         *[{"box_id": b["box_id"], "box_name": b["box_name"], "addr": b["addr"],
            "last_checked": b.get("last_checked", "")} for b in original],
-        {"box_id": "__lean_equiv__", "box_name": "LeanSelf", "addr": BASE, "token": ""},
+        {"box_id": "__lean_equiv__", "box_name": "LeanSelf", "addr": HUB_SELF_URL, "token": ""},
     ])
     yield
     _put([{"box_id": b["box_id"], "box_name": b["box_name"], "addr": b["addr"],

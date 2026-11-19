@@ -175,86 +175,84 @@ def _resample_mono_linear(audio: np.ndarray, sr: int, target_sr: int = 16000) ->
     return np.interp(x_new, x_old, audio).astype(np.float32)
 
 
+_MAX_AUDIO_SECONDS = 4 * 60 * 60
+_NATIVE_SAMPLE_BUDGET = 8_000_000
+_DECODE_TIMEOUT_SECONDS = 15 * 60
+
+
+class _AudioLimitError(ValueError):
+    pass
+
+
 def _load_via_ffmpeg(path: str, target_sr: int = 16000) -> np.ndarray:
-    """Decode any ffmpeg-supported container (WebM/Opus, MP3, M4A, …) to mono float32."""
+    """Decode a local recording to size-limited mono PCM on temporary storage."""
+    import shutil
     import subprocess
+    import tempfile
+    import time
 
     from src.runtime_bins import ffmpeg_bin
+    from src.tasks.task_manager import check_cancelled
 
     ff = ffmpeg_bin()
-    if ff == "ffmpeg":
-        import shutil
-
-        if not shutil.which("ffmpeg"):
-            raise RuntimeError(
-                "ffmpeg is required to decode non-WAV audio "
-                f"(got {Path(path).suffix or 'unknown format'}): {path}"
-            )
+    if ff == "ffmpeg" and not shutil.which(ff):
+        raise RuntimeError("ffmpeg is required to decode this recording")
+    max_bytes = _MAX_AUDIO_SECONDS * target_sr * np.dtype("<f4").itemsize
     cmd = [
-        ff,
-        "-v",
-        "error",
-        "-i",
-        path,
-        "-f",
-        "f32le",
-        "-acodec",
-        "pcm_f32le",
-        "-ac",
-        "1",
-        "-ar",
-        str(target_sr),
-        "-",
+        ff, "-nostdin", "-v", "error", "-protocol_whitelist", "file,pipe",
+        "-format_whitelist", "wav,flac,ogg,aiff,au,matroska,webm,mov,mp4,m4a,3gp,3g2,mj2,mp3,aac,caf,asf,amr,ac3,eac3,ape,tta,mpegts,mpeg,avi,wv",
+        "-i", str(Path(path).resolve(strict=True)), "-map", "0:a:0", "-vn",
+        "-t", str(_MAX_AUDIO_SECONDS + 1), "-fs", str(max_bytes + target_sr * 4),
+        "-f", "f32le", "-acodec", "pcm_f32le", "-ac", "1", "-ar", str(target_sr), "pipe:1",
     ]
-    result = subprocess.run(cmd, capture_output=True, check=False)
-    if result.returncode != 0:
-        err = (result.stderr or b"").decode("utf-8", errors="replace")[-500:]
-        raise RuntimeError(f"ffmpeg failed to decode {path}: {err}")
-    audio = np.frombuffer(result.stdout, dtype=np.float32)
-    if audio.size == 0:
-        logger.warning("ffmpeg produced empty audio for %s", path)
-    return audio
+    check_cancelled()
+    with tempfile.TemporaryFile() as pcm, subprocess.Popen(
+        cmd, stdout=pcm, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+    ) as proc:
+        deadline = time.monotonic() + _DECODE_TIMEOUT_SECONDS
+        try:
+            while proc.poll() is None:
+                check_cancelled()
+                if time.monotonic() >= deadline:
+                    raise _AudioLimitError("Audio decoding exceeded its time limit")
+                try:
+                    proc.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        if pcm.tell() > max_bytes:
+            raise _AudioLimitError("Recording exceeds the transcription duration limit")
+        if proc.returncode:
+            raise RuntimeError("ffmpeg could not decode the recording")
+        pcm.seek(0)
+        check_cancelled()
+        return np.fromfile(pcm, dtype="<f4")
 
 
 def _load_wav_mono16k(path: str) -> tuple[np.ndarray, int]:
-    """Load audio as mono float32 @ 16 kHz.
+    """Read small native recordings directly, and stream other formats through ffmpeg."""
+    from src.tasks.task_manager import check_cancelled
 
-    Browser meeting recordings are typically ``.webm`` (Opus). ``soundfile``/
-    libsndfile cannot open WebM, so we fall back to ffmpeg (already used for
-    duration remux in ``webm_fixer``).
-    """
-    path_obj = Path(path)
-    suffix = path_obj.suffix.lower()
-    # Formats soundfile/libsndfile usually handle without ffmpeg.
-    soundfile_ok = suffix in {".wav", ".flac", ".ogg", ".oga", ".aiff", ".aif", ".au"}
-
-    if soundfile_ok:
+    check_cancelled()
+    if Path(path).suffix.lower() in {".wav", ".flac", ".ogg", ".oga", ".aiff", ".aif", ".au"}:
         try:
             import soundfile as sf
+            with sf.SoundFile(path) as source:
+                frames, sr, channels = len(source), source.samplerate, source.channels
+                if sr <= 0 or channels <= 0 or frames > _MAX_AUDIO_SECONDS * sr:
+                    raise _AudioLimitError("Recording exceeds the transcription duration limit")
+                if frames * channels <= _NATIVE_SAMPLE_BUDGET and frames * 16000 <= sr * _NATIVE_SAMPLE_BUDGET:
+                    audio = source.read(frames=frames, dtype="float32", always_2d=False)
+                    if audio.ndim > 1:
+                        audio = audio.mean(axis=1)
+                    return _resample_mono_linear(audio, sr), 16000
+        except (ImportError, OSError, RuntimeError):
+            logger.info("Using ffmpeg for local recording %s", Path(path).name)
 
-            audio, sr = sf.read(path, dtype="float32", always_2d=False)
-            if audio.ndim > 1:
-                audio = audio.mean(axis=1)
-            return _resample_mono_linear(np.asarray(audio, dtype=np.float32), int(sr)), 16000
-        except Exception:
-            logger.info("soundfile failed for %s, trying ffmpeg", path, exc_info=True)
-
-    # WebM / MP3 / M4A / unknown / soundfile failure
-    try:
-        return _load_via_ffmpeg(path, target_sr=16000), 16000
-    except Exception as ffmpeg_exc:
-        # Last resort: soundfile anyway (might work for misnamed files)
-        try:
-            import soundfile as sf
-
-            audio, sr = sf.read(path, dtype="float32", always_2d=False)
-            if audio.ndim > 1:
-                audio = audio.mean(axis=1)
-            return _resample_mono_linear(np.asarray(audio, dtype=np.float32), int(sr)), 16000
-        except Exception as sf_exc:
-            raise RuntimeError(
-                f"Cannot decode audio {path}: soundfile={sf_exc}; ffmpeg={ffmpeg_exc}"
-            ) from ffmpeg_exc
+    return _load_via_ffmpeg(path, target_sr=16000), 16000
 
 
 class FunAsrOnnxFilePipeline:

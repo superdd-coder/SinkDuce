@@ -3208,8 +3208,14 @@ def _on_definitive_changed(
         )
         return
 
-    sm = _get_summary_manager()
-    existing = sm.get_doc_summary(collection_id, source)
+    try:
+        sm = _get_summary_manager()
+        existing = sm.get_doc_summary(collection_id, source)
+    except Exception:
+        # The file flag is already committed. Queue the existing reconciliation
+        # path when the summary store is unavailable during this request.
+        logger.warning("Could not read summary while updating definitive status", exc_info=True)
+        existing = None
     snap = pre_snapshot if pre_snapshot is not None else {}
 
     # Keep per-doc summary content; only flip participation flag for legacy readers

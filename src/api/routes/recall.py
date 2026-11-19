@@ -37,28 +37,23 @@ from src.config import DATA_DIR
 logger = logging.getLogger(__name__)
 
 
-def _recall_collection_gate(collection: str = None) -> None:
+def _recall_collection_gate(collection: str, *, write: bool = False) -> str:
     """召回评估端点全部按 collection 操作 → 统一的可见性闸门。
 
     **读或写都必须先看到这个库**；写档另由各端点自身动作决定（本组端点以
     评估数据为主，默认 write 档覆盖）。不可见 → 404（与"库不存在"同形）。
     """
-    if not collection:
-        return
-    from src.identity import get_actor
-    from src.identity import visibility as _vis
-    from src.identity.policy import may_see_everything
-    from src.identity import acl as _acl
+    from src.identity import authorize, get_actor
+    from src.identity.acl import canonical_collection_id
+    from src.paths import assert_resource_id
 
-    actor = get_actor()
-    if actor is None or may_see_everything(actor):
-        return
-    if not _acl.collection_allows(collection, "read", actor.role_id):
-        from fastapi import HTTPException
-
-        raise HTTPException(
-            status_code=404, detail={"code": "not_found", "message": "collection not found"}
-        )
+    collection = canonical_collection_id(collection)
+    try:
+        assert_resource_id(collection, name="collection")
+    except ValueError as exc:
+        raise HTTPException(404, "Collection not found") from exc
+    authorize(get_actor(), "file.update" if write else "collection.read", {"collection_id": collection})
+    return collection
 
 
 from src.api.routes.identity import require_module
@@ -385,12 +380,7 @@ def _is_specific_query(query: str) -> bool:
 @router.post("/recall/search", response_model=RecallSearchResponse)
 def recall_search(req: RecallSearchRequest):
     t0 = time.time()
-    # Resolve collections: try as ID first, fall back to name (for legacy)
-    def resolve_collection(cid: str) -> str:
-        meta = collections_store.get_collection_meta(cid)
-        return meta["id"] if meta else cid
-
-    resolved_collections = [resolve_collection(c) for c in req.collections]
+    resolved_collections = [_recall_collection_gate(c) for c in req.collections]
     valid_collections = [c for c in resolved_collections if services.db.collection_exists(c)]
     if not valid_collections:
         return RecallSearchResponse(results=[], time_ms=0, total=0, query_used=req.query)
@@ -540,7 +530,7 @@ def recall_benchmark(req: RecallBenchmarkRequest):
 
 @router.get("/recall/params/{collection}")
 def get_recall_params(collection: str):
-    _recall_collection_gate(collection)
+    collection = _recall_collection_gate(collection)
     # Resolve collection: try as ID first, fall back to name (for legacy)
     col_meta = collections_store.get_collection_meta(collection)
     collection_id = col_meta["id"] if col_meta else collection
@@ -560,13 +550,13 @@ def get_recall_params(collection: str):
 
 @router.get("/recall/eval/{collection}/cases")
 def get_eval_cases(collection: str):
-    _recall_collection_gate(collection)
+    collection = _recall_collection_gate(collection)
     return {"cases": _load_cases(collection)}
 
 
 @router.post("/recall/eval/{collection}/cases")
 def add_eval_case(collection: str, case: EvalTestCase):
-    _recall_collection_gate(collection)
+    collection = _recall_collection_gate(collection, write=True)
     cases = _load_cases(collection)
     new_case = case.model_dump()
     if not new_case.get("id"):
@@ -579,7 +569,7 @@ def add_eval_case(collection: str, case: EvalTestCase):
 
 @router.delete("/recall/eval/{collection}/cases/{case_id}")
 def delete_eval_case(collection: str, case_id: str):
-    _recall_collection_gate(collection)
+    collection = _recall_collection_gate(collection, write=True)
     cases = _load_cases(collection)
     cases = [c for c in cases if c.get("id") != case_id]
     _save_cases(collection, cases)
@@ -588,7 +578,7 @@ def delete_eval_case(collection: str, case_id: str):
 
 @router.post("/recall/eval/{collection}/cases/generate")
 def generate_eval_cases(collection: str, regenerate: bool = False):
-    _recall_collection_gate(collection)
+    collection = _recall_collection_gate(collection, write=True)
     if not services.db.collection_exists(collection):
         raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -780,7 +770,7 @@ def generate_eval_cases(collection: str, regenerate: bool = False):
 
 @router.post("/recall/eval/{collection}/run")
 def run_eval(collection: str, req: EvalRequest):
-    _recall_collection_gate(collection)
+    collection = _recall_collection_gate(collection, write=True)
     if not services.db.collection_exists(collection):
         raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -979,7 +969,7 @@ def run_eval(collection: str, req: EvalRequest):
 
 @router.get("/recall/eval/{collection}/history")
 def get_eval_history(collection: str):
-    _recall_collection_gate(collection)
+    collection = _recall_collection_gate(collection)
     history_path = EVAL_DIR / f"{collection}_history.jsonl"
     if not history_path.exists():
         return {"history": []}
@@ -993,7 +983,7 @@ def get_eval_history(collection: str):
 @router.get("/recall/eval/{collection}/chunk/{chunk_id}")
 def get_chunk_content(collection: str, chunk_id: str):
     """Get chunk text content by ID for displaying in the evaluate tab."""
-    _recall_collection_gate(collection)
+    collection = _recall_collection_gate(collection)
     if not services.db.collection_exists(collection):
         raise HTTPException(status_code=404, detail="Collection not found")
     points = services.db.get_points_by_ids(collection, [chunk_id])

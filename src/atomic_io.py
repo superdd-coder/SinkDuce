@@ -52,12 +52,9 @@ def write_text_atomic(
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(f"{path.name}.tmp-{uuid.uuid4().hex}")
         try:
-            tmp.write_text(text, encoding=encoding)
-            if mode is not None:
-                try:
-                    os.chmod(tmp, mode)
-                except OSError:
-                    pass
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666 if mode is None else mode)
+            with os.fdopen(fd, "w", encoding=encoding) as stream:
+                stream.write(text)
             tmp.replace(path)
         finally:
             try:

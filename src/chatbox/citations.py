@@ -10,6 +10,8 @@ import json
 import re
 from pathlib import PurePosixPath
 
+from src.chatbox.history_access import ChatSources
+
 MAX_EVIDENCE = 2048  # Conversation cache; an individual report remains capped at 256.
 MAX_QUOTE = 4000
 _MARKERS = re.compile(r"```.*?(?:```|\Z)|`[^`\n]*`|\[cite:([^\]\r\n]{0,200})\]", re.S)
@@ -102,6 +104,7 @@ def _meeting_records(payload):
 class EvidenceRegistry:
     def __init__(self, session_id: str, records=()):
         self.session_id = session_id
+        self.sources = ChatSources()
         self._records: dict[str, dict] = {}
         self._active: dict[str, bool] = {}
         for record in records or ():

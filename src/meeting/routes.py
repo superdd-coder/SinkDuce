@@ -58,7 +58,7 @@ from src.api.routes.identity import require_domain as _require_domain
 router = APIRouter(dependencies=[Depends(_require_domain("meeting"))])
 
 
-def require_meeting_operate(meeting_id: str, meeting=None) -> None:
+def require_meeting_operate(meeting_id: str, meeting=None, *, actor=None) -> None:
     """会议写操作的统一守卫（含创建者例外）。
 
     **必须在线程/流式任务诞生之前调用**——后台线程读不到请求身份（``contextvars``
@@ -71,7 +71,11 @@ def require_meeting_operate(meeting_id: str, meeting=None) -> None:
 
     m = meeting if meeting is not None else store.get_meeting(meeting_id)
     payload = m.model_dump() if hasattr(m, "model_dump") else m
-    authorize(get_actor(), "meeting.update", {"meeting": payload})
+    authorize(actor if actor is not None else get_actor(), "meeting.update", {"meeting": payload})
+
+
+def _require_meeting_write(meeting_id: str) -> None:
+    require_meeting_operate(meeting_id)
 
 
 def _attach_meeting_permissions(data: list[dict]) -> None:
@@ -276,6 +280,7 @@ async def create_meeting_group(body: dict = Body()):
     meeting = store.get_meeting(meeting_id)
     if meeting is None:
         raise HTTPException(404, "Meeting not found")
+    require_meeting_operate(meeting_id, meeting)
     group = create_group(
         title=(body.get("title") or "").strip(),
         meeting_id=meeting_id,
@@ -529,7 +534,7 @@ async def get_meeting(meeting_id: str, lean: bool = Query(False)):
     return data
 
 
-@router.delete("/meetings/{meeting_id}")
+@router.delete("/meetings/{meeting_id}", dependencies=[Depends(_require_meeting_write)])
 async def delete_meeting(meeting_id: str):
     logger.info("[DELETE] Meeting %s", meeting_id)
     # 正在录制的会议是「活的」：删掉它，采集端就成了没人能叫停的孤儿流
@@ -556,7 +561,7 @@ async def delete_meeting(meeting_id: str):
 
 
 
-@router.post("/meetings/{meeting_id}/discard")
+@router.post("/meetings/{meeting_id}/discard", dependencies=[Depends(_require_meeting_write)])
 async def discard_meeting_recording(meeting_id: str):
     """Discard all recording data: stop recording, delete audio + transcript, reset to 'created'."""
     logger.info("[DISCARD] Meeting %s", meeting_id)
@@ -571,7 +576,7 @@ async def discard_meeting_recording(meeting_id: str):
     return _serialize_meeting(meeting)
 
 
-@router.put("/meetings/{meeting_id}")
+@router.put("/meetings/{meeting_id}", dependencies=[Depends(_require_meeting_write)])
 async def update_meeting(meeting_id: str, body: dict = Body()):
     # 不存在的会议 → 404（此前 store.update_meeting 抛 FileNotFoundError → 500，
     # 浏览器与跨盒子转发都只能看到 "Internal Server Error"，分不清该怎么办）。
@@ -607,12 +612,12 @@ async def update_meeting(meeting_id: str, body: dict = Body()):
     return _serialize_meeting(meeting)
 
 
-@router.post("/meetings/{meeting_id}/archive")
+@router.post("/meetings/{meeting_id}/archive", dependencies=[Depends(_require_meeting_write)])
 async def archive_meeting(meeting_id: str):
     return _set_meeting_archived(meeting_id, True)
 
 
-@router.post("/meetings/{meeting_id}/unarchive")
+@router.post("/meetings/{meeting_id}/unarchive", dependencies=[Depends(_require_meeting_write)])
 async def unarchive_meeting(meeting_id: str):
     return _set_meeting_archived(meeting_id, False)
 
@@ -676,7 +681,7 @@ async def generate_meeting_brief(meeting_id: str, body: dict = Body(default=None
 # ── File Uploads ──────────────────────────────────────────────
 
 
-@router.post("/meetings/{meeting_id}/upload-audio")
+@router.post("/meetings/{meeting_id}/upload-audio", dependencies=[Depends(_require_meeting_write)])
 def upload_audio(meeting_id: str, file: UploadFile = File(...)):
     # sync（threadpool）+ 流式：音频可到几百 MB，曾经的 async + read() 全量进
     # RAM 且阻塞事件循环，上传期间所有设备的请求一起卡。
@@ -709,7 +714,7 @@ def upload_audio(meeting_id: str, file: UploadFile = File(...)):
     return _serialize_meeting(updated)
 
 
-@router.post("/meetings/{meeting_id}/recording-pcm")
+@router.post("/meetings/{meeting_id}/recording-pcm", dependencies=[Depends(_require_meeting_write)])
 async def ingest_recording_pcm(meeting_id: str, request: Request):
     """Append live 16 kHz s16le PCM so a crash still leaves recoverable audio."""
     meeting = store.get_meeting(meeting_id)
@@ -720,7 +725,7 @@ async def ingest_recording_pcm(meeting_id: str, request: Request):
     return {"ok": True, "bytes": len(chunk)}
 
 
-@router.post("/meetings/{meeting_id}/finalize-recording")
+@router.post("/meetings/{meeting_id}/finalize-recording", dependencies=[Depends(_require_meeting_write)])
 def finalize_recording(meeting_id: str, recovery: bool = False):
     meeting = store.get_meeting(meeting_id)
     if not meeting:
@@ -923,7 +928,7 @@ async def get_active_provider_info():
     }
 
 
-@router.post("/meetings/{meeting_id}/save-transcript")
+@router.post("/meetings/{meeting_id}/save-transcript", dependencies=[Depends(_require_meeting_write)])
 async def save_realtime_transcript(meeting_id: str, body: dict = Body()):
     """Persist a transcript produced by the realtime (WebSocket) flow.
 
@@ -1010,7 +1015,7 @@ async def save_realtime_transcript(meeting_id: str, body: dict = Body()):
     return {"message": "Transcript saved", "segments": len(segments)}
 
 
-@router.post("/meetings/{meeting_id}/upload-notes")
+@router.post("/meetings/{meeting_id}/upload-notes", dependencies=[Depends(_require_meeting_write)])
 async def upload_notes(meeting_id: str, file: UploadFile = File(...)):
     logger.info("[UPLOAD-NOTES] Meeting %s filename=%s", meeting_id, file.filename)
     meeting = store.get_meeting(meeting_id)
@@ -1043,7 +1048,7 @@ async def upload_notes(meeting_id: str, file: UploadFile = File(...)):
     return {"message": "Notes uploaded", "path": path, "notes_content": content}
 
 
-@router.post("/meetings/{meeting_id}/images")
+@router.post("/meetings/{meeting_id}/images", dependencies=[Depends(_require_meeting_write)])
 async def upload_meeting_note_image(meeting_id: str, file: UploadFile = File(...)):
     """Upload an image for meeting notes. Returns the URL to insert in markdown."""
     meeting = store.get_meeting(meeting_id)
@@ -1072,13 +1077,15 @@ async def serve_meeting_note_image(meeting_id: str, filename: str):
         raise HTTPException(400, "Invalid image path")
     if not image_path.exists():
         raise HTTPException(404, "Image not found")
-    return FileResponse(str(image_path))
+    from src.api.file_responses import UPLOAD_HEADERS
+
+    return FileResponse(str(image_path), headers=UPLOAD_HEADERS)
 
 
 # ── Transcription ─────────────────────────────────────────────
 
 
-@router.post("/meetings/{meeting_id}/transcribe")
+@router.post("/meetings/{meeting_id}/transcribe", dependencies=[Depends(_require_meeting_write)])
 async def start_transcription(meeting_id: str, body: dict | None = Body(None)):
     logger.info("[TRANSCRIBE] Request for meeting %s", meeting_id)
     meeting = store.get_meeting(meeting_id)
@@ -1141,7 +1148,7 @@ async def start_transcription(meeting_id: str, body: dict | None = Body(None)):
     return {"message": "Transcription started", "task_id": task.id}
 
 
-@router.post("/meetings/{meeting_id}/cancel-transcribe")
+@router.post("/meetings/{meeting_id}/cancel-transcribe", dependencies=[Depends(_require_meeting_write)])
 async def cancel_transcription(meeting_id: str):
     """Cancel an in-progress transcription task and reset meeting status."""
     meeting = store.get_meeting(meeting_id)
@@ -1184,9 +1191,37 @@ async def get_live_summary(meeting_id: str):
 
 @router.websocket("/meetings/{meeting_id}/realtime-transcribe")
 async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
+    from src.identity import get_actor
+    from src.pairing.service import device_stream_guard
+
     print(f"[REALTIME-WS] >>> handler entered, meeting={meeting_id}", flush=True)
     logger.info("[REALTIME-WS] Connection for meeting %s", meeting_id)
+    actor = get_actor()
+
+    def authorize_recording():
+        meeting = store.get_meeting(meeting_id)
+        if meeting is None:
+            raise HTTPException(404, "Meeting not found")
+        require_meeting_operate(meeting_id, meeting, actor=actor)
+
+    try:
+        authorize_recording()
+    except HTTPException:
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
+    still_authorized = device_stream_guard(actor, authorize_recording)
+    closed_for_permissions = False
+
+    async def check_access() -> bool:
+        nonlocal closed_for_permissions
+        if still_authorized():
+            return True
+        if not closed_for_permissions:
+            closed_for_permissions = True
+            await websocket.close(code=1008)
+        return False
+
     print(f"[REALTIME-WS] >>> accepted, getting provider", flush=True)
 
     # Capture the loop now, while we're on the event loop's thread.
@@ -1304,7 +1339,8 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
 
     async def _safe_send(payload):
         try:
-            await websocket.send_json(payload)
+            if await check_access():
+                await websocket.send_json(payload)
         except Exception:
             pass  # client disconnected, ignore
 
@@ -1465,6 +1501,8 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
                     return
                 except asyncio.TimeoutError:
                     pass
+                if not await check_access():
+                    return
                 now = main_loop.time()
                 # 只对「上游会静默死亡」的云端适配器喂保活；本地模型白烧 CPU
                 if (
@@ -1509,6 +1547,8 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
             message = await websocket.receive()
             if message.get("type") == "websocket.disconnect":
                 raise WebSocketDisconnect()
+            if not await check_access():
+                raise WebSocketDisconnect(code=1008)
             if "text" in message:
                 try:
                     payload = json.loads(message["text"])
@@ -1618,7 +1658,7 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
 # ── Summary & Allocation ──────────────────────────────────────
 
 
-@router.post("/meetings/{meeting_id}/generate-summary")
+@router.post("/meetings/{meeting_id}/generate-summary", dependencies=[Depends(_require_meeting_write)])
 async def generate_summary(meeting_id: str):
     logger.info("[SUMMARY] Generate request for meeting %s", meeting_id)
     meeting = store.get_meeting(meeting_id)
@@ -1649,7 +1689,7 @@ async def generate_summary(meeting_id: str):
     return _serialize_meeting(updated)
 
 
-@router.post("/meetings/{meeting_id}/transcript-index")
+@router.post("/meetings/{meeting_id}/transcript-index", dependencies=[Depends(_require_meeting_write)])
 async def start_transcript_index(meeting_id: str):
     """Build or rebuild the verbatim transcript vector index."""
     meeting = store.get_meeting(meeting_id)
@@ -1769,7 +1809,7 @@ async def start_extract(meeting_id: str, body: dict = Body()):
     return _serialize_meeting(meeting)
 
 
-@router.delete("/meetings/{meeting_id}/sections/{tab_id}")
+@router.delete("/meetings/{meeting_id}/sections/{tab_id}", dependencies=[Depends(_require_meeting_write)])
 async def delete_section(meeting_id: str, tab_id: str):
     """Delete a section and clean up its tags (Node 2.1)."""
     logger.info("[DELETE-SECTION] Meeting %s tab=%s", meeting_id, tab_id)
@@ -1805,7 +1845,7 @@ async def regenerate_section(meeting_id: str, tab_id: str):
     return _serialize_meeting(meeting)
 
 
-@router.post("/meetings/{meeting_id}/sections/{tab_id}/allocate")
+@router.post("/meetings/{meeting_id}/sections/{tab_id}/allocate", dependencies=[Depends(_require_meeting_write)])
 async def allocate_section(meeting_id: str, tab_id: str, body: dict):
     """Allocate one section's content to a collection (speaker names resolved, refs stripped).
 
@@ -1869,7 +1909,11 @@ async def get_section_todo_candidates(
         raise HTTPException(404, f"Tab '{tab_id}' not found")
 
     cands = list(tab_meta.get("todo_candidates") or [])
-    if refresh or not cands:
+    if refresh:
+        require_meeting_operate(meeting_id, meeting)
+    from src.identity import can, get_actor
+
+    if refresh or (not cands and can(get_actor(), "meeting.update", {"meeting": meeting.model_dump()})):
         try:
             cands = meeting_service.extract_section_todo_candidates(
                 meeting_id,
@@ -1903,7 +1947,7 @@ async def get_section_todo_candidates(
     }
 
 
-@router.post("/meetings/{meeting_id}/todo-candidates/mark-created")
+@router.post("/meetings/{meeting_id}/todo-candidates/mark-created", dependencies=[Depends(_require_meeting_write)])
 async def mark_todo_candidates_created(meeting_id: str, body: dict):
     """After checklist create, bind candidate_id → todo_id to prevent re-offer.
 
@@ -1920,7 +1964,7 @@ async def mark_todo_candidates_created(meeting_id: str, body: dict):
     return _serialize_meeting(meeting)
 
 
-@router.delete("/meetings/{meeting_id}/sections/{tab_id}/allocate")
+@router.delete("/meetings/{meeting_id}/sections/{tab_id}/allocate", dependencies=[Depends(_require_meeting_write)])
 async def delete_section_allocation(meeting_id: str, tab_id: str):
     """Remove a section's collection allocation (delete file snapshot + clear metadata)."""
     logger.info("[DELETE_ALLOCATION] Meeting %s tab=%s", meeting_id, tab_id)
@@ -1987,7 +2031,7 @@ async def export_summary_file(meeting_id: str, tab_id: str, body: SummaryExportR
     })
 
 
-@router.put("/meetings/{meeting_id}/sections/{tab_id}/md")
+@router.put("/meetings/{meeting_id}/sections/{tab_id}/md", dependencies=[Depends(_require_meeting_write)])
 async def save_section_md_content(meeting_id: str, tab_id: str, body: dict = Body()):
     """Save edited markdown content for a section tab.
 

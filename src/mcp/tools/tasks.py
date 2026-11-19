@@ -18,7 +18,7 @@ from typing import Any
 from src.hub.routing import hub_routed
 from src.hub.write_forwards import cancel_task_forward, retry_task_forward
 from src.mcp.common import err, ok, run_sync, to_json, module_gated
-from src.tasks.access import can_see_task, filter_visible_tasks
+from src.tasks.access import can_manage_task, can_see_task, clear_manageable_tasks, filter_visible_tasks
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +197,7 @@ async def cancel_task(task_id: str, ctx: Context | None = None) -> str:
 
         task = task_manager.get_task(task_id)
         # 看不见的任务 = 不存在。**在动手之前**判（破坏先于授权是最糟的）。
-        if not task or not can_see_task(get_actor(), task_id, task):
+        if not task or not can_manage_task(get_actor(), task_id, task):
             return err(f"Task '{task_id}' not found")
         if task.status.value in ("completed", "failed"):
             return ok(
@@ -234,7 +234,7 @@ async def retry_task(task_id: str, ctx: Context | None = None) -> str:
         from src.identity import get_actor
 
         task = task_manager.get_task(task_id)
-        if not task or not can_see_task(get_actor(), task_id, task):
+        if not task or not can_manage_task(get_actor(), task_id, task):
             return err(f"Task '{task_id}' not found")
         if task.status.value != "failed":
             return err(
@@ -269,13 +269,11 @@ async def clear_completed_tasks(ctx: Context | None = None) -> str:
     Does not affect currently pending or processing tasks. Useful for cleaning
     up long task lists after a batch of work has finished.
     """
-    from src.tasks import task_manager
+    from src.identity import get_actor
 
     def _run() -> dict[str, Any]:
-        before = len(task_manager.tasks)
-        task_manager.clear_completed_tasks()
-        after = len(task_manager.tasks)
-        return ok(removed=before - after, remaining=after)
+        removed, remaining = clear_manageable_tasks(get_actor())
+        return ok(removed=removed, remaining=remaining)
 
     return to_json(await run_sync(_run))
 

@@ -6,11 +6,12 @@ high-quality Markdown output with preserved tables, formulas, and layout.
 
 from __future__ import annotations
 
-import io
 import json
 import logging
 import time
-import zipfile
+import tempfile
+from contextlib import contextmanager
+from urllib.parse import urlsplit
 from pathlib import Path
 from typing import Any
 
@@ -18,9 +19,29 @@ import httpx
 
 import re as _re_module
 
+from src.parsers.archive_limits import checked_archive
+from src.tasks.task_manager import check_cancelled
 from src.parsers.base import ParsedDocument
 
 logger = logging.getLogger(__name__)
+
+
+_PUBLIC_API = "https://mineru.net"
+_PUBLIC_TRANSFERS = ("https://mineru.oss-cn-shanghai.aliyuncs.com", "https://cdn-mineru.openxlab.org.cn")
+_MAX_RESULT_BYTES = 200 * 1024 * 1024
+
+
+def _origin(url: str):
+    try:
+        if not isinstance(url, str) or any(char.isspace() or ord(char) < 32 for char in url) or "\\" in url:
+            raise ValueError
+        parts = urlsplit(url)
+        if parts.scheme not in {"https", "http"} or not parts.hostname or parts.username is not None or parts.fragment:
+            raise ValueError
+        port = parts.port if parts.port is not None else (443 if parts.scheme == "https" else 80)
+        return parts.scheme, parts.hostname, port
+    except ValueError:
+        raise MinerUError("Invalid MinerU transfer address", code="INVALID_TRANSFER") from None
 
 
 def _html_table_to_markdown(html: str) -> str:
@@ -289,9 +310,14 @@ class MinerUParser:
         language: str = "ch",
         poll_interval: float = 3.0,
         poll_timeout: float = 300.0,
+        transfer_origins: list[str] | None = None,
     ):
         self.api_token = api_token
         self.base_url = base_url.rstrip("/")
+        api_origin = _origin(base_url)
+        self._transfer_origins = {api_origin, *(_origin(item) for item in transfer_origins or [])}
+        if api_origin == _origin(_PUBLIC_API):
+            self._transfer_origins.update(_origin(item) for item in _PUBLIC_TRANSFERS)
         self.model_version = model_version
         self.is_ocr = is_ocr
         self.enable_formula = enable_formula
@@ -300,11 +326,48 @@ class MinerUParser:
         self.poll_interval = poll_interval
         self.poll_timeout = poll_timeout
 
-    def _headers(self) -> dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self.api_token}",
-            "Content-Type": "application/json",
-        }
+    def transfer_url(self, url: str) -> str:
+        if _origin(url) not in self._transfer_origins:
+            raise MinerUError("Unapproved MinerU transfer destination", code="INVALID_TRANSFER")
+        return url
+
+    @contextmanager
+    def _result_archive(self, url: str):
+        url = self.transfer_url(url)
+        check_cancelled()
+        with tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024) as data:
+            with httpx.Client(timeout=60, follow_redirects=False) as client:
+                with client.stream("GET", url, headers={"Accept-Encoding": "identity"}) as response:
+                    response.raise_for_status()
+                    if response.headers.get("content-encoding", "identity").lower() != "identity":
+                        raise MinerUError("Unexpected encoding for result archive")
+                    for chunk in response.iter_raw(chunk_size=64 * 1024):
+                        if data.tell() % (1024 * 1024) == 0:
+                            check_cancelled()
+                        if data.tell() + len(chunk) > _MAX_RESULT_BYTES:
+                            raise MinerUError("MinerU download exceeds the result size limit")
+                        data.write(chunk)
+            data.seek(0)
+            with checked_archive(data) as archive:
+                yield archive
+
+    def _api_data(self, client: httpx.Client, method: str, url: str, **kwargs) -> dict:
+        check_cancelled()
+        headers = {"Authorization": f"Bearer {self.api_token}", "Content-Type": "application/json",
+                   "Accept-Encoding": "identity"}
+        with client.stream(method, url, headers=headers, follow_redirects=False, **kwargs) as response:
+            if response.headers.get("content-encoding", "identity").lower() != "identity":
+                raise MinerUError("Unexpected encoding for API response")
+            if 300 <= response.status_code < 400:
+                raise MinerUError("Unexpected redirect from configured MinerU API")
+            body = bytearray()
+            for chunk in response.iter_raw(chunk_size=64 * 1024):
+                if len(body) + len(chunk) > 1024 * 1024:
+                    raise MinerUError("MinerU API response exceeds the size limit")
+                body.extend(chunk)
+        bounded = httpx.Response(response.status_code, content=bytes(body))
+        self._check_response(bounded)
+        return bounded.json()["data"]
 
     def parse(self, path: Path) -> ParsedDocument:
         """Parse a file via MinerU API and return a ParsedDocument."""
@@ -319,13 +382,13 @@ class MinerUParser:
             raise MinerUError("File is empty")
 
         filename = path.name
-        file_bytes = path.read_bytes()
+
 
         # Step 1: Get signed upload URL
         batch_id, upload_url = self._request_upload_url(filename)
 
         # Step 2: Upload file to signed URL
-        self._upload_file(upload_url, file_bytes)
+        self._upload_file(upload_url, path)
 
         # Step 3: Poll for results
         result = self._poll_batch(batch_id, filename)
@@ -354,10 +417,8 @@ class MinerUParser:
         }
 
         with httpx.Client(timeout=30) as client:
-            resp = client.post(url, json=payload, headers=self._headers())
-            self._check_response(resp)
+            data = self._api_data(client, "POST", url, json=payload)
 
-        data = resp.json().get("data", {})
         batch_id = data.get("batch_id", "")
         file_urls = data.get("file_urls", [])
         if not batch_id or not file_urls:
@@ -366,20 +427,19 @@ class MinerUParser:
         logger.info("[MinerU] Got upload URL for '%s', batch_id=%s", filename, batch_id[:16])
         return batch_id, file_urls[0]
 
-    def _upload_file(self, upload_url: str, file_bytes: bytes) -> None:
-        """Upload file binary to the signed OSS URL."""
-        with httpx.Client(timeout=120) as client:
-            resp = client.put(
-                upload_url,
-                content=file_bytes,
-                headers={"Content-Length": str(len(file_bytes))},
-            )
-            if resp.status_code >= 400:
-                raise MinerUError(
-                    f"File upload failed: HTTP {resp.status_code}",
-                    code="UPLOAD_FAILED",
-                )
-        logger.info("[MinerU] File uploaded (%d bytes)", len(file_bytes))
+    def _upload_file(self, upload_url: str, path: Path) -> None:
+        """Stream the document to the storage origin authorized for this provider."""
+        url = self.transfer_url(upload_url)
+        check_cancelled()
+        with path.open("rb") as source, httpx.Client(timeout=120, follow_redirects=False) as client:
+            def blocks():
+                while data := source.read(1024 * 1024):
+                    check_cancelled()
+                    yield data
+
+            with client.stream("PUT", url, content=blocks(), headers={"Content-Length": str(path.stat().st_size)}) as response:
+                if not response.is_success:
+                    raise MinerUError(f"File upload failed: HTTP {response.status_code}", code="UPLOAD_FAILED")
 
     def _poll_batch(self, batch_id: str, filename: str) -> dict[str, Any]:
         """Poll batch results until the file is done or timeout/failure."""
@@ -388,10 +448,7 @@ class MinerUParser:
 
         with httpx.Client(timeout=30) as client:
             while time.monotonic() < deadline:
-                resp = client.get(url, headers=self._headers())
-                self._check_response(resp)
-
-                data = resp.json().get("data", {})
+                data = self._api_data(client, "GET", url)
                 results = data.get("extract_result", [])
 
                 for item in results:
@@ -428,17 +485,12 @@ class MinerUParser:
         if not zip_url:
             raise MinerUError("No result zip URL returned", code="NO_RESULT")
 
-        with httpx.Client(timeout=60) as client:
-            resp = client.get(zip_url)
-            resp.raise_for_status()
-
-        zip_bytes = resp.content
         markdown_content = ""
         position_map: list[dict] = []
         layout_data: dict[str, Any] = {}
         images_dir_files: dict[str, bytes] = {}  # filename → bytes from images/ dir
 
-        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        with self._result_archive(zip_url) as zf:
             names = zf.namelist()
             logger.info("[MinerU] Zip contents: %d files", len(names))
 
@@ -765,5 +817,6 @@ def parse_with_mineru(path: Path, mineru_config: Any) -> ParsedDocument:
         language=mineru_config.language,
         poll_interval=mineru_config.poll_interval,
         poll_timeout=mineru_config.poll_timeout,
+        transfer_origins=getattr(mineru_config, "transfer_origins", []),
     )
     return parser.parse(path)
