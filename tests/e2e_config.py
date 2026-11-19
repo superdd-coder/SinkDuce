@@ -46,3 +46,20 @@ def api_base() -> str:
 
 def qdrant_base() -> str:
     return f"http://localhost:{qdrant_http_port()}"
+
+
+# Live Hub suites create and remove fixtures, so their target must be explicit.
+HUB_TEST_URL = os.environ.get("SINKDUCE_TEST_INSTANCE_URL", "").rstrip("/")
+HUB_SELF_URL = os.environ.get("SINKDUCE_TEST_SELF_URL", HUB_TEST_URL).rstrip("/")
+
+
+def hub_test_instance_ready() -> bool:
+    if not HUB_TEST_URL:
+        return False
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(HUB_TEST_URL + "/health", timeout=3) as response:
+            return response.status == 200
+    except (OSError, ValueError):
+        return False

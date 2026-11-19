@@ -1206,9 +1206,6 @@ func writeHTTP(fd: Int32, status: String, contentType: String, body: Data, extra
     var head = "HTTP/1.1 \(status)\r\n"
     head += "Content-Type: \(contentType)\r\n"
     head += "Content-Length: \(body.count)\r\n"
-    head += "Access-Control-Allow-Origin: *\r\n"
-    head += "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
-    head += "Access-Control-Allow-Headers: *\r\n"
     head += "Connection: close\r\n"
     for line in extra { head += line + "\r\n" }
     head += "\r\n"
@@ -1235,8 +1232,9 @@ func handleClient(fd: Int32) {
     let method = parts.count > 0 ? String(parts[0]) : ""
     let path = parts.count > 1 ? String(parts[1].split(separator: "?").first ?? parts[1]) : "/"
 
-    if method == "OPTIONS" {
-        writeHTTP(fd: fd, status: "204 No Content", contentType: "text/plain", body: Data())
+    let headers = text.components(separatedBy: "\r\n").dropFirst().prefix { !$0.isEmpty }
+    guard AudioRequestPolicy.allows(method: method, path: path, headers: Array(headers)) else {
+        writeHTTP(fd: fd, status: "403 Forbidden", contentType: "text/plain", body: Data("Forbidden".utf8))
         return
     }
     if path == "/health" {
@@ -1290,7 +1288,6 @@ func handleClient(fd: Int32) {
         var head = "HTTP/1.1 200 OK\r\n"
         head += "Content-Type: application/octet-stream\r\n"
         head += "Transfer-Encoding: chunked\r\n"
-        head += "Access-Control-Allow-Origin: *\r\n"
         head += "Cache-Control: no-store\r\n"
         head += "Connection: keep-alive\r\n\r\n"
         if !Capture.writeAll(fd: fd, Data(head.utf8)) {

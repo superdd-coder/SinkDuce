@@ -12,6 +12,7 @@ from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, HTTPExcepti
 from fastapi.responses import FileResponse
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
+from src.api.file_responses import UPLOAD_HEADERS
 from src.notes import store
 from src.notes.service import (
     distill_note,
@@ -62,6 +63,18 @@ def _assert_col_write(collection: str, action: str) -> None:
 
     _vis.assert_can_read(actor, collection)
     authorize(actor, action, {"collection_id": collection})
+
+
+def _scoped_note(collection: str, note_id: str, action: str = "note.read"):
+    from src.identity.acl import canonical_collection_id
+
+    note = store.get_note(note_id)
+    if note is None or (note.collection != collection and
+                        canonical_collection_id(note.collection) != canonical_collection_id(collection)):
+        raise HTTPException(404, "Note not found")
+    if action != "note.read":
+        _assert_col_write(note.collection, action)
+    return note
 
 
 from src.api.routes.identity import require_module
@@ -471,7 +484,7 @@ async def list_notes(collection: str):
     ingested_ids = _get_ingested_note_ids(collection)
     items = []
     for note in notes:
-        referenced_by = store.get_referenced_by(note.id)
+        referenced_by = store.visible_backlinks(note.id)
         items.append({
             "id": note.id,
             "title": note.title,
@@ -511,12 +524,10 @@ async def create_note(collection: str, body: dict = Body()):
 @router.get("/notes/{collection}/{note_id}")
 async def get_note(collection: str, note_id: str):
     """Get note metadata, content, and references."""
-    note = store.get_note(note_id)
-    if not note:
-        raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
+    note = _scoped_note(collection, note_id)
     content = store.get_content(note_id) or ""
-    references = store.get_references(note_id)
-    referenced_by = store.get_referenced_by(note_id)
+    references = store.visible_references(note_id)
+    referenced_by = store.visible_backlinks(note_id)
 
     # Check if this note is ingested into Qdrant / file-mgmt
     note_source = f"__note__:{note_id}"
@@ -583,9 +594,7 @@ async def get_note(collection: str, note_id: str):
 @router.put("/notes/{collection}/{note_id}")
 async def update_note(collection: str, note_id: str, body: dict = Body()):
     """Update note content and/or title. Auto-syncs injection block references."""
-    note = store.get_note(note_id)
-    if not note:
-        raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
+    _scoped_note(collection, note_id, "note.update")
 
     # Update title if provided
     if "title" in body:
@@ -605,6 +614,8 @@ async def update_note(collection: str, note_id: str, body: dict = Body()):
         new_source_ids: set[str] = set()
         for block in blocks:
             source_id = block["source_note_id"]
+            if not store.can_reference(source_id):
+                continue
             new_source_ids.add(source_id)
             source = store.get_note(source_id)
             source_title = source.title if source else ""
@@ -642,7 +653,7 @@ async def update_note(collection: str, note_id: str, body: dict = Body()):
 @router.delete("/notes/{collection}/{note_id}")
 async def delete_note(collection: str, note_id: str):
     """Delete a note and clean up all references and ingested chunks."""
-    _assert_col_write(collection, "note.delete")
+    _scoped_note(collection, note_id, "note.delete")
     logger.info("[DELETE] Note %s in collection '%s'", note_id, collection)
 
     # Clean up ingested chunks from Qdrant + file-mgmt + files.json
@@ -696,9 +707,7 @@ async def distill_into_note(collection: str, note_id: str, body: dict = Body()):
     if not source:
         raise HTTPException(status_code=404, detail=f"Source note {source_note_id} not found")
 
-    target = store.get_note(note_id)
-    if not target:
-        raise HTTPException(status_code=404, detail=f"Target note {note_id} not found")
+    _scoped_note(collection, note_id, "note.update")
 
     logger.info("[DISTILL] %s → %s in collection '%s'", source_note_id, note_id, collection)
 
@@ -731,11 +740,13 @@ async def distill_meeting_into_note(collection: str, note_id: str, body: dict = 
         raise HTTPException(status_code=400, detail="meeting_id is required")
     tab_id = (body.get("tab_id") or "tab_general").strip() or "tab_general"
 
-    target = store.get_note(note_id)
-    if not target:
-        raise HTTPException(status_code=404, detail=f"Target note {note_id} not found")
+    _scoped_note(collection, note_id, "note.update")
 
+    from src.identity import get_actor
+    from src.identity.visibility import assert_can_read_meeting
     from src.meeting import store as meeting_store
+
+    assert_can_read_meeting(get_actor(), meeting_id)
     meeting = meeting_store.get_meeting(meeting_id)
     if not meeting:
         raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
@@ -771,9 +782,7 @@ async def distill_meeting_into_note(collection: str, note_id: str, body: dict = 
 @router.get("/notes/{collection}/{note_id}/propagation-preview")
 async def get_propagation_preview(collection: str, note_id: str):
     """Preview the full propagation chain if this note's content changes."""
-    note = store.get_note(note_id)
-    if not note:
-        raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
+    note = _scoped_note(collection, note_id)
 
     links = store.build_propagation_chain(note_id)
     return {
@@ -801,9 +810,7 @@ async def trigger_propagation(
     契约是同步的，后台模式会让转发答非所问。``auto=false`` 只重蒸馏直接子节点
     （与工具参数同义）。两个参数都带默认值 → 网页既有调用零变化。
     """
-    note = store.get_note(note_id)
-    if not note:
-        raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
+    _scoped_note(collection, note_id, "note.update")
 
     if wait:
         # propagate_forward → distill_note 是**阻塞** LLM 调用（service.py 的
@@ -851,14 +858,7 @@ async def ingest_note(collection: str, note_id: str, background_tasks: Backgroun
     For already-ingested notes with content changes, use ``/reingest``
     (file version pipeline).
     """
-    note = store.get_note(note_id)
-    if not note:
-        raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
-    # 入库会写该库的向量内容，且下游在后台线程里跑（线程读不到请求身份），
-    # 所以授权必须在**请求期**这里完成——用 URL 上的 collection 作为资源键。
-    from src.identity import authorize, get_actor
-
-    authorize(get_actor(), "note.create", {"collection_id": collection})
+    note = _scoped_note(collection, note_id, "note.create")
 
     content = store.get_content(note_id) or ""
     if not content.strip():
@@ -904,14 +904,7 @@ async def reingest_note(collection: str, note_id: str):
     Uses the same upload/version pipeline as folder file updates
     (``upload_file_version``), preserving ``source=__note__:{note_id}``.
     """
-    note = store.get_note(note_id)
-    if not note:
-        raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
-    # 重新入库 = 写新的文件版本（走 upload_file_version 管线），且下游可能在后台
-    # 线程里跑。授权必须在**请求期**完成（线程读不到请求身份）。
-    from src.identity import authorize, get_actor
-
-    authorize(get_actor(), "note.update", {"collection_id": collection})
+    note = _scoped_note(collection, note_id, "note.update")
 
     content = store.get_content(note_id) or ""
     if not content.strip():
@@ -934,7 +927,8 @@ async def reingest_note(collection: str, note_id: str):
 
         import threading
 
-        threading.Thread(target=run_ingestion, daemon=True).start()
+        from contextvars import copy_context
+        threading.Thread(target=copy_context().run, args=(run_ingestion,), daemon=True).start()
         return {
             "message": "No existing file — first ingest started",
             "status": "pending",
@@ -982,10 +976,7 @@ async def reingest_note(collection: str, note_id: str):
 @router.delete("/notes/{collection}/{note_id}/ingest")
 async def remove_note_ingestion(collection: str, note_id: str):
     """Remove ingested note: Qdrant chunks + Notes-folder file + disk + files.json."""
-    _assert_col_write(collection, "note.update")
-    note = store.get_note(note_id)
-    if not note:
-        raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
+    _scoped_note(collection, note_id, "note.update")
 
     source = f"__note__:{note_id}"
     logger.info(
@@ -1060,13 +1051,13 @@ async def remove_note_ingestion(collection: str, note_id: str):
 @router.post("/notes/{collection}/{note_id}/images")
 async def upload_note_image(collection: str, note_id: str, file: UploadFile = File(...)):
     """Upload an image for a note. Returns the URL path to use in markdown."""
-    note = store.get_note(note_id)
-    if not note:
-        raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
+    _scoped_note(collection, note_id, "note.update")
 
     content_bytes = await file.read()
     filename = file.filename or "image.png"
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "png"
+    if ext not in {"png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"}:
+        raise HTTPException(415, "Unsupported note image type")
     safe_name = f"{uuid.uuid4().hex[:10]}.{ext}"
 
     images_dir = store.NOTES_DIR / note_id / "images"
@@ -1082,6 +1073,7 @@ async def upload_note_image(collection: str, note_id: str, file: UploadFile = Fi
 @router.get("/notes/{collection}/{note_id}/images/{filename}")
 async def serve_note_image(collection: str, note_id: str, filename: str):
     """Serve an uploaded image for a note."""
+    _scoped_note(collection, note_id)
     from src.paths import assert_resource_id, confine
 
     try:
@@ -1091,4 +1083,4 @@ async def serve_note_image(collection: str, note_id: str, filename: str):
         raise HTTPException(status_code=400, detail="Invalid image path")
     if not image_path.exists():
         raise HTTPException(status_code=404, detail="Image not found")
-    return FileResponse(str(image_path))
+    return FileResponse(str(image_path), headers=UPLOAD_HEADERS)

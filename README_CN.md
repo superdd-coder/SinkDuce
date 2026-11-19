@@ -42,10 +42,10 @@ LLM、Embedding 与语音转写既可使用云端 API，也可接入 **本地模
 
 数据在 `~/Library/Application Support/SinkDuce`。API 和 MCP 默认 `127.0.0.1:18910`（被占用则顺延）。
 
-也可以运行安装器：自动下载最新桌面版、检查 SHA-256 后安装。
+也可以运行安装器：自动下载最新桌面版，验证发布者签名后安装。
 
 ```bash
-curl -fsSL https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/superdd-coder/SinkDuce/main/desktop/install.sh | sh
 ```
 
 然后：Settings → 添加 **LLM** 和 **Embedding**（或用下面的 OneShot）→ 建 Collection → 上传文件或录制会议 → 开始提问。后续可在应用内更新；[发布说明](https://github.com/superdd-coder/SinkDuce/releases)可公开访问。

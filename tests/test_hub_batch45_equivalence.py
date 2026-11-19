@@ -14,19 +14,11 @@ import urllib.request
 
 import pytest
 
-BASE = "http://127.0.0.1:18900"
-
-
-def _has_service() -> bool:
-    try:
-        with urllib.request.urlopen(f"{BASE}/health", timeout=3) as r:
-            return r.status == 200
-    except Exception:
-        return False
+from tests.e2e_config import HUB_TEST_URL as BASE, HUB_SELF_URL, hub_test_instance_ready
 
 
 pytestmark = pytest.mark.skipif(
-    not _has_service(), reason="需要 18900 在跑（批次 4.5 真机等价性）"
+    not hub_test_instance_ready(), reason="Set SINKDUCE_TEST_INSTANCE_URL to a disposable instance for live Hub tests"
 )
 
 
@@ -93,7 +85,7 @@ def self_hub():
     _put([
         *[{"box_id": b["box_id"], "box_name": b["box_name"], "addr": b["addr"],
            "last_checked": b.get("last_checked", "")} for b in original],
-        {"box_id": "__b45__", "box_name": "B45Self", "addr": BASE, "token": ""},
+        {"box_id": "__b45__", "box_name": "B45Self", "addr": HUB_SELF_URL, "token": ""},
     ])
     yield
     _put([{"box_id": b["box_id"], "box_name": b["box_name"], "addr": b["addr"],

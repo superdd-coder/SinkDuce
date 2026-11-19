@@ -9,7 +9,7 @@ import json
 from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.http_client import local_owner_client
 
 from src.db.sessions import SessionStore
 
@@ -45,7 +45,7 @@ class TestChatEndpoint:
         s = store.create_session(title="test")
         mock_agent = _make_mock_agent(store)
 
-        client = TestClient(app)
+        client = local_owner_client(app)
         with patch("src.api.routes.sessions.services") as mock_svc:
             mock_svc.session_store = store
             mock_svc.chatbox_agent = mock_agent
@@ -64,7 +64,7 @@ class TestChatEndpoint:
         s = store.create_session(title="test")
         mock_agent = _make_mock_agent(store)
 
-        client = TestClient(app)
+        client = local_owner_client(app)
         with patch("src.api.routes.sessions.services") as mock_svc:
             mock_svc.session_store = store
             mock_svc.chatbox_agent = mock_agent
@@ -95,7 +95,7 @@ class TestChatEndpoint:
 
         mock_agent.chat_stream = _stream_with_sources
 
-        client = TestClient(app)
+        client = local_owner_client(app)
         with patch("src.api.routes.sessions.services") as mock_svc:
             mock_svc.session_store = store
             mock_svc.chatbox_agent = mock_agent
@@ -112,7 +112,7 @@ class TestChatEndpoint:
         """POST to nonexistent session returns 404."""
         from src.main import app
 
-        client = TestClient(app)
+        client = local_owner_client(app)
         with patch("src.api.routes.sessions.services") as mock_svc:
             mock_svc.session_store = store
             resp = client.post(
@@ -127,7 +127,7 @@ class TestChatEndpoint:
 
         s = store.create_session()
 
-        client = TestClient(app)
+        client = local_owner_client(app)
         with patch("src.api.routes.sessions.services") as mock_svc:
             mock_svc.session_store = store
             resp = client.post(
@@ -142,7 +142,7 @@ class TestChatEndpoint:
 
         s = store.create_session()
 
-        client = TestClient(app)
+        client = local_owner_client(app)
         with patch("src.api.routes.sessions.services") as mock_svc:
             mock_svc.session_store = store
             mock_svc.chatbox_agent = None

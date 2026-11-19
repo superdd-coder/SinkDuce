@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import zipfile
 from pathlib import Path
 
 import pytest
+
+
+def _write_release(path: Path, content: bytes):
+    path.write_bytes(content)
+    path.with_suffix(".zip.sha256").write_text(hashlib.sha256(content).hexdigest())
 
 
 def _make_minimal_release_zip() -> bytes:
@@ -79,7 +85,7 @@ def test_download_falls_back_to_second_mirror(tmp_path, monkeypatch):
     monkeypatch.setenv("HF_HOME", str(tmp_path))
     zip_bytes = _make_minimal_release_zip()
     zip_file = tmp_path / "pack.zip"
-    zip_file.write_bytes(zip_bytes)
+    _write_release(zip_file, zip_bytes)
     # Candidate 1 (R2 slot): file:// URL that does not exist → URLError.
     # Candidate 2 (GitHub slot): the real local zip.
     monkeypatch.setenv(
@@ -104,9 +110,7 @@ def test_sha256_mismatch_tries_next_mirror(tmp_path, monkeypatch):
     monkeypatch.setenv("HF_HOME", str(tmp_path))
     zip_bytes = _make_minimal_release_zip()
     good = tmp_path / "good.zip"
-    good.write_bytes(zip_bytes)
-
-    import hashlib
+    _write_release(good, zip_bytes)
 
     bad = tmp_path / "bad.zip"
     bad.write_bytes(zip_bytes[:-64] + b"x" * 64)
@@ -126,7 +130,7 @@ def test_download_package_from_local_url(tmp_path, monkeypatch):
     monkeypatch.setenv("HF_HOME", str(tmp_path))
     zip_bytes = _make_minimal_release_zip()
     zip_file = tmp_path / "pack.zip"
-    zip_file.write_bytes(zip_bytes)
+    _write_release(zip_file, zip_bytes)
     # file:// URL so no network
     monkeypatch.setenv("SINKDUCE_ONNX_MODELS_URL", zip_file.as_uri())
 
@@ -152,7 +156,7 @@ def test_download_rejects_bad_zip_layout(tmp_path, monkeypatch):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("not-onnx/foo.bin", b"x")
-    bad.write_bytes(buf.getvalue())
+    _write_release(bad, buf.getvalue())
     monkeypatch.setenv("SINKDUCE_ONNX_MODELS_URL", bad.as_uri())
 
     with pytest.raises(RuntimeError, match="top-level 'onnx/'"):

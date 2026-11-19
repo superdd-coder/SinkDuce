@@ -11,7 +11,10 @@ def _make_service(dec=None, vf=None, agg=None, cat=None, dm=None, llm=None):
     dec = dec or MagicMock()
     vf = vf or MagicMock()
     agg = agg or MagicMock()
-    cat = cat or MagicMock()
+    if cat is None:
+        from src.rag.catalog import CatalogEntry
+        cat = MagicMock()
+        cat.get_catalog.return_value = [CatalogEntry(name="Practice", id="col_a", definition="", coverage="")]
     dm = dm or MagicMock()
     llm = llm or MagicMock()
     llm.generate.return_value = "answer"
@@ -98,3 +101,11 @@ class TestAgenticQuery:
         svc = _make_service()
         result = svc.run("", generate_answer=True)
         assert result.answer is None
+
+    def test_planner_cannot_expand_selected_collections(self):
+        dec, fetcher = MagicMock(), MagicMock()
+        dec.decompose.return_value = [AtomicQuery(query="practice", target_collections=["col_b"])]
+        svc = _make_service(dec=dec, vf=fetcher)
+        result = svc.run("practice", collections=["col_a"], generate_answer=False)
+        fetcher.run.assert_not_called()
+        assert not result.all_chunks

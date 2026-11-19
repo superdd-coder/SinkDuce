@@ -18,11 +18,33 @@ import {
 import { Download, Loader2 } from "lucide-react"
 import FileViewer from "@file-viewer/react"
 import officePreset from "@file-viewer/preset-office"
-import textRenderer from "@file-viewer/renderer-text"
+import textRenderer, { renderFileViewerCode, renderFileViewerMarkdown } from "@file-viewer/renderer-text"
+import { renderUploadedMarkdown } from "@/lib/uploaded-markdown"
 import { cn } from "@/lib/utils"
 import { installToolbarRebuildCoalescer } from "@/lib/toolbar-rebuild-coalescer"
 import { useT } from "@/i18n/use-t"
 import { tr } from "@/i18n/tr"
+
+const renderSafeMarkdown: typeof renderFileViewerMarkdown = async (buffer, target, type, context) => {
+  // Keep large documents in the library's virtualized plain-text view.
+  if (buffer.byteLength >= 512 * 1024) return renderFileViewerCode(buffer, target, "txt", context)
+  const html = renderUploadedMarkdown(new TextDecoder().decode(buffer))
+  // The library supplies the toolbar and zoom layout. Only our document
+  // renderer receives uploaded markup.
+  const view = await renderFileViewerMarkdown(new ArrayBuffer(0), target, type, context)
+  const article = target.querySelector(".markdown-body")
+  if (!article) throw new Error("Markdown preview layout unavailable")
+  article.innerHTML = html
+  return view
+}
+
+const safeTextRenderer = {
+  ...textRenderer,
+  handlers: [
+    { rendererId: "code", handler: renderFileViewerCode },
+    { rendererId: "markdown", handler: renderSafeMarkdown },
+  ],
+}
 
 /** Inline SVG for scrubbed toolbar — magnifying glass / download icon only. */
 const ICON_SEARCH_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`
@@ -698,7 +720,7 @@ function RawFileViewerInner({
       ({
         preset: officePreset,
         initialViewState: initialPage && initialPage > 0 ? { page: initialPage } : undefined,
-        renderers: [textRenderer as never],
+        renderers: [safeTextRenderer as never],
         // Force English chrome (toolbar, empty/error states)
         locale: "en-US" as const,
         // Allow host CSS (Geist + compact size / green thin type) to style chrome

@@ -28,7 +28,9 @@ def test_agent_exposes_dropped_candidates_separately_from_context_evidence():
     vf = MagicMock()
     vf.run.return_value = VariantFetcherResult(
         chunks=[], retrieved_chunks=[gold], retained_info="Nothing found", gap_analysis="Missing fact")
-    service = AgenticQueryService(MagicMock(), vf, MagicMock(), MagicMock(),
+    router = MagicMock()
+    router.route_collections.return_value = []
+    service = AgenticQueryService(MagicMock(), vf, MagicMock(), router,
                                   Aggregator(MagicMock()), MagicMock())
     result = service.run("fact?", collections=["col"], decompose=False, generate_answer=False)
     assert result.candidate_chunks == [gold]
@@ -66,7 +68,9 @@ def test_hybrid_fallback_trace_records_the_actual_dense_mode():
 def test_failed_atomic_query_is_reported_as_an_error():
     vf = MagicMock()
     vf.run.side_effect = RuntimeError("provider failed")
-    service = AgenticQueryService(MagicMock(), vf, MagicMock(), MagicMock(),
+    router = MagicMock()
+    router.route_collections.return_value = ["col"]
+    service = AgenticQueryService(MagicMock(), vf, MagicMock(), router,
                                   Aggregator(MagicMock()), MagicMock())
     result = service.run("fact", collections=["col"], decompose=False, generate_answer=False)
     assert result.errors[0]["stage"] == "atomic_query"

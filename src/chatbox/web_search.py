@@ -11,9 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import threading
-import uuid
-from dataclasses import dataclass, field
+from src.chatbox.confirm_store import ChatConfirmStore
 from typing import Any
 
 import httpx
@@ -29,61 +27,14 @@ WEB_BANNER = (
 )
 
 
-@dataclass
-class _PendingConfirm:
-    query: str
-    event: threading.Event = field(default_factory=threading.Event)
-    approved: bool | None = None
-
-
-class WebSearchConfirmStore:
-    """In-process store bridging SSE streams and confirm HTTP calls.
-
-    Uses :class:`threading.Event` because the confirm HTTP handler may run
-    in a worker thread while the chat stream waits on the asyncio loop.
-    """
+class WebSearchConfirmStore(ChatConfirmStore):
+    """Single-use web-search approval from the device that requested it."""
 
     def __init__(self) -> None:
-        self._pending: dict[str, _PendingConfirm] = {}
-        self._guard = threading.Lock()
+        super().__init__("wsc_")
 
     def create(self, query: str) -> str:
-        confirm_id = f"wsc_{uuid.uuid4().hex[:16]}"
-        with self._guard:
-            self._pending[confirm_id] = _PendingConfirm(query=query)
-        return confirm_id
-
-    def resolve(self, confirm_id: str, approved: bool) -> bool:
-        with self._guard:
-            item = self._pending.get(confirm_id)
-        if item is None:
-            return False
-        item.approved = bool(approved)
-        item.event.set()
-        return True
-
-    async def wait(self, confirm_id: str, timeout: float = 120.0) -> bool:
-        with self._guard:
-            item = self._pending.get(confirm_id)
-        if item is None:
-            return False
-        loop = asyncio.get_running_loop()
-        ok = await loop.run_in_executor(
-            None, lambda: item.event.wait(timeout=timeout)
-        )
-        with self._guard:
-            self._pending.pop(confirm_id, None)
-        if not ok:
-            logger.info("Web search confirm timed out: %s", confirm_id)
-            return False
-        return bool(item.approved)
-
-    def cancel(self, confirm_id: str) -> None:
-        with self._guard:
-            item = self._pending.pop(confirm_id, None)
-        if item is not None:
-            item.approved = False
-            item.event.set()
+        return super().create({"query": query})
 
 
 web_search_confirm_store = WebSearchConfirmStore()

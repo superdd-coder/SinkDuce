@@ -21,7 +21,9 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import shutil
+import stat
 import tempfile
 import threading
 import urllib.error
@@ -496,20 +498,14 @@ def _download_onnx_release_package(requested_ids: list[str] | None = None) -> No
 
 
 def _verify_sha256(zip_path: Path, sha_url: str) -> None:
-    """Check the downloaded zip against its ``.sha256`` sidecar.
-
-    Missing/unreachable sidecar is tolerated (warn + continue) — the extract
-    step still catches truncated archives; a hash mismatch fails hard.
-    """
+    """Require the selected mirror to provide a valid SHA-256 before installation."""
     try:
         with _http_opener().open(sha_url, timeout=30) as resp:  # noqa: S310 — fixed release URLs
             expected = resp.read(4096).decode("utf-8", "replace").split()[0].strip().lower()
     except (urllib.error.URLError, urllib.error.HTTPError, OSError, IndexError) as e:
-        logger.warning("sha256 sidecar unavailable (%s): %s; skip verify", sha_url, e)
-        return
-    if len(expected) != 64:
-        logger.warning("Malformed sha256 sidecar %s; skip verify", sha_url)
-        return
+        raise RuntimeError("Model package checksum is unavailable") from e
+    if not re.fullmatch("[0-9a-f]{64}", expected):
+        raise RuntimeError("Model package checksum is invalid")
     digest = hashlib.sha256()
     with zip_path.open("rb") as fh:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
@@ -527,14 +523,30 @@ def _extract_onnx_zip(zip_path: Path, dest_home: Path) -> None:
     Archive root must be ``onnx/`` (as produced by package_onnx_release.sh).
     """
     with zipfile.ZipFile(zip_path, "r") as zf:
-        names = zf.namelist()
-        if not any(n.replace("\\", "/").startswith("onnx/") for n in names):
+        entries = zf.infolist()
+        if not any(i.filename.startswith("onnx/") and not i.is_dir() for i in entries):
             raise RuntimeError(
                 "Invalid ONNX release zip: expected top-level 'onnx/' directory"
             )
-        # Safety: refuse path traversal
-        for info in zf.infolist():
-            name = info.filename.replace("\\", "/")
-            if name.startswith("/") or ".." in name.split("/"):
-                raise RuntimeError(f"Unsafe path in zip: {info.filename}")
-        zf.extractall(dest_home)
+        if len(entries) > 10000 or sum(i.file_size for i in entries) > 8 * 1024**3:
+            raise RuntimeError("Model package exceeds extraction limits")
+        root = dest_home.resolve()
+        seen = set()
+        for info in entries:
+            name = info.filename.rstrip("/")
+            parts = name.split("/")
+            target = root.joinpath(*parts)
+            if (name in seen or parts[0] not in {"onnx", "LICENSES"} and name != "ATTRIBUTION.md"
+                    or any(p in {"", ".", ".."} for p in parts) or "\\" in name or ":" in name
+                    or stat.S_ISLNK(info.external_attr >> 16) or target.resolve() != target):
+                raise RuntimeError("Invalid path in model package")
+            seen.add(name)
+        # Finish validation and CRC checks before replacing any installed weight.
+        root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=root) as temp:
+            zf.extractall(temp)
+            for info in entries:
+                if not info.is_dir():
+                    target = root / info.filename
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(Path(temp) / info.filename, target)

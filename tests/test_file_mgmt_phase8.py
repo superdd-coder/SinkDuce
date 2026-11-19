@@ -10,6 +10,7 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.http_client import local_owner_client
 
 from src.file_mgmt.store import COLLECTIONS_DIR, init_collection_db, get_db
 
@@ -84,7 +85,7 @@ def test_file_detail_includes_system_version_messages_and_node_meta():
 
     coll = "p8-detail"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     resp = client.post(f"/api/file-mgmt/{coll}/groups", json={"name": "Finance"})
     assert resp.status_code == 201, resp.text
@@ -155,6 +156,6 @@ def test_file_detail_404():
 
     coll = "p8-404"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
     resp = client.get(f"/api/file-mgmt/{coll}/files/{'a' * 32}")
     assert resp.status_code == 404

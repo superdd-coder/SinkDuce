@@ -118,7 +118,7 @@ class TestGateIntegration:
         没有这个路径」不可区分。钥匙在这条闸门上不是凭据 —— 见 middleware 的
         「/mcp 收敛回环」不变式。
         """
-        key = service.ensure_local_key()
+        key = service.issue_token(name="paired-device", role="admin", is_local=True)
         probe = TestClient(
             client.app, base_url=LAN_BASE, headers={"X-Pairing-Token": key["token"]}
         )
@@ -138,7 +138,7 @@ class TestGateIntegration:
             return  # 正常响应也算穿透
 
     def test_query_token_accepted(self, client):
-        key = service.ensure_local_key()
+        key = service.issue_token(name="paired-device", role="admin", is_local=True)
         resp = client.get(f"/api/pairing/tokens?token={key['token']}")
         assert resp.status_code == 200
 
@@ -146,7 +146,7 @@ class TestGateIntegration:
         # 防御纵深（2026-09-16）：门卫对「外部端口上的领钥匙请求」放行给持钥匙者
         # （端口准入 NONE → 落普通门禁），路由层必须再拦一次——领钥匙通道只属于
         # 物理本机，局域网设备纵然手里有有效钥匙也拿不到本机钥匙明文。
-        key = service.ensure_local_key()
+        key = service.issue_token(name="paired-device", role="admin", is_local=True)
         resp = client.get(
             "/api/pairing/local-key", headers={"X-Pairing-Token": key["token"]}
         )
@@ -185,20 +185,20 @@ class TestGateIntegration:
 
 class TestDualAccept:
     def test_short_token_passes_gate_and_routes(self, client):
-        key = service.ensure_local_key()
+        key = service.issue_token(name="paired-device", role="admin", is_local=True)
         at = service.mint_access_token(key["token"])
         resp = client.get("/api/pairing/tokens", headers={"X-Pairing-Token": at["access_token"]})
         assert resp.status_code == 200
 
     def test_short_token_in_query_passes(self, client):
         # WS/SSE/图片通道走 ?token=，同样必须被门卫认
-        key = service.ensure_local_key()
+        key = service.issue_token(name="paired-device", role="admin", is_local=True)
         at = service.mint_access_token(key["token"])
         resp = client.get(f"/api/pairing/tokens?token={at['access_token']}")
         assert resp.status_code == 200
 
     def test_forged_short_token_401(self, client):
-        key = service.ensure_local_key()
+        key = service.issue_token(name="paired-device", role="admin", is_local=True)
         tok = service.mint_access_token(key["token"])["access_token"]
         bad = tok[:-1] + ("0" if tok[-1] != "0" else "1")
         resp = client.get("/api/pairing/tokens", headers={"X-Pairing-Token": bad})
@@ -212,7 +212,7 @@ class TestDualAccept:
         assert resp.status_code == 401
 
     def test_mint_route_with_long_key(self, client):
-        key = service.ensure_local_key()
+        key = service.issue_token(name="paired-device", role="admin", is_local=True)
         resp = client.post("/api/pairing/access-token", headers={"X-Pairing-Token": key["token"]})
         assert resp.status_code == 200
         body = resp.json()

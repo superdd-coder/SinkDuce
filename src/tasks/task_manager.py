@@ -8,29 +8,36 @@ import sqlite3
 import threading
 import uuid
 from dataclasses import dataclass, field
+from contextvars import ContextVar
 from enum import Enum
 from typing import Any, Callable, Coroutine
 from datetime import datetime, timezone
+
+from src.identity.actor import Actor, get_actor, reset_actor, set_actor
 
 logger = logging.getLogger("task_manager")
 
 # Per-task cancellation events — checked by cooperative long-running operations
 _cancel_events: dict[str, threading.Event] = {}
-_current_task = threading.local()
+_current_task = ContextVar("current_task_id", default="")
+_execution_check: ContextVar[Callable[[], None] | None] = ContextVar("task_access", default=None)
 
 
 def set_current_task(task_id: str):
     """Bind *task_id* to the calling thread so long-running ops can check cancellation."""
-    _current_task.value = task_id
+    _current_task.set(task_id)
 
 
 def clear_current_task():
-    _current_task.value = ""
+    _current_task.set("")
 
 
 def check_cancelled():
     """Raise if the current thread's task has been cancelled."""
-    tid = getattr(_current_task, "value", "")
+    validate = _execution_check.get()
+    if validate is not None:
+        validate()
+    tid = _current_task.get()
     if tid:
         ev = _cancel_events.get(tid)
         if ev and ev.is_set():
@@ -60,6 +67,7 @@ class Task:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    requester: Actor = field(default_factory=get_actor, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -146,14 +154,15 @@ class TaskManager:
         enqueue is awaited on the running loop (avoids delayed dequeue when
         the handler later blocks the loop).
         """
+        loop = self._loop if self._loop and self._loop.is_running() else asyncio.get_running_loop()
         task = self._make_task(filename, collection)
         self._task_args[task.id] = (task_type, kwargs)
-        if self._loop and self._loop.is_running():
+        if loop is self._loop:
             asyncio.run_coroutine_threadsafe(
-                self._enqueue_task(task.id, task_type, kwargs), self._loop
+                self._enqueue_task(task.id, task_type, kwargs), loop
             )
         else:
-            asyncio.create_task(self._enqueue_task(task.id, task_type, kwargs))
+            loop.create_task(self._enqueue_task(task.id, task_type, kwargs))
         return task
 
     async def create_task_async(
@@ -271,12 +280,15 @@ class TaskManager:
                     _time.sleep(0.05)
         return cancelled
 
-    def clear_completed_tasks(self) -> None:
-        """Remove all completed or failed tasks."""
-        to_remove = [tid for tid, t in self.tasks.items() if t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED)]
+    def clear_completed_tasks(self, task_ids: set[str] | None = None) -> int:
+        """Remove completed or failed records in the supplied set."""
+        to_remove = [tid for tid, t in list(self.tasks.items())
+                     if (task_ids is None or tid in task_ids)
+                     and t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED)]
         for tid in to_remove:
-            del self.tasks[tid]
+            self.tasks.pop(tid, None)
             self._task_args.pop(tid, None)
+        return len(to_remove)
 
     def retry_task(self, task_id: str) -> Task | None:
         """Re-enqueue a failed task."""
@@ -289,6 +301,7 @@ class TaskManager:
         task_type, kwargs = args
         task.status = TaskStatus.PENDING
         task.progress = 0.0
+        task.requester = get_actor()
         task.message = "Re-queued"
         task.error = None
         task.result = None
@@ -316,7 +329,7 @@ class TaskManager:
             from src.tasks.task_persistence import record_upload_task
             record_upload_task(task.id, task.collection, {
                 "filename": task.filename, **kwargs,
-            })
+            }, requester=task.requester)
         except Exception as e:
             logger.warning("Failed to persist upload task %s: %s", task_id, e)
         # Ingest history row (display + retry surface; survives restarts)
@@ -483,12 +496,19 @@ class TaskManager:
                 continue
             payload = dict(row["payload"])
             filename = payload.pop("filename", "recovered-upload")
+            saved_actor = payload.pop("_requested_by", None)
+            requester = Actor(id="unattributed", kind="anonymous", role_id="")
+            if isinstance(saved_actor, dict) and all(isinstance(saved_actor.get(k), str) and saved_actor[k] for k in ("id", "kind", "role_id")):
+                kind = saved_actor["kind"]
+                if kind == "key" or (kind in {"system", "local"} and saved_actor["id"] == kind and saved_actor["role_id"] == "owner"):
+                    requester = Actor(id=saved_actor["id"], kind=kind, role_id=saved_actor["role_id"])
             if task_id not in self.tasks:
                 self.tasks[task_id] = Task(
                     id=task_id,
                     filename=filename,
                     collection=row["collection_id"],
                     message="Requeued after restart",
+                    requester=requester,
                 )
             self._task_args[task_id] = ("upload", payload)
             asyncio.get_running_loop().create_task(
@@ -554,24 +574,31 @@ class TaskManager:
                 history_store.mark_processing(task.collection, task_id)
             except Exception:
                 logger.warning("[IngestHistory] mark_processing failed for %s", task_id, exc_info=True)
-        logger.info("[TASK %s] Starting execution: type=%s kwargs=%s",
-                    task_id, task_type,
-                    {k: v for k, v in kwargs.items() if k != "file_path"})
+        logger.info("[TASK %s] Starting execution: type=%s", task_id, task_type)
 
+        from src.tasks.access import require_execution_permission
+
+        def validate():
+            if cancel_event.is_set():
+                raise RuntimeError("Task cancelled")
+            require_execution_permission(task.requester, task_type, task.collection, kwargs)
+
+        actor_token = set_actor(task.requester)
+        access_token = _execution_check.set(validate)
         try:
+            validate()
             handler = self._handlers.get(task_type)
             if not handler:
                 raise ValueError(f"No handler registered for task type: {task_type}")
 
             kwargs["collection"] = task.collection
-            loop = asyncio.get_running_loop()
-
             async def _run():
                 if asyncio.iscoroutinefunction(handler):
                     return await handler(task, **kwargs)
-                return await loop.run_in_executor(None, lambda: handler(task, **kwargs))
+                return await asyncio.to_thread(handler, task, **kwargs)
 
             result = await asyncio.wait_for(_run(), timeout=self.timeout)
+            validate()
 
             if self._task_epoch.get(task_id, 0) != epoch:
                 # 执行期间被取消：保持取消终态，不覆盖成 COMPLETED。
@@ -586,6 +613,7 @@ class TaskManager:
             logger.info("[TASK %s] COMPLETED: %s", task_id, result)
 
         except asyncio.TimeoutError:
+            cancel_event.set()
             if self._task_epoch.get(task_id, 0) == epoch:
                 task.status = TaskStatus.FAILED
                 task.error = f"Task timed out after {self.timeout}s"
@@ -607,6 +635,9 @@ class TaskManager:
             self._record_upload_terminal(ttype, task, failed=False)
 
         finally:
+            cancel_event.set()
+            _execution_check.reset(access_token)
+            reset_actor(actor_token)
             self._async_tasks.pop(task_id, None)
             _cancel_events.pop(task_id, None)
 

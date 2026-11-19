@@ -23,6 +23,23 @@ after(async () => {
   else Reflect.deleteProperty(globalThis, "localStorage")
 })
 
+test("file messages preserve editor colors and discard form controls", async () => {
+  const { MessageBody } = await server.ssrLoadModule("/src/components/file-mgmt/message-card.tsx")
+  const body = '<span style="color:#234567;position:fixed">Example</span><form><button>Sample</button></form>'
+  const html = renderToStaticMarkup(createElement(MessageBody, { body }))
+  assert.match(html, /color:#234567/)
+  assert.doesNotMatch(html, /position:fixed|<form\b|<button\b/)
+})
+
+test("uploaded Markdown uses the passive document renderer", async () => {
+  const { renderUploadedMarkdown } = await server.ssrLoadModule("/src/lib/uploaded-markdown.ts")
+  const body = "# Example\n\n<form><button>Sample</button></form>\n\n| A | B |\n|---|---|\n| 1 | 2 |"
+  const html = renderUploadedMarkdown(body)
+  assert.match(html, /<h1>Example<\/h1>/)
+  assert.match(html, /<table>/)
+  assert.doesNotMatch(html, /<form\b|<button\b/)
+})
+
 async function renderChunk(text: string, sourcePanel = false) {
   if (sourcePanel) {
     const { SourceChunkBody } = await server.ssrLoadModule("/src/components/chat/source-detail-panel.tsx")

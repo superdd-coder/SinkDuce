@@ -271,6 +271,11 @@ def freeze_speakers_in_note_content(content: str) -> str:
     if "[spk:" not in md and not _re.search(r"\bSpeaker\s+\d+\b", md, _re.I):
         return md
 
+    from src.identity import get_actor
+    from src.identity.policy import can
+    if not can(get_actor(), "meeting.read"):
+        return md
+
     blocks = parse_injection_blocks(md)
     maps: dict[str, str] = {}
     for block in blocks:
@@ -311,7 +316,10 @@ def build_meeting_tab_distill_source(
     display_title is \"{meeting} / {section}\" for sections, or meeting title for general.
     """
     from src.meeting import store as meeting_store
+    from src.identity import get_actor
+    from src.identity.visibility import assert_can_read_meeting
 
+    assert_can_read_meeting(get_actor(), meeting_id)
     meeting = meeting_store.get_meeting(meeting_id)
     if not meeting:
         raise FileNotFoundError(f"Meeting {meeting_id} not found")
@@ -417,15 +425,25 @@ def distill_meeting(meeting_id: str, tab_id: str = "tab_general") -> tuple[str, 
     return title, result
 
 
-def propagate_forward(source_note_id: str, auto: bool = False) -> list[str]:
+def propagate_forward(source_note_id: str, auto: bool = False, *, _visited: set[str] | None = None) -> list[str]:
     """Re-distill source note content into all notes that reference it.
     If auto=True, also recursively propagate downstream (chain propagation).
     Returns list of updated note IDs."""
     updated = []
-    referenced_by = store.get_referenced_by(source_note_id)
-    source_note = store.get_note(source_note_id)
-    if not source_note:
+    from src.identity import can, get_actor
+
+    visited = _visited if _visited is not None else set()
+    if source_note_id in visited:
         return updated
+    visited.add(source_note_id)
+    source_note = store.get_note(source_note_id)
+    if not source_note or not can(get_actor(), "note.update", {"collection_id": source_note.collection}):
+        return updated
+    referenced_by = []
+    for target_id in store.get_referenced_by(source_note_id):
+        target = store.get_note(target_id)
+        if target and target_id not in visited and can(get_actor(), "note.update", {"collection_id": target.collection}):
+            referenced_by.append(target_id)
 
     # Delete existing distillation so it gets regenerated
     store.delete_distillation(source_note_id)
@@ -458,7 +476,7 @@ def propagate_forward(source_note_id: str, auto: bool = False) -> list[str]:
 
         # Chain propagation — if this target is also referenced by others
         if auto:
-            sub_updated = propagate_forward(target_id, auto=True)
+            sub_updated = propagate_forward(target_id, auto=True, _visited=visited)
             updated.extend(sub_updated)
 
     # Touch the source note's updated_at so the frontend can detect completion

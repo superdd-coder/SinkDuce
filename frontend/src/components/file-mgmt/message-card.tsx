@@ -3,6 +3,7 @@ import { Bot, Clock } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import rehypeRaw from "rehype-raw"
+import { rehypeChunkPolicy } from "@/lib/chunk-markdown-policy"
 import { cn } from "@/lib/utils"
 import type { Message } from "@/types/file-mgmt"
 import { tr } from "@/i18n/tr"
@@ -25,11 +26,7 @@ export function MessageBody({
     <div className={className}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeRaw]}
-        components={{
-          // Preserve inline color styles from Tiptap
-          span: ({ node: _n, ...props }) => <span {...props} />,
-        }}
+        rehypePlugins={[rehypeRaw, [rehypeChunkPolicy, { editorColors: true }]]}
       >
         {body}
       </ReactMarkdown>

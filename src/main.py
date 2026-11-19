@@ -62,12 +62,12 @@ class _QueryTokenScrubFilter(logging.Filter):
 
     import re as _re
 
-    _TOKEN_RE = _re.compile(r"([?&]token=)[^&\s\"']+")
+    _TOKEN_RE = _re.compile(r"([?&](?:audio_)?token=)[^&\s\"']+", _re.IGNORECASE)
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
             message = record.getMessage()
-            if "token=" in message:
+            if "token=" in message.lower():
                 scrubbed = self._TOKEN_RE.sub(r"\1***", message)
                 if scrubbed != message:
                     record.msg = scrubbed
@@ -231,34 +231,7 @@ app.add_middleware(
 
 
 # ── 请求体体积上限（2026-09-19 P2 背压）──────────────────────────
-# 仓库里此前只有 staging 自己查大小（且在读完 body 之后）。一个失控客户端
-# 可以用超大 Content-Length 把服务器拖进缓冲/OOM。这里在**读 body 之前**
-# 按 Content-Length 拒绝。默认 2 GB（覆盖大 PDF/会议音频；staging 自身仍是
-# 更严的 500 MB），可用 SINKDUCE_MAX_BODY_MB 调整，0 = 不限制。
-from starlette.middleware.base import BaseHTTPMiddleware
-
-
-class _BodySizeLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, max_bytes: int):
-        super().__init__(app)
-        self.max_bytes = max_bytes
-
-    async def dispatch(self, request: Request, call_next):
-        if self.max_bytes > 0:
-            declared = request.headers.get("content-length")
-            try:
-                if declared and int(declared) > self.max_bytes:
-                    return JSONResponse(
-                        status_code=413,
-                        content={
-                            "error": f"Payload too large "
-                            f"(max {self.max_bytes // (1024 * 1024)} MB)"
-                        },
-                    )
-            except ValueError:
-                pass
-        return await call_next(request)
-
+from src.api.body_limit import BodySizeLimitMiddleware as _BodySizeLimitMiddleware
 
 _max_body_mb = 2048
 try:
@@ -266,8 +239,7 @@ try:
     _max_body_mb = max(0, _env_mb)
 except ValueError:
     pass
-if _max_body_mb > 0:
-    app.add_middleware(_BodySizeLimitMiddleware, max_bytes=_max_body_mb * 1024 * 1024)
+app.add_middleware(_BodySizeLimitMiddleware, max_bytes=_max_body_mb * 1024 * 1024)
 
 
 # ── Global error handling for provider/API errors ──────────
@@ -292,8 +264,8 @@ def _format_provider_error(exc: Exception) -> tuple[int, str]:
             return 502, f"远程服务错误 (HTTP {code})"
         return code, f"远程服务返回错误: HTTP {code}"
     if isinstance(exc, ValueError):
-        return 400, str(exc)
-    return 500, f"服务内部错误: {type(exc).__name__}"
+        return 400, "请求参数无效"
+    return 500, "服务内部错误"
 
 
 @app.middleware("http")
@@ -316,11 +288,11 @@ async def provider_error_middleware(request: Request, call_next):
         response = await call_next(request)
     except Exception as exc:
         status, message = _format_provider_error(exc)
-        logger.error("Request %s %s failed: [%d] %s — %s",
-                     request.method, request.url.path, status, message, exc)
+        logger.error("Request %s %s failed: HTTP %d (%s)",
+                     request.method, request.url.path, status, type(exc).__name__)
         return JSONResponse(
             status_code=status,
-            content={"error": message, "detail": str(exc)[:500]},
+            content={"error": message, "detail": message},
         )
     # Prevent CDN/browser from caching API JSON as HTML (or vice versa)
     if path.startswith("/api/") or path == "/health":
@@ -532,7 +504,7 @@ if __name__ == "__main__":
     # 只有容器需要第二个（对外）监听：它靠宿主机把主端口只发布到回环来认定本机。
     plan = plan_listeners(host, port, external_port, add_external=in_container())
     socks = build_listeners(plan)
-    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, reload=False))
+    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, reload=False, proxy_headers=False))
     if len(socks) > 1:
         logger.info(
             "Dual entry: local=%s:%s external=%s:%s", host, port, host, external_port

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from urllib.parse import urlparse
@@ -27,6 +28,6 @@ def open_external_url(url: str) -> None:
         subprocess.Popen(["open", allowed])
         return
     if sys.platform == "win32":
-        subprocess.Popen(["cmd", "/c", "start", "", allowed])
+        os.startfile(allowed)
         return
     subprocess.Popen(["xdg-open", allowed])

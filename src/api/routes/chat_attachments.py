@@ -5,6 +5,7 @@ import base64
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from src.api.file_responses import UPLOAD_HEADERS
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
@@ -196,7 +197,7 @@ def preview_attachment(session_id: str, attachment_id: str):
     if a.status != "ready":
         raise HTTPException(404, "Image preview not available")
     source = store.source_path(session_id, attachment_id)
-    headers = {"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"}
+    headers = UPLOAD_HEADERS
     if source.suffix.lower() in {".ppt", ".pptx"}:
         converted = source.parent / "pages.pdf"
         if converted.is_file():

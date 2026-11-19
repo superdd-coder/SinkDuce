@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.http_client import local_owner_client
 
 from src.file_mgmt.store import COLLECTIONS_DIR, get_db, init_collection_db
 
@@ -49,7 +50,7 @@ def test_upload_and_version_use_version_id_subdirs():
 
     coll = f"layout-ver-{uuid.uuid4().hex[:8]}"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
     folder_id = _get_plain_folder_id(client, coll)
 
     resp1 = client.post(
@@ -63,7 +64,7 @@ def test_upload_and_version_use_version_id_subdirs():
     v1_id = body1.get("version_id") or body1.get("current_version_id")
     assert v1_id
 
-    root = Path("data/collections") / coll / "files" / file_id
+    root = COLLECTIONS_DIR / coll / "files" / file_id
     v1_blob = root / v1_id / "note.txt"
     assert v1_blob.is_file(), f"expected {v1_blob}"
     assert v1_blob.read_text(encoding="utf-8") == "v1 body"
@@ -130,7 +131,7 @@ def test_resolve_note_label_storage_finds_flat_md():
     _setup_collection(coll)
     file_id = uuid.uuid4().hex
     version_id = uuid.uuid4().hex
-    root = Path("data/collections") / coll / "files" / file_id
+    root = COLLECTIONS_DIR / coll / "files" / file_id
     root.mkdir(parents=True, exist_ok=True)
     (root / "My_Note.md").write_text("# hello note", encoding="utf-8")
 
@@ -157,7 +158,7 @@ def test_migrate_flat_layout_to_version_dirs():
     file_id = uuid.uuid4().hex
     v1 = uuid.uuid4().hex
     v2 = uuid.uuid4().hex
-    root = Path("data/collections") / coll / "files" / file_id
+    root = COLLECTIONS_DIR / coll / "files" / file_id
     root.mkdir(parents=True, exist_ok=True)
     (root / "report.txt").write_text("only-latest", encoding="utf-8")
     (root / "parsed.txt").write_text("parsed-current", encoding="utf-8")

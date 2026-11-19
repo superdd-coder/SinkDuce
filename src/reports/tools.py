@@ -21,8 +21,9 @@ def _edit_result(record):
 
 
 def execute_report_tool(sessions, sid, name, args, registry, operation_id="", review_batches=None, review_validator=None, review_repairer=None, *, report_store=None):
-    store = report_store if report_store is not None else for_sessions(sessions).bind_session(sid)
+    store = report_store if report_store is not None else for_sessions(sessions)
     try:
+        store = store.bind_session(sid, sources=registry.sources)
         if name == "get_report":
             record = store.read(sid, str(args.get("report_id") or ""), args.get("revision"))
             # Pair exact source with its identity so the editor can verify range

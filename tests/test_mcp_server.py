@@ -542,7 +542,7 @@ def _patch_context():
     stack.enter_context(patch.object(_tm, "get_all_tasks", return_value=[]))
     stack.enter_context(patch.object(_tm, "cancel_task", return_value=True))
     stack.enter_context(patch.object(_tm, "retry_task", return_value=None))
-    stack.enter_context(patch.object(_tm, "clear_completed_tasks", return_value=None))
+    stack.enter_context(patch.object(_tm, "clear_completed_tasks", return_value=0))
     stack.enter_context(patch.object(_tm, "_task_args", {}))
     # ── Meeting & hot-words store patches ────────────────────────
     from src.meeting import store as mstore_mod

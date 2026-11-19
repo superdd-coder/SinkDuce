@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.http_client import local_owner_client
 
 from src.file_mgmt.store import COLLECTIONS_DIR, init_collection_db
 
@@ -29,7 +29,7 @@ def test_duplicate_upload_returns_409_name_conflict():
     coll = "nc-upload-dup"
     create_collection_meta(coll, "Name conflict upload")
     init_collection_db(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     folder = client.post(
         f"/api/file-mgmt/{coll}/folders",
@@ -66,7 +66,7 @@ def test_rename_file_to_existing_name_returns_409():
     coll = "nc-rename-file"
     create_collection_meta(coll, "Name conflict rename file")
     init_collection_db(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     folder = client.post(
         f"/api/file-mgmt/{coll}/folders",
@@ -108,7 +108,7 @@ def test_rename_folder_to_existing_name_returns_409():
     coll = "nc-rename-folder"
     create_collection_meta(coll, "Name conflict rename folder")
     init_collection_db(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     a = client.post(
         f"/api/file-mgmt/{coll}/folders",
@@ -142,7 +142,7 @@ def test_rename_root_orphan_to_existing_name_returns_409():
     coll = "nc-rename-orphan"
     create_collection_meta(coll, "Name conflict root orphan")
     init_collection_db(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     a = client.post(
         f"/api/file-mgmt/{coll}/files/upload",

@@ -30,7 +30,7 @@ import urllib.request
 
 import pytest
 
-BASE = "http://127.0.0.1:18900"
+from tests.e2e_config import HUB_TEST_URL as BASE, HUB_SELF_URL, hub_test_instance_ready
 
 #: 批次 1 已接转发的工具 → (调用参数, 期望输出里的关键键)
 WIRED: list[tuple[str, dict]] = [
@@ -106,16 +106,8 @@ class TestAdapters:
 # ── 真机层：本地 vs 转发 ─────────────────────────────────────
 
 
-def _has_service() -> bool:
-    try:
-        with urllib.request.urlopen(f"{BASE}/health", timeout=3) as r:
-            return r.status == 200
-    except Exception:
-        return False
-
-
 pytestmark_live = pytest.mark.skipif(
-    not _has_service(), reason="需要 18900 在跑（真机等价性测试）"
+    not hub_test_instance_ready(), reason="Set SINKDUCE_TEST_INSTANCE_URL to a disposable instance for live Hub tests"
 )
 
 
@@ -206,7 +198,7 @@ def self_hub():
     _put([
         *[{"box_id": b["box_id"], "box_name": b["box_name"], "addr": b["addr"],
            "last_checked": b.get("last_checked", "")} for b in original],
-        {"box_id": "__equiv_self__", "box_name": "EquivSelf", "addr": BASE, "token": ""},
+        {"box_id": "__equiv_self__", "box_name": "EquivSelf", "addr": HUB_SELF_URL, "token": ""},
     ])
     yield
     # 恢复：去掉测试条目，把原条目放回（token 传空 = 保留后端已存的钥匙）

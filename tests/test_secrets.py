@@ -80,7 +80,7 @@ def test_get_current_config_redacts_keys(monkeypatch):
             ]
         )
     )
-    monkeypatch.setattr(cfg_routes, "get_config", lambda: cfg)
+    monkeypatch.setattr(cfg_routes, "reload_config", lambda: cfg)
     data = cfg_routes.get_current_config()
     dumped = str(data)
     assert "sk-abcdefghijklmnop" not in dumped

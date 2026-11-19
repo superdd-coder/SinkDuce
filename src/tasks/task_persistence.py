@@ -48,8 +48,12 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
-def record_upload_task(task_id: str, collection_id: str, payload: dict) -> None:
+def record_upload_task(task_id: str, collection_id: str, payload: dict, *, requester=None) -> None:
     """Persist a queued upload task so a crash can be recovered from."""
+    from dataclasses import asdict
+    from src.identity.actor import get_actor
+
+    payload = {**payload, "_requested_by": asdict(requester or get_actor())}
     now = datetime.now(timezone.utc).isoformat()
     conn = _connect()
     try:

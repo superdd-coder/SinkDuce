@@ -48,6 +48,7 @@ from src.prompts import (
     QUICK_CHAT_SYSTEM_PROMPT,
 )
 from src.rag.search_settings import search_settings
+from src.chatbox.history_access import ChatSources
 
 logger = logging.getLogger(__name__)
 
@@ -246,8 +247,12 @@ def _build_user_identity_line() -> str:
     the same identity `list_todos mine=true` filters by.
     """
     try:
+        from src.identity import get_actor
+        from src.identity.visibility import can_access_domain
         from src.speakers.store import get_me_person_id, get_person
 
+        if not can_access_domain(get_actor(), "people"):
+            return ""
         pid = get_me_person_id()
         if not pid:
             return ""
@@ -261,7 +266,7 @@ def _build_user_identity_line() -> str:
 
 
 def _build_surface_context(
-    session_id: str, collections: list[str] | None
+    session_id: str, collections: list[str] | None, sources: ChatSources | None = None,
 ) -> str | None:
     """Ephemeral per-turn context by surface, or None when nothing applies.
 
@@ -271,7 +276,12 @@ def _build_surface_context(
     so the model can judge meeting relevance without a catalog tool round.
     Every surface is prefixed with the user identity line when Me is set.
     """
-    if session_id.startswith("meeting_"):
+    from src.identity import get_actor
+    from src.identity.visibility import can_access_domain
+
+    if not can_access_domain(get_actor(), "meeting"):
+        surface = None
+    elif session_id.startswith("meeting_"):
         surface = _build_meeting_ephemeral_context(session_id[len("meeting_"):])
     elif session_id.startswith("group_"):
         from src.chatbox.meeting_context import build_group_ephemeral_context
@@ -281,8 +291,12 @@ def _build_surface_context(
         from src.chatbox.meeting_context import build_meeting_catalog_digest
 
         surface = build_meeting_catalog_digest(collections) or None
+    if surface and sources is not None:
+        sources.domains.add("meeting")
     identity = _build_user_identity_line()
     if identity:
+        if sources is not None:
+            sources.domains.add("people")
         surface = f"{identity}\n\n{surface}" if surface else identity
     return surface
 
@@ -547,6 +561,7 @@ class ChatboxAgent:
         *,
         web_search_enabled: bool = False,
         has_meetings: bool = True,
+        catalog_sources: set[str] | None = None,
     ):
         """Return (tools, system_prompt, catalog_text) for the given mode."""
         is_meeting = session_id.startswith("meeting_")
@@ -572,7 +587,7 @@ class ChatboxAgent:
             col_name = cols[0] if cols else "this collection"
             system_prompt = QUICK_CHAT_SYSTEM_PROMPT % {"collection_name": col_name}
             return self._with_attachment_tools(session_id, tools, system_prompt, "")
-        catalog_text = self._build_catalog_text(session_id, collections=collections)
+        catalog_text = self._build_catalog_text(session_id, collections=collections, source_ids=catalog_sources)
         tools = tools_for_mode(
             "agentic", is_meeting=False, web_search_enabled=web_search_enabled,
             has_meetings=has_meetings,
@@ -679,7 +694,7 @@ class ChatboxAgent:
             return trim_keep
         return count
 
-    def _build_catalog_text(self, session_id: str, *, collections: list[str] | None = None) -> str:
+    def _build_catalog_text(self, session_id: str, *, collections: list[str] | None = None, source_ids: set[str] | None = None) -> str:
         """Build a concise catalog summary for the system prompt."""
         if self._agentic is None:
             return ""
@@ -704,6 +719,9 @@ class ChatboxAgent:
                 name = getattr(e, "name", "")
                 defn = getattr(e, "definition", "")
                 tags = getattr(e, "tags", [])
+            entry_id = e.get("id") if isinstance(e, dict) else getattr(e, "id", None)
+            if source_ids is not None and isinstance(entry_id, str) and entry_id:
+                source_ids.add(entry_id)
             parts = [f"- {name}"]
             if tags:
                 parts.append(f" [{', '.join(tags)}]")
@@ -713,7 +731,7 @@ class ChatboxAgent:
         # Implicit "all collections" scope: make archived ones discoverable so
         # the LLM can honor an explicit user request via include_archived.
         if not explicit_scope:
-            archived_names = self._archived_catalog_names(catalog)
+            archived_names = self._archived_catalog_names(catalog, source_ids)
             if archived_names:
                 lines.append("")
                 lines.append(
@@ -730,7 +748,7 @@ class ChatboxAgent:
         return "\n".join(lines)
 
     @staticmethod
-    def _archived_catalog_names(catalog) -> list[str]:
+    def _archived_catalog_names(catalog, source_ids=None) -> list[str]:
         """Display names of archived collections for the catalog appendix."""
         try:
             from src.collections.store import archived_collection_ids
@@ -744,6 +762,8 @@ class ChatboxAgent:
                 if eid not in archived_ids:
                     continue
                 name = e.get("name") if isinstance(e, dict) else getattr(e, "name", "")
+                if source_ids is not None:
+                    source_ids.add(eid)
                 names.append(str(name or eid))
             return names
         except Exception:
@@ -879,6 +899,12 @@ class ChatboxAgent:
                 dialogue_hist, user_message,
             )
 
+        if evidence_registry is not None:
+            for prior in [*system_hist, *dialogue_hist]:
+                evidence_registry.sources.include_message(prior)
+            evidence_registry.sources.include(evidence_registry.live_records())
+            evidence_registry.sources.include(evidence_registry.records()[-32:])
+
         for m in system_hist:
             messages.append(self._store_message_to_llm_dict(m))
 
@@ -980,13 +1006,17 @@ class ChatboxAgent:
             from src.reports.store import for_sessions as report_store
             try:
                 current_reports = reports if reports is not None else report_store(self._store)
-                catalog = [{k: r[k] for k in ('id', 'title', 'revision')} for r in current_reports.list(session_id)]
+                visible_reports = current_reports.list(session_id)
+                for report in visible_reports:
+                    evidence_registry.sources.include(report.get('_source_access'))
+                catalog = [{k: r[k] for k in ('id', 'title', 'revision')} for r in visible_reports]
             except ValueError:
                 # Legacy conversation IDs may predate report path restrictions.
                 catalog = []
             evidence = [{**e, 'quote': e['quote'][:160]} for e in evidence_registry.records()[-32:]]
             if catalog or evidence:
                 rendered_messages.insert(1, {'role': 'system', 'content': json.dumps({'conversation_reports': catalog, 'evidence': evidence}, ensure_ascii=False)})
+            evidence_registry.sources.require_current()
         tool_content = [m.get("content") for m in rendered_messages if m.get("role") == "tool"]
         image_count = sum(sum(p.get("type") == "image_url" for p in c if isinstance(p, dict))
                           for c in tool_content if isinstance(c, list))
@@ -1018,13 +1048,14 @@ class ChatboxAgent:
                          previous_question=previous_question, previous_projects=previous_projects)
         qa_evidence = QaEvidence(self._store, session_id, llm=self._llm)
         has_meetings = self._has_meetings(session_id, collections)
+        prompt_sources = ChatSources()
         _tools, _sys_prompt, _cat_text = self._resolve_tools_and_prompt(
             mode, session_id, web_search_enabled=web_search_enabled,
-            has_meetings=has_meetings,
+            has_meetings=has_meetings, catalog_sources=prompt_sources.collections,
         )
         self._check_session_truncation(session_id)
 
-        meeting_ephemeral_ctx = _build_surface_context(session_id, collections)
+        meeting_ephemeral_ctx = _build_surface_context(session_id, collections, prompt_sources)
         seen_tx_packs: set[str] = set()
         seen_tx_hits: list[dict] = []
         total_tool_calls = 0
@@ -1045,6 +1076,7 @@ class ChatboxAgent:
         from src.chatbox.citations import registry_from_history
         from src.reports.tools import execute_report_tool, changes_from_result, merge_report_changes
         evidence = registry_from_history(self._store, session_id)
+        evidence.sources.include(prompt_sources.metadata())
         source_cursor = 0
         tx_lookup_dry = False
 
@@ -1360,18 +1392,23 @@ class ChatboxAgent:
                             "arguments": tc["function"]["arguments"],
                         },
                     }]
+                    source_metadata = evidence.sources.include_tool(
+                        tool_name, args, tool_content, new_sources, collections,
+                    )
                     qa_projects = sorted(qa_evidence.project_ids)
                     extra_messages.append({
                         "role": "assistant",
                         "content": None,
                         "tool_calls": tool_call_data,
                         "_qa_projects": qa_projects,
+                        "_source_access": source_metadata,
                     })
                     extra_messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call_id,
                         "content": tool_content,
                         "_qa_projects": qa_projects,
+                        "_source_access": source_metadata,
                         **({"_persist_text": tool_persist_text} if tool_persist_text else {}),
                         **({"_qa_bundle": qa_bundle} if qa_bundle and qa_bundle.posts else {}),
                     })
@@ -1399,7 +1436,7 @@ class ChatboxAgent:
             self._store.add_message(
                 session_id, "assistant", final_answer,
                 sources=all_sources if all_sources else None,
-                metadata={"tool_calls": total_tool_calls, "note_changes": note_changes, "citations": evidence.used(final_answer), "report_changes": report_changes, **qa_evidence.metadata()},
+                metadata={"tool_calls": total_tool_calls, "note_changes": note_changes, "citations": evidence.used(final_answer), "report_changes": report_changes, **evidence.sources.metadata(), **qa_evidence.metadata()},
             )
 
         return ChatResponse(
@@ -1502,9 +1539,10 @@ class ChatboxAgent:
                          previous_question=previous_question, previous_projects=previous_projects)
         qa_evidence = QaEvidence(self._store, session_id, llm=self._llm)
         has_meetings = self._has_meetings(session_id, collections)
+        prompt_sources = ChatSources()
         _tools, _sys_prompt, _cat_text = self._resolve_tools_and_prompt(
             mode, session_id, collections, web_search_enabled=web_search_enabled,
-            has_meetings=has_meetings,
+            has_meetings=has_meetings, catalog_sources=prompt_sources.collections,
         )
         if review_batches:
             from src.prompts import CHAT_REPORT_REVIEW_RULES, CHAT_REPORT_REVIEW_CONTEXT
@@ -1541,7 +1579,7 @@ class ChatboxAgent:
         # Quick-chat truncation check
         msg_count = self._check_session_truncation(session_id)
 
-        meeting_ephemeral_ctx = _build_surface_context(session_id, collections)
+        meeting_ephemeral_ctx = _build_surface_context(session_id, collections, prompt_sources)
         seen_tx_packs: set[str] = set()
         seen_tx_hits: list[dict] = []
         _quick_warn = (
@@ -1606,6 +1644,7 @@ class ChatboxAgent:
             from src.reports.validation import repair_review
             return repair_review(review_llm, parent, task, edits, results, issues)
         evidence = registry_from_history(self._store, session_id)
+        evidence.sources.include(prompt_sources.metadata())
         source_cursor = 0
         tx_lookup_dry = False
 
@@ -1679,6 +1718,8 @@ class ChatboxAgent:
                 # spent — stop feeding it rounds and force the answer now.
                 break
             messages = build_turn_messages()
+            if source_metadata := evidence.sources.metadata():
+                yield {"type": "_source_access", **source_metadata}
             if evidence.records():
                 yield {"type": "citations", "citations": evidence.live_records()}
             tools_round = _tools_this_round()
@@ -3296,12 +3337,16 @@ class ChatboxAgent:
                             "arguments": tc["function"]["arguments"],
                         },
                     }]
+                    source_metadata = evidence.sources.include_tool(
+                        tool_name, args, tool_content, new_sources, collections,
+                    )
                     qa_projects = sorted(qa_evidence.project_ids)
                     assistant_extra: dict = {
                         "role": "assistant",
                         "content": None,
                         "tool_calls": tool_call_data,
                         "_qa_projects": qa_projects,
+                        "_source_access": source_metadata,
                     }
                     extra_messages.append(assistant_extra)
                     tool_extra: dict = {
@@ -3309,6 +3354,7 @@ class ChatboxAgent:
                         "tool_call_id": tool_call_id,
                         "content": tool_content,
                         "_qa_projects": qa_projects,
+                        "_source_access": source_metadata,
                     }
                     if tool_persist_text:
                         tool_extra["_persist_text"] = tool_persist_text
@@ -3329,7 +3375,7 @@ class ChatboxAgent:
 
                 all_sources += qa_evidence.sources(evidence)
                 # Save assistant message
-                meta: dict = {"tool_calls": total_tool_calls, "citations": evidence.used(final_content), "report_changes": report_changes, **qa_evidence.metadata()}
+                meta: dict = {"tool_calls": total_tool_calls, "citations": evidence.used(final_content), "report_changes": report_changes, **evidence.sources.metadata(), **qa_evidence.metadata()}
                 if execution:
                     meta['report_review_status'] = execution
                 if note_changes:
@@ -3399,12 +3445,14 @@ class ChatboxAgent:
             **({"retry_context": retry_final_context} if qa_evidence.posts else {}),
         )
         all_sources += qa_evidence.sources(evidence)
+        if source_metadata := evidence.sources.metadata():
+            yield {"type": "_source_access", **source_metadata}
         if final_content or note_changes or report_changes:
             # Yield the answer as token events so the frontend shows it,
             # then persist and emit done.
             for i in range(0, len(final_content), 4):
                 yield {"type": "token", "content": final_content[i:i + 4]}
-            meta_final: dict = {"tool_calls": total_tool_calls, "citations": evidence.used(final_content), "report_changes": report_changes, **qa_evidence.metadata()}
+            meta_final: dict = {"tool_calls": total_tool_calls, "citations": evidence.used(final_content), "report_changes": report_changes, **evidence.sources.metadata(), **qa_evidence.metadata()}
             if execution:
                 meta_final['report_review_status'] = execution
             if note_changes:
@@ -3543,6 +3591,8 @@ class ChatboxAgent:
         self, session_id: str, text: str, *, note_changes: list[dict] | None = None,
         citations: list[dict] | None = None, report_changes: list[dict] | None = None,
         qa_projects: list[str] | None = None,
+        source_collections: list[str] | None = None,
+        source_domains: list[str] | None = None,
     ) -> None:
         """Persist a partially generated answer after a mid-stream disconnect.
 
@@ -3578,6 +3628,8 @@ class ChatboxAgent:
                     "tool_calls": 0, "partial": True, "interrupted": True,
                     **({"note_changes": note_changes} if note_changes else {}),
                     **({"citations": citations} if citations else {}),
+                    **({"source_collections": source_collections} if source_collections else {}),
+                    **({"source_domains": source_domains} if source_domains else {}),
                     **({"qa_projects": qa_projects} if qa_projects else {}),
                     **({"report_changes": report_changes} if report_changes else {}),
                 },
@@ -4022,6 +4074,7 @@ def _persist_extra_messages(store, session_id: str, extra_messages: list[dict]) 
                     meta["reasoning_content"] = rc
             elif role == "tool":
                 meta["tool_call_id"] = em.get("tool_call_id", "")
+            meta.update(em.get("_source_access", {}))
             if em.get("_qa_projects"):
                 meta["qa_projects"] = em["_qa_projects"]
             store.add_message(session_id, role, content, metadata=meta if meta else None)

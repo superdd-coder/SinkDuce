@@ -176,7 +176,7 @@ class TestEndpointIsLocalOnly:
         不是「能管理我出站到谁」。穿过门卫后由路由的本地判定拒绝，且用 404 不暴露存在。"""
         from src.pairing import service
 
-        key = service.ensure_local_key()
+        key = service.issue_token(name="paired-device", role="admin", is_local=True)
         resp = client.get("/api/hub/boxes", headers={"X-Pairing-Token": key["token"]})
         assert resp.status_code == 404
 
@@ -184,7 +184,7 @@ class TestEndpointIsLocalOnly:
         """**核心回归**：能写 = 能往里塞一台恶意盒子 / 把地址改指向自己。"""
         from src.pairing import service
 
-        key = service.ensure_local_key()
+        key = service.issue_token(name="paired-device", role="admin", is_local=True)
         resp = client.put(
             "/api/hub/boxes",
             headers={"X-Pairing-Token": key["token"], "Content-Type": "application/json"},

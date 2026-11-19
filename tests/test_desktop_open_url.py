@@ -53,7 +53,7 @@ def test_open_external_url_uses_macos_open(monkeypatch):
 def _client():
     app = FastAPI()
     app.include_router(desktop_router)
-    return TestClient(app)
+    return TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 51000))
 
 
 def test_open_url_route_forbidden_outside_desktop(monkeypatch):

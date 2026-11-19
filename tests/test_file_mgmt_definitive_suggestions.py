@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from tests.http_client import local_owner_client
 
 from src.file_mgmt.routes import router as file_mgmt_router
 from src.file_mgmt.store import COLLECTIONS_DIR, EXPECTED_TABLES, init_collection_db
@@ -46,7 +47,7 @@ def _db_path(collection_id: str) -> str:
 def _client() -> TestClient:
     app = FastAPI()
     app.include_router(file_mgmt_router, prefix="/api/file-mgmt")
-    return TestClient(app)
+    return local_owner_client(app)
 
 
 def _insert_file(
@@ -599,7 +600,7 @@ def test_apply_sets_definitive_and_closes():
     fid = _insert_file(coll)
     _insert_suggestion(coll, fid)
 
-    client = TestClient(app)
+    client = local_owner_client(app)
     patches = _patch_definitive_side_effects()
     with patches[0], patches[1], patches[2], patches[3]:
         resp = client.post(

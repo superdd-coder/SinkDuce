@@ -3,12 +3,16 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
 import re
 import secrets
 import socket
+import struct
+from pathlib import Path
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -20,8 +24,6 @@ TOKEN_PREFIX = "sd1_"
 # 短命 access token（长短钥匙）：由长钥匙 HMAC 派生，TTL 秒级，不落盘
 ACCESS_TOKEN_PREFIX = "sda1_"
 ACCESS_TOKEN_TTL_SECONDS = 600
-_LOOPBACK = {"127.0.0.1", "::1", "::ffff:127.0.0.1", "localhost"}
-_LOOPBACK_PREFIXES = ("127.", "::ffff:127.")
 _LAST_SEEN_THROTTLE = 60  # 秒：写盘节流窗口
 
 # 本机专用端点：只有物理本地通道（回环客户端，或容器里的本机入口端口）能调用它，
@@ -47,9 +49,17 @@ def _iso(dt: datetime) -> str:
 
 def is_loopback_host(host: str | None) -> bool:
     """回环地址判定。桌面壳只绑回环，其客户端来源即回环——免钥匙。"""
-    if not host:
+    if not host or "%" in host:
         return False
-    return host in _LOOPBACK or host.startswith(_LOOPBACK_PREFIXES)
+    if host.lower() == "localhost":
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return address.is_loopback
 
 
 def local_entry_port() -> int:
@@ -83,37 +93,39 @@ def _server_port(scope) -> int | None:
         return None
 
 
-def is_local_scope(scope) -> bool:
-    """本机判定（门卫与路由守卫共用）。
+_IPV4_ROUTES = Path("/proc/net/route")
 
-    两道闸先过，再看来源：
-    1. **Host 必须是本机自己的地址** —— 防 DNS rebinding。攻击者页面在 evil.com:18900，
-       DNS 重绑到本机后浏览器打 127.0.0.1 仍是「同源」请求（不带 Origin），只有 Host 能识破。
-    2. **Origin 必须是本机自己** —— 防盒子浏览器里的恶意页面跨源直连本机端口。
-    然后（**来源 IP 永不作为本机信号**）：
-    - 客户端地址是回环 → 本机（桌面/裸机进程直连）；
-    - 容器形态且请求落在本机入口端口 → 本机（宿主机只把它映射到回环）；
-    - 其余一律不算本机，走钥匙。
 
-    为什么不信「客户端 = 盒子自己的网卡地址」：同机 Docker 容器出站经 Docker Desktop
-    NAT 后，源地址就是宿主机的网卡地址，与「本机浏览器用 LAN IP 打开」完全不可区分
-    （2026-09-19 实弹审计：容器持**假钥匙**以 owner 打进桌面盒的管理面与 /mcp）。
-    本机浏览器请用 127.0.0.1；用 LAN IP 打开的浏览器按局域网客户端处理（需钥匙）。
-    """
-    if not _host_is_local(scope):
+def _host_gateway_peer(peer: str | None) -> bool:
+    """Docker bridge traffic from the published loopback port arrives via its gateway."""
+    if not peer:
         return False
-    if not _origin_is_acceptable(scope):
+    try:
+        with _IPV4_ROUTES.open(encoding="ascii") as routes:
+            for line in routes:
+                fields = line.split()
+                if len(fields) < 8 or fields[1] != "00000000" or fields[7] != "00000000":
+                    continue
+                if int(fields[3], 16) & 3 != 3 or fields[2] == "00000000":
+                    continue
+                gateway = socket.inet_ntoa(struct.pack("=I", int(fields[2], 16)))
+                if gateway == peer:
+                    return True
+    except (OSError, ValueError, struct.error):
+        pass
+    return False
+
+
+def is_local_scope(scope) -> bool:
+    """Trust desktop loopback or the host on the container's dedicated local listener."""
+    if not (_host_is_local(scope) and _origin_is_acceptable(scope)):
         return False
     client = scope.get("client")
-    client_host = client[0] if client else None
-    if is_loopback_host(client_host):
-        return True
+    peer = client[0] if client else None
     if _in_container():
-        # 容器里客户端 IP 一律是网关地址（实测），没有区分度，身份只能靠端口映射：
-        # 落在本机入口端口 = 宿主机只把它映射到回环 → 本机。
-        return _server_port(scope) == local_entry_port()
-    # 裸机 / 桌面：只认回环客户端（理由见 docstring——同机 NAT 下源地址不可区分）。
-    return False
+        return (_server_port(scope) == local_entry_port()
+                and (is_loopback_host(peer) or _host_gateway_peer(peer)))
+    return is_loopback_host(peer)
 
 
 def is_local_request(request) -> bool:
@@ -136,30 +148,10 @@ LOCAL_KEY_DENY = "deny"  # 本机入口端口但 Host/Origin 不像本机浏览�
 
 
 def local_key_access(scope) -> str:
-    """领钥匙端点的准入判定。
-
-    只有「物理本地」通道才发钥匙——局域网设备即使伪造 Host 也拿不到：
-
-    - 端口：scope['server'] 端口 == 本机入口端口；
-    - **物理本地**（二选一）：
-      * 客户端地址是回环（桌面/裸机：本机进程直连，无 NAT，地址可信）；
-      * 或运行在容器里（宿主机把本机入口端口只映射到回环，网络层隔离）。
-        ——容器内客户端地址一律是网关 IP，无法靠地址判断，故靠端口映射。
-    - Host 必须回环 → 防 DNS rebinding（把 evil.com 解析到 127.0.0.1）；
-    - Origin 必须是本机自己的来源（回环/盒子网卡）或缺失 → 防盒子浏览器内恶意网页跨源领钥匙。
-
-    任一不符：端口不符 → NONE（走普通门禁 401）；端口符但其余不符 → DENY（403）。
-    """
+    """Issue the owner credential only on the same trusted path as local management."""
     if _server_port(scope) != local_entry_port():
         return LOCAL_KEY_NONE
-    if not (_host_is_local(scope) and _origin_is_acceptable(scope)):
-        return LOCAL_KEY_DENY
-    client = scope.get("client")
-    if is_loopback_host(client[0] if client else None):
-        return LOCAL_KEY_GRANT
-    if _in_container():
-        return LOCAL_KEY_GRANT
-    return LOCAL_KEY_DENY
+    return LOCAL_KEY_GRANT if is_local_scope(scope) else LOCAL_KEY_DENY
 
 
 def _in_container() -> bool:
@@ -169,18 +161,17 @@ def _in_container() -> bool:
 
 
 def _header(scope, name: str) -> str | None:
-    for k, v in scope.get("headers") or []:
-        if k.decode("latin-1").lower() == name:
-            return v.decode("latin-1")
-    return None
+    values = [v.decode("latin-1") for k, v in scope.get("headers") or []
+              if k.lower() == name.encode("ascii")]
+    return ", ".join(values) if values else None
 
 
 def _bare_host(value: str) -> str:
-    """从 Host 头（可含端口）取出主机部分；IPv6 方括号一并剥掉。"""
-    v = value.strip()
-    if v.startswith("["):
-        return v[1 : v.find("]")] if "]" in v else v
-    return v.rsplit(":", 1)[0] if ":" in v else v
+    """Accept one HTTP authority, including a bracketed IPv6 literal."""
+    match = re.fullmatch(r"(?:\[([0-9A-Fa-f:.]+)\]|([A-Za-z0-9.-]+))(?::([0-9]{1,5}))?", value.strip())
+    if not match or (match[3] and int(match[3]) > 65535):
+        return ""
+    return (match[1] or match[2]).lower()
 
 
 def _host_is_local(scope) -> bool:
@@ -189,6 +180,11 @@ def _host_is_local(scope) -> bool:
     这是防 DNS rebinding 的关键：攻击者页面在 evil.com:18900，DNS 重绑到本机后浏览器
     打 127.0.0.1 属「同源」（甚至不带 Origin），只有 Host 还是 evil.com，能据此识破。
     """
+    # A reverse proxy can connect over loopback and rewrite Host. Its forwarded
+    # requests need a paired identity just like other remote clients.
+    if any(k.lower() in {b"forwarded", b"x-forwarded-for", b"x-real-ip", b"x-forwarded-host", b"x-forwarded-proto"}
+           for k, _ in scope.get("headers") or []):
+        return False
     raw = _header(scope, "host")
     if not raw:
         return False  # HTTP/1.1 必须带 Host；缺失即不可信
@@ -205,13 +201,12 @@ def _origin_is_acceptable(scope) -> bool:
     地址，放行它等于给恶意页面开正门。DNS rebinding 由 Host 校验兜住（见 is_local_scope）。
     """
     raw = _header(scope, "origin")
-    if raw is None or not raw.strip():
-        return True  # 非浏览器调用没有 Origin
-    from urllib.parse import urlparse
-
-    host = urlparse(raw.strip()).hostname
-    if not host:
+    if raw is None:
+        return _header(scope, "sec-fetch-site") in (None, "none", "same-origin", "same-site")
+    origin = re.fullmatch(r"https?://([^/\s?#]+)", raw.strip(), re.IGNORECASE)
+    if not origin:
         return False
+    host = _bare_host(origin[1])
     return is_loopback_host(host) or host in local_addresses()
 
 
@@ -241,6 +236,39 @@ def _device_records(records: list[dict]) -> list[dict]:
     return [r for r in records if not _is_local_key(r)]
 
 
+def device_actor_is_active(actor) -> bool:
+    from src.identity.roles import get_role
+
+    role = get_role(actor.role_id)
+    return bool(actor.kind == "key" and role and role.assignable and any(
+        record.get("id") == actor.id and record.get("role") == actor.role_id and _is_active(record)
+        for record in _device_records(store.load())
+    ))
+
+
+def device_stream_guard(actor, check_permission=None, *, now=time.monotonic):
+    """Recheck an open device stream without writing key usage for every frame."""
+    if actor.kind != "key":
+        return lambda: actor.kind in {"local", "system"}
+    next_check = 0.0
+    allowed = True
+
+    def active() -> bool:
+        nonlocal allowed, next_check
+        current = now()
+        if allowed and current >= next_check:
+            next_check = current + 5.0
+            try:
+                allowed = device_actor_is_active(actor)
+                if allowed and check_permission is not None:
+                    check_permission()
+            except Exception:
+                allowed = False
+        return allowed
+
+    return active
+
+
 def can_issue(*, is_local: bool, has_valid_token: bool) -> bool:
     """默认拒绝：本机来源或持有效钥匙才能签发。"""
     return is_local or has_valid_token
@@ -262,6 +290,7 @@ def can_grant_role(issuer_role, target_role) -> bool:
     return enterprise_can_grant_role(issuer_role, target_role)
 
 
+@store.token_transaction()
 def issue_token(
     *,
     name: str,
@@ -272,12 +301,14 @@ def issue_token(
     has_valid_token: bool = False,
     issuer_role: str | None = None,
 ) -> dict:
+    if name.strip() == LOCAL_KEY_NAME:
+        raise PairingError("reserved_name", "reserved device name")
     if ttl_days is not None and ttl_days < 1:
         # 0 / 小数曾走 falsy 分支静默变「永久」——必须显式拒绝（2026-09-16）
         raise PairingError("invalid_ttl", "ttl_days must be a positive whole number of days")
     records = store.load()
     active = [r for r in _device_records(records) if _is_active(r)]
-    if not can_issue(is_local=is_local, has_valid_token=has_valid_token):
+    if not can_issue(is_local=is_local, has_valid_token=has_valid_token) or (not is_local and not issuer_role):
         raise PairingError("pairing_required")
 
     from src.edition import has_permission_management
@@ -333,6 +364,7 @@ def issue_token(
     }
 
 
+@store.token_transaction()
 def verify_token(token: str | None) -> dict | None:
     if not token:
         return None
@@ -356,6 +388,7 @@ def verify_token(token: str | None) -> dict | None:
     return None
 
 
+@store.token_transaction()
 def revoke_token(rec_id: str) -> bool:
     records = store.load()
     for rec in records:
@@ -413,6 +446,7 @@ def local_addresses() -> list[str]:
     return sorted(addrs)
 
 
+@store.token_transaction()
 def ensure_local_key() -> dict:
     """确保存在一把活跃的本机自动钥匙，返回其明文（幂等）。
 
@@ -594,6 +628,8 @@ def verify_access_token(token: str) -> dict | None:
     最后一步读盘校验让「吊销长钥匙」即时杀死在飞短票——读盘成本与长钥匙
     路径相同（本来每请求都读）。
     """
+    if not token.isascii() or len(token) > 1024:
+        return None
     try:
         body, sig = token[len(ACCESS_TOKEN_PREFIX):].split(".")
     except ValueError:
@@ -616,6 +652,7 @@ def verify_access_token(token: str) -> dict | None:
     return None
 
 
+@store.token_transaction()
 def _load_access_secret() -> bytes:
     """短票签名密钥（0600，首次使用时生成）。轮换 = 在飞短票全部作废，无其他影响。"""
     path = store.PAIRING_DIR / "access-secret"

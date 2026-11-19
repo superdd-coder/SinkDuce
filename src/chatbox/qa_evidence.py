@@ -215,6 +215,8 @@ def _matches_current(snapshot):
 
 def history_permitted(metadata):
     """An assistant answer may paraphrase Q&A even if it omitted the inline cite."""
+    if (metadata or {}).get("source_unavailable"):
+        return False
     projects = (metadata or {}).get("qa_projects", [])
     try:
         return isinstance(projects, list) and all(

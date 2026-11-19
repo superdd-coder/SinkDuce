@@ -9,6 +9,7 @@ import { unified } from "unified"
 import remarkParse from "remark-parse"
 import remarkRehype from "remark-rehype"
 import rehypeStringify from "rehype-stringify"
+import { rehypeChunkPolicy } from "@/lib/chunk-markdown-policy"
 import { useEditor, EditorContent } from "@tiptap/react"
 import { TiptapStarterKit } from "./svg-code-block-extension"
 export { EditorCodeBlock, TiptapStarterKit, stopSvgPreviewControlEvent } from "./svg-code-block-extension"
@@ -2946,6 +2947,7 @@ function renderMarkdown(md: string): string {
         .use(remarkGfm)
         .use(remarkBreaks)
         .use(remarkRehype)
+        .use(rehypeChunkPolicy)
         .use(rehypeStringify)
         .processSync(md),
     )

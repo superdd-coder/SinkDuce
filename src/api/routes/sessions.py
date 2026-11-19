@@ -22,7 +22,7 @@ from src.reports.models import ReviewRequest
 class SessionCreateRequest(BaseModel):
     title: str = ""
     collections: list[str] | None = None
-    id: str | None = None  # Optional fixed ID (used for quick-chat sessions)
+    id: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_-]{1,200}$")
 
 
 class SessionUpdateRequest(BaseModel):
@@ -42,6 +42,16 @@ class SessionMessageRequest(BaseModel):
     report_reviews: list[ReviewRequest] = Field(default_factory=list, max_length=10)
 
 
+def _require_session_scope(session_id: str) -> None:
+    from src.identity import get_actor
+    from src.identity.visibility import assert_can_read, can_access_domain
+
+    if session_id.startswith(("meeting_", "group_")) and not can_access_domain(get_actor(), "meeting"):
+        raise HTTPException(404, detail={"code": "not_found", "message": "session not found"})
+    if session_id.startswith("quick_"):
+        assert_can_read(get_actor(), session_id.removeprefix("quick_"))
+
+
 def require_session_access(session_id: str, *, need_owner: bool = False):
     """会话归属守卫（RBAC §3.4）：非本人且非 admin/owner → **404**。
 
@@ -55,6 +65,7 @@ def require_session_access(session_id: str, *, need_owner: bool = False):
     from src.identity import get_actor, may_see_everything
 
     actor = get_actor()
+    _require_session_scope(session_id)
     if may_see_everything(actor):
         return
     owner = _session_owner(session_id)
@@ -137,22 +148,40 @@ def _get_store():
     return store
 
 
+def _session_selection(ids, *, require_all=False):
+    from src.identity import get_actor
+    from src.identity.visibility import filter_collection_ids
+
+    selected = filter_collection_ids(get_actor(), ids or [])
+    if require_all and len(selected) != len(ids or []):
+        raise HTTPException(404, detail={"code": "not_found", "message": "collection not found"})
+    return selected
+
+
+def _visible_session_config(session):
+    config = dict(getattr(session, "config", None) or {})
+    if isinstance(config.get("collections"), list):
+        config["collections"] = _session_selection(config["collections"])
+    return config
+
+
 def _session_response(session, store) -> SessionResponse:
     # limit=1 → last dialogue unit (+ tools); system may be first in the list
     msgs = store.get_messages(session.id, limit=1)
     non_system = [m for m in msgs if m.role != "system"]
     last = non_system[-1] if non_system else (msgs[-1] if msgs else None)
-    last_msg = (last.content[:100] if last and last.content else None)
+    from src.chatbox.qa_evidence import history_permitted
+    last_msg = last.content[:100] if last and last.content and history_permitted(last.metadata) else None
     message_count = store.count_messages(session.id)
     return SessionResponse(
         id=session.id,
         title=session.title,
-        collections=session.collections,
+        collections=_session_selection(session.collections),
         created_at=session.created_at,
         updated_at=session.updated_at,
         message_count=message_count,
         last_message=last_msg,
-        config=getattr(session, "config", None) or {},
+        config=_visible_session_config(session),
     )
 
 
@@ -184,16 +213,21 @@ def list_sessions():
 @router.post("/sessions", status_code=201)
 def create_session(body: SessionCreateRequest = Body(...)):
     """Create a new session. If *id* is provided, uses it as the session ID (for quick-chat sessions)."""
+    _session_selection(body.collections, require_all=True)
     store = _get_store()
     from src.reports.store import for_sessions as report_store
     reports = report_store(store)
     with reports._lock:
+        if body.id:
+            _require_session_scope(body.id)
         existing = store.get_session(body.id) if body.id else None
         session = store.create_session(
             title=body.title,
             collections=body.collections,
             session_id=body.id,
         )
+        if body.id:
+            require_session_access(session.id)
         if existing is None:
             reports.start_session(session.id)
 
@@ -225,15 +259,15 @@ def get_session(session_id: str):
         permitted = history_permitted(m.metadata)
         return MessageResponse(
             id=m.id, session_id=m.session_id, role=m.role, created_at=m.created_at,
-            content=m.content if permitted else "Q&A source unavailable",
+            content=m.content if permitted or (m.metadata or {}).get("source_unavailable") else "Q&A source unavailable",
             sources=m.sources if permitted else None,
-            metadata=m.metadata if permitted else {"qa_source_unavailable": True},
+            metadata=m.metadata if permitted or (m.metadata or {}).get("source_unavailable") else {"qa_source_unavailable": True},
         )
     return SessionDetailResponse(
         id=session.id,
         title=session.title,
-        collections=session.collections,
-        config=getattr(session, "config", None) or {},
+        collections=_session_selection(session.collections),
+        config=_visible_session_config(session),
         created_at=session.created_at,
         updated_at=session.updated_at,
         messages=[render(m) for m in visible_msgs],
@@ -393,6 +427,9 @@ async def send_message(session_id: str, body: SessionMessageRequest = Body(...))
     if session is None:
         raise HTTPException(404, f"Session {session_id} not found")
 
+    selected = body.collections if body.collections is not None else session.collections
+    _session_selection(selected, require_all=True)
+
     if (not body.content or not body.content.strip()) and not body.attachment_ids and not body.report_reviews:
         raise HTTPException(400, "Message content must not be empty")
 
@@ -432,7 +469,7 @@ async def send_message(session_id: str, body: SessionMessageRequest = Body(...))
             "model": body.model,
             "web_search": body.web_search_enabled,
             "thinking": body.thinking,
-            "collections": body.collections if body.collections is not None else session.collections,
+            "collections": selected,
         },
     )
 

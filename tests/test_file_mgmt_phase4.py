@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.http_client import local_owner_client
 
 from src.file_mgmt.store import COLLECTIONS_DIR, init_collection_db, get_db
 
@@ -146,7 +147,7 @@ def test_upload_to_folder_txt():
 
     coll = "p4-upload-txt"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     folder_id = _get_plain_folder_id(client, coll)
 
@@ -209,7 +210,7 @@ def test_upload_unsupported():
 
     coll = "p4-upload-zip"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     folder_id = _get_plain_folder_id(client, coll)
 
@@ -241,7 +242,7 @@ def test_upload_folder():
 
     coll = "p4-upload-dir"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     folder_id = _get_plain_folder_id(client, coll)
 
@@ -288,7 +289,7 @@ def test_upload_version():
 
     coll = "p4-version"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     folder_id = _get_plain_folder_id(client, coll)
 
@@ -377,7 +378,7 @@ def test_list_old_versions_and_delete_non_current():
 
     coll = "p4-old-ver-del"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     folder_id = _get_plain_folder_id(client, coll)
 
@@ -468,7 +469,7 @@ def test_version_limit_warning():
 
     coll = "p4-version-limit"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     folder_id = _get_plain_folder_id(client, coll)
 
@@ -513,7 +514,7 @@ def test_delete_file():
 
     coll = "p4-delete"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     folder_id = _get_plain_folder_id(client, coll)
 
@@ -568,7 +569,7 @@ def test_toggle_definitive():
 
     coll = "p4-definitive"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     folder_id = _get_plain_folder_id(client, coll)
 
@@ -605,7 +606,7 @@ def test_update_file_version_conflict():
 
     coll = "p4-conflict"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     folder_id = _get_plain_folder_id(client, coll)
 
@@ -636,7 +637,7 @@ def test_node_upload():
 
     coll = "p4-node-upload"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_chain_id = _get_main_chain_id(client, coll)
 
@@ -700,7 +701,7 @@ def test_create_chain_rejects_folder_with_files():
 
     coll = "p4-chain-file-check"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_chain_id = _get_main_chain_id(client, coll)
 
@@ -755,7 +756,7 @@ def test_end_to_end():
 
     coll = "p4-e2e"
     _setup_collection(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
 
     main_chain_id = _get_main_chain_id(client, coll)
 

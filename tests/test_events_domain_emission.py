@@ -129,6 +129,7 @@ class TestNoteEmission:
     def test_delete_note_emits_note_deleted(self, monkeypatch, fresh_bus):
         from src.notes import routes as mod
 
+        monkeypatch.setattr(mod.store, "get_note", lambda nid: SimpleNamespace(id=nid, collection="col-1"))
         monkeypatch.setattr(mod.store, "delete_note", lambda nid: True)
         monkeypatch.setattr(
             mod.services,

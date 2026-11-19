@@ -347,11 +347,12 @@ class AgenticQueryService:
         else:
             # Lightweight collection routing only — no task decomposition
             _emit("decompose", f"Routing: {raw_query[:200]}")
-            target_cols = list(collections) if qa_projects else self.decomposer.route_collections(raw_query, catalog_entries)
+            target_cols = (list(collections) if qa_projects
+                           else self.decomposer.route_collections(raw_query, catalog_entries))
             aqs = [AtomicQuery(query=raw_query, target_collections=target_cols,
                                task="(single)", task_query=raw_query)]
             _emit("decompose", f"Routed to {len(target_cols)} collection(s)"
-                  if target_cols else "Routed to all collections")
+                  if target_cols else "Using the available collections in scope")
         if qa_projects and not complete:
             # Preserve evidence for every project in scope, including those
             # that the search planner omitted.
@@ -417,11 +418,16 @@ class AgenticQueryService:
             # emit: step="aq_start", aq_id, task, content=query text
             _emit("aq_start", aq_item.query[:120], aq_id=f"aq{aq_idx}", task=aq_item.task or "")
             try:
-                # Routing: LLM-specified > user-specified > all collections
-                _aq_collections = (
-                    aq_item.target_collections if aq_item.target_collections
-                    else _fallback_collections
-                )
+                proposed = aq_item.target_collections or _fallback_collections
+                _aq_collections = [
+                    col for col in proposed if col in _fallback_collections and _collection_visible(col)
+                ]
+                if not _aq_collections:
+                    return SubQueryResult(
+                        query=aq_item.query, retained_chunks=[], retained_info="", gap_analysis="No accessible sources",
+                        task=aq_item.task or "", task_query=aq_item.task_query or "",
+                        errors=[{"stage": "atomic_query", "error": "SourceUnavailable"}],
+                    )
                 if aq_item.covered_chunks and (not qa_projects or all(
                     (chunk.metadata.get("collection"), chunk.metadata.get("id")) in graded_documents
                     for chunk in aq_item.covered_chunks

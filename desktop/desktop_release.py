@@ -155,6 +155,14 @@ def find_boto3_python() -> str:
     )
 
 
+def _signed_payload(dmg_path: Path) -> tuple[Path, Path]:
+    archive = dmg_path.with_suffix(".app.tar.gz")
+    signature = archive.with_name(archive.name + ".sig")
+    if not archive.is_file() or not archive.stat().st_size or not signature.is_file() or not signature.read_text(encoding="ascii").strip():
+        raise ReleaseGitError("The signed updater archive and its signature are required for publication")
+    return archive, signature
+
+
 def r2_upload_release(root: Path, version: str, dmg_path: Path) -> None:
     script = root / "desktop" / "r2_upload.py"
     if not script.is_file():
@@ -168,15 +176,8 @@ def r2_upload_release(root: Path, version: str, dmg_path: Path) -> None:
         "--version",
         version,
     ]
-    # In-app updater payload (…app.tar.gz + .sig) produced by
-    # package_macos.sh next to the DMG; optional so an old DMG-only retry
-    # still works (the release just loses the one-click update path).
-    tar_gz = dmg_path.with_name(dmg_path.name.replace(".dmg", ".app.tar.gz"))
-    tar_gz_sig = tar_gz.with_name(tar_gz.name + ".sig")
-    if tar_gz.is_file() and tar_gz_sig.is_file():
-        cmd += ["--app-tar-gz", str(tar_gz), "--app-tar-gz-sig", str(tar_gz_sig)]
-    elif tar_gz.is_file() != tar_gz_sig.is_file():
-        print(f"r2_upload: WARN {tar_gz.name} / .sig only half present — skipping updater payload")
+    tar_gz, tar_gz_sig = _signed_payload(dmg_path)
+    cmd += ["--app-tar-gz", str(tar_gz), "--app-tar-gz-sig", str(tar_gz_sig)]
     result = subprocess.run(
         cmd,
         capture_output=True,
@@ -266,6 +267,7 @@ def main(argv: list[str] | None = None) -> int:
             version = _gate(root, allow_dev=False)
             tag = f"v{version}"
             asset, named = prepare_release_dmg(root, version)
+            _signed_payload(named)
             subprocess.run(upload_command(tag, named, asset), check=True)
             print(f"uploaded {asset} to {tag}")
             r2_upload_release(root, version, named)

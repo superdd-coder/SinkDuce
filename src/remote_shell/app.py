@@ -195,7 +195,7 @@ def main() -> None:
             requested,
         )
     server = uvicorn.Server(
-        uvicorn.Config(create_app(), host=forced_host, port=port, reload=False)
+        uvicorn.Config(create_app(), host=forced_host, port=port, reload=False, proxy_headers=False)
     )
     logger.info("Remote shell listening on %s:%s", forced_host, port)
     server.run()

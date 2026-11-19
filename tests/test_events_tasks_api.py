@@ -44,6 +44,7 @@ class TestTasksExposeFileId:
 
         task = SimpleNamespace(
             id="t-1",
+            status=SimpleNamespace(value="pending"),
             filename="a.txt",
             collection="col-x",
         )
@@ -78,7 +79,7 @@ class TestTasksExposeFileId:
         # Non-upload tasks have no file_id; they must not break the list.
         from src.api.routes import documents as mod
 
-        task = SimpleNamespace(id="t-2", filename="x", collection="col-x")
+        task = SimpleNamespace(id="t-2", filename="x", collection="col-x", status=SimpleNamespace(value="pending"))
         task.to_dict = lambda: {"id": "t-2", "filename": "x", "collection": "col-x"}
         task.to_dict_with_type = lambda tt: {**task.to_dict(), "task_type": tt}
 
@@ -131,7 +132,9 @@ class TestTaskActionEmission:
     def test_clear_completed_emits_task_cleared(self, monkeypatch, fresh_bus):
         from src.api.routes import documents as mod
 
-        monkeypatch.setattr(mod.task_manager, "clear_completed_tasks", lambda: None)
+        from src.tasks import Task, TaskStatus
+        completed = Task(id="finished", filename="example.txt", collection="col-x", status=TaskStatus.COMPLETED)
+        monkeypatch.setattr(mod.task_manager, "tasks", {completed.id: completed})
         resp = self._client().delete("/api/documents/tasks/completed")
         assert resp.status_code == 200, resp.text
         assert [e.type for e in fresh_bus.snapshot_since(0) if e.type == "task.cleared"]

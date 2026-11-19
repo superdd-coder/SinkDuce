@@ -42,10 +42,10 @@ Source code is available under **AGPL-3.0-or-later**, including role and access 
 
 Data: `~/Library/Application Support/SinkDuce`. API and MCP: `127.0.0.1:18910` (or the next free port).
 
-Alternatively, the installer downloads the latest desktop release, checks its SHA-256, and installs it:
+Alternatively, the installer downloads the latest desktop release, verifies the publisher’s signature, and installs it:
 
 ```bash
-curl -fsSL https://pub-789a11bb112e4ed59d731554588eebfb.r2.dev/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/superdd-coder/SinkDuce/main/desktop/install.sh | sh
 ```
 
 Then: Settings → add an **LLM** and **Embedding** provider (or OneShot below) → create a Collection → upload a file or record a meeting → ask a question. Updates are available inside the app; [release notes](https://github.com/superdd-coder/SinkDuce/releases) are public.

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import logging
+import math
+from contextvars import ContextVar
 import re
 import threading
 import uuid
@@ -62,6 +64,36 @@ def _table_data_to_markdown(data: list[list[str | None]]) -> str:
 _PDFIUM_RENDER_LOCK = threading.Lock()
 
 
+_MAX_PAGES = 2000
+_MAX_PAGE_IMAGES = 128
+_MAX_RENDER_PIXELS = 32_000_000
+_MAX_DOCUMENT_PIXELS = 800_000_000
+_MAX_RETAINED_IMAGE_BYTES = 200 * 1024 * 1024
+_pixel_budget: ContextVar[int | None] = ContextVar("pdf_render_pixels", default=None)
+
+
+class _PDFLimitError(ValueError):
+    pass
+
+
+def _rasterize(page, resolution):
+    # pdfplumber renders the original page before cropping the requested region.
+    original = getattr(page, "root_page", page)
+    x0, y0, x1, y1 = getattr(original, "mediabox", original.bbox)
+    scale = resolution / 72
+    width, height = abs(x1 - x0) * scale, abs(y1 - y0) * scale
+    if not all(math.isfinite(x) and 0 < x <= 32768 for x in (width, height)):
+        raise _PDFLimitError("PDF raster dimensions exceed the parsing limit")
+    pixels = math.ceil(width) * math.ceil(height)
+    remaining = _pixel_budget.get()
+    if pixels > _MAX_RENDER_PIXELS or (remaining is not None and pixels > remaining):
+        raise _PDFLimitError("PDF raster size exceeds the parsing limit")
+    if remaining is not None:
+        _pixel_budget.set(remaining - pixels)
+    with _PDFIUM_RENDER_LOCK:
+        return page.to_image(resolution=resolution).original
+
+
 def _ocr_page(page_image, lang: str = "") -> str:
     """Extract text from a scanned page via bundled RapidOCR."""
     from src.parsers.rapid_ocr import backlog_add, backlog_done, ocr_array
@@ -86,8 +118,7 @@ def _render_region(page, bbox, resolution=150):
     if bounded[2] <= bounded[0] or bounded[3] <= bounded[1]:
         raise ValueError("Image has no visible intersection with the page")
     cropped = page.within_bbox(bounded)
-    with _PDFIUM_RENDER_LOCK:
-        raster = cropped.to_image(resolution=resolution).original
+    raster = _rasterize(cropped, resolution)
     buf = io.BytesIO()
     raster.save(buf, format="PNG")
     return bounded, buf.getvalue()
@@ -95,8 +126,7 @@ def _render_region(page, bbox, resolution=150):
 
 def _page_image(page, page_number):
     """Retain the complete visible page when region extraction is incomplete."""
-    with _PDFIUM_RENDER_LOCK:
-        raster = page.to_image(resolution=150).original
+    raster = _rasterize(page, 150)
     buf = io.BytesIO()
     raster.save(buf, format="PNG")
     return ImageInfo(uuid.uuid4().hex, page_number=page_number,
@@ -113,15 +143,21 @@ def _extract_page_images(page, page_number: int) -> list[ImageInfo]:
     images: list[ImageInfo] = []
     try:
         img_list = page.images
+    except _PDFLimitError:
+        raise
     except Exception:
         logger.warning("[PDFParser] Page %d: image metadata unavailable; retaining page", page_number)
         try:
             return [_page_image(page, page_number)]
+        except _PDFLimitError:
+            raise
         except Exception:
             return [ImageInfo(uuid.uuid4().hex, page_number=page_number,
                               bbox=tuple(page.bbox), is_page_image=True)]
 
-    for i, img_meta in enumerate(img_list):
+    if len(img_list) > _MAX_PAGE_IMAGES:
+        raise _PDFLimitError("Image count per PDF page exceeds the parsing limit")
+    for img_meta in img_list:
         x0 = float(img_meta.get("x0", 0))
         top = float(img_meta.get("top", 0))
         x1 = float(img_meta.get("x1", 0))
@@ -131,6 +167,8 @@ def _extract_page_images(page, page_number: int) -> list[ImageInfo]:
         # Render image region
         try:
             bbox, image_bytes = _render_region(page, bbox)
+        except _PDFLimitError:
+            raise
         except Exception as exc:
             logger.warning("[PDFParser] Page %d: image crop failed (%s); retaining page",
                            page_number, type(exc).__name__)
@@ -139,6 +177,8 @@ def _extract_page_images(page, page_number: int) -> list[ImageInfo]:
             try:
                 images.append(_page_image(page, page_number))
                 continue
+            except _PDFLimitError:
+                raise
             except Exception:
                 logger.exception("[PDFParser] Page %d: whole-page rendering also failed", page_number)
             image_bytes = None
@@ -228,6 +268,8 @@ def _parse_page_elements(
                     a.bbox[1], a.bbox[3], b.bbox[1], b.bbox[3],
                     merged_bbox[0], merged_bbox[1], merged_bbox[2], merged_bbox[3],
                 )
+            except _PDFLimitError:
+                raise
             except Exception:
                 pass
     # Remove individual images that were merged
@@ -236,6 +278,8 @@ def _parse_page_elements(
     # ── 2. Tables: extract → markdown → crop screenshot ──
     try:
         tables = page.find_tables()
+    except _PDFLimitError:
+        raise
     except Exception:
         tables = []
 
@@ -279,16 +323,22 @@ def _parse_page_elements(
                         f"image_id: {img.image_id}\n"
                         f"file_id: \n"
                         f":::\n"))
+                except _PDFLimitError:
+                    raise
                 except Exception:
                     pass
 
                 elements.append((table.bbox[1], "table", md))
+            except _PDFLimitError:
+                raise
             except Exception:
                 pass
 
     # ── 3. Text ──
     try:
         full_text = page.extract_text() or ""
+    except _PDFLimitError:
+        raise
     except Exception:
         full_text = ""
 
@@ -303,6 +353,8 @@ def _parse_page_elements(
         if not any(img.is_page_image for img in page_images):
             try:
                 page_images.append(_page_image(page, page_number))
+            except _PDFLimitError:
+                raise
             except Exception:
                 logger.exception("[PDFParser] Page %d: visual page evidence unavailable", page_number)
                 page_images.append(ImageInfo(
@@ -314,12 +366,13 @@ def _parse_page_elements(
     # inside the page-image fence so later relevance/answer stages can tell.
     if not full_text.strip():
         try:
-            with _PDFIUM_RENDER_LOCK:
-                page_image = page.to_image(resolution=300).original
+            page_image = _rasterize(page, 300)
             ocr_text = _ocr_page(page_image)
             for img in page_images:
                 if img.is_page_image:
                     img.ocr_text = ocr_text
+        except _PDFLimitError:
+            raise
         except Exception:
             logger.warning("[PDFParser] Page %d: local OCR unavailable", page_number)
 
@@ -340,14 +393,21 @@ class PDFParser(DocumentParser):
     def parse(self, path: Path) -> ParsedDocument:
         import pdfplumber
 
-        pdf = pdfplumber.open(str(path))
+        from src.tasks.task_manager import check_cancelled
+
+        pdf = pdfplumber.open(str(path), pages=range(1, _MAX_PAGES + 2))
         all_images: list[ImageInfo] = []
         pages_text: list[str] = []
         has_any_table = False
         scanned_pages: list[int] = []
 
+        retained_bytes = 0
+        budget = _pixel_budget.set(_MAX_DOCUMENT_PIXELS)
         try:
+            if len(pdf.pages) > _MAX_PAGES:
+                raise _PDFLimitError("PDF page count exceeds the parsing limit")
             for page_idx, page in enumerate(pdf.pages):
+                check_cancelled()
                 page_number = page_idx + 1
                 elements, page_has_table, page_images = _parse_page_elements(
                     page, page_number,
@@ -358,7 +418,11 @@ class PDFParser(DocumentParser):
                 if not any(kind == "text" for _, kind, _ in elements):
                     scanned_pages.append(page_number)
 
+                retained_bytes += sum(len(img.image_bytes or b"") for img in page_images)
+                if retained_bytes > _MAX_RETAINED_IMAGE_BYTES:
+                    raise _PDFLimitError("Retained PDF images exceed the parsing limit")
                 all_images.extend(page_images)
+                page.close()
 
                 # Build page text with images interleaved at their y-position
                 elements.sort(key=lambda e: (e[0], 0 if e[1] == "text" else 1 if e[1] == "table" else 2))
@@ -370,6 +434,7 @@ class PDFParser(DocumentParser):
                         page_parts.append(content)
                 pages_text.append("\n\n".join(page_parts))
         finally:
+            _pixel_budget.reset(budget)
             pdf.close()
 
         # ── Build content with position_map ──

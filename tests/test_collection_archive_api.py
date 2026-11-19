@@ -9,7 +9,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.http_client import local_owner_client
 
 from src.collections import store as collections_store
 
@@ -32,7 +32,7 @@ class TestArchiveEndpoints:
         from src.main import app
 
         collections_store.create_collection_meta("col_x", "X Project")
-        client = TestClient(app)
+        client = local_owner_client(app)
         with patch("src.api.routes.collections.services", _mock_services(["col_x"])):
             resp = client.post("/api/collections/col_x/archive")
             assert resp.status_code == 200
@@ -46,7 +46,7 @@ class TestArchiveEndpoints:
         from src.main import app
 
         collections_store.create_collection_meta("col_y", "Y Project")
-        client = TestClient(app)
+        client = local_owner_client(app)
         with patch("src.api.routes.collections.services", _mock_services(["col_y"])):
             client.post("/api/collections/col_y/archive")
             resp = client.post("/api/collections/col_y/unarchive")
@@ -60,7 +60,7 @@ class TestArchiveEndpoints:
 
         # Legacy collection without the archived field (created before feature)
         collections_store.create_collection_meta("col_z", "Z Legacy")
-        client = TestClient(app)
+        client = local_owner_client(app)
         with patch("src.api.routes.collections.services", _mock_services(["col_z"])):
             listed = client.get("/api/collections").json()
             assert listed[0]["archived"] is False
@@ -68,7 +68,7 @@ class TestArchiveEndpoints:
     def test_archive_missing_collection_returns_error(self):
         from src.main import app
 
-        client = TestClient(app)
+        client = local_owner_client(app)
         resp = client.post("/api/collections/col_nope/archive")
         assert resp.status_code == 200
         assert "error" in resp.json()

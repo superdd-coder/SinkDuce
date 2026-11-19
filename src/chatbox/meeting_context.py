@@ -147,9 +147,13 @@ def apply_speaker_display_names(text: str, names: dict[str, str]) -> str:
 def me_speaker_ids(meeting_id: str) -> set[str]:
     """Speaker ids of this meeting bound to the People 'Me' person."""
     try:
+        from src.identity import get_actor
+        from src.identity.visibility import can_access_domain
         from src.meeting.store import get_meeting
         from src.speakers.store import get_me_person_id
 
+        if not can_access_domain(get_actor(), "people"):
+            return set()
         me_pid = get_me_person_id()
         if not me_pid:
             return set()

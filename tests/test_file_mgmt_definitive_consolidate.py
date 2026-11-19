@@ -13,7 +13,7 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.http_client import local_owner_client
 
 from src.file_mgmt.store import COLLECTIONS_DIR, init_collection_db, get_db
 
@@ -88,7 +88,7 @@ def test_mark_definitive_queues_summary_when_missing():
 
     coll = "def-gen"
     _setup(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
     fid = uuid.uuid4().hex
     _insert_file(coll, fid, is_definitive=0)
 
@@ -123,7 +123,7 @@ def test_clear_definitive_keeps_summary_and_schedules():
 
     coll = "def-clear"
     _setup(coll)
-    client = TestClient(app)
+    client = local_owner_client(app)
     fid = uuid.uuid4().hex
     _insert_file(coll, fid, is_definitive=1)
     source = f"__file__:{fid}"

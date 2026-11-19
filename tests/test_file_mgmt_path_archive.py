@@ -21,11 +21,13 @@ from src.file_mgmt.models import (
 @pytest.fixture()
 def collection_id(tmp_path, monkeypatch):
     """Isolated collection under a temp COLLECTIONS_DIR."""
+    from src.collections import store as metadata
+    monkeypatch.setattr(metadata, "COLLECTIONS_DIR", tmp_path)
     monkeypatch.setattr(store, "COLLECTIONS_DIR", tmp_path)
     cid = "col_" + uuid.uuid4().hex[:8]
-    with patch.object(service, "_validate_collection", lambda _x: None):
-        store.init_collection_db(cid)
-        yield cid
+    metadata.create_collection_meta(cid, cid)
+    store.init_collection_db(cid)
+    yield cid
     shutil.rmtree(tmp_path / cid, ignore_errors=True)
 
 

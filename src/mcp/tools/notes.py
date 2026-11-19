@@ -63,7 +63,7 @@ def _save_content_with_refs(note_id: str, content: str) -> None:
     new_source_ids: set[str] = set()
     for block in blocks:
         source_id = block["source_note_id"]
-        if not source_id:
+        if not source_id or not nstore.can_reference(source_id):
             continue
         new_source_ids.add(source_id)
         src = nstore.get_note(source_id)
@@ -139,7 +139,7 @@ async def list_notes(collection: str, ctx: Context | None = None) -> str:
 
         items = []
         for n in notes:
-            referenced_by = nstore.get_referenced_by(n.id)
+            referenced_by = nstore.visible_backlinks(n.id)
             items.append({
                 "id": n.id,
                 "title": n.title,
@@ -192,8 +192,8 @@ async def get_note(collection: str, note_id: str, ctx: Context | None = None) ->
             return err(f"Note '{note_id}' not found")
 
         content = nstore.get_content(note_id) or ""
-        references = nstore.get_references(note_id)
-        referenced_by = nstore.get_referenced_by(note_id)
+        references = nstore.visible_references(note_id)
+        referenced_by = nstore.visible_backlinks(note_id)
 
         # Resolve source titles for references
         for ref in references:

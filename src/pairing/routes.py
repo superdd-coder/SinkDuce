@@ -13,13 +13,9 @@ router = APIRouter(prefix="/api/pairing", tags=["pairing"])
 
 
 def _token_from_request(request: Request) -> str | None:
-    auth = request.headers.get("authorization", "")
-    if auth.lower().startswith("bearer "):
-        return auth[7:].strip() or None
-    tok = request.headers.get("x-pairing-token")
-    if tok:
-        return tok.strip() or None
-    return request.query_params.get("token")
+    from .middleware import _extract_token
+
+    return _extract_token(request.scope)
 
 
 async def _require_local_or_token(request: Request):
@@ -82,6 +78,7 @@ async def issue(body: IssueBody, request: Request):
     except service.PairingError as exc:
         status = {
             "invalid_ttl": 400,
+            "reserved_name": 400,
             "unknown_role": 400,
             "role_not_grantable": 403,
         }.get(exc.code, 403)
@@ -147,8 +144,7 @@ async def get_box(request: Request):
 
 @router.put("/box")
 async def set_box_name(body: BoxNameBody, request: Request):
-    # 改名权限：本机 / 持有效钥匙者（默认拒绝，无引导期豁免）。
-    # 来源 IP 在 VPN/代理环境下不可靠（实测会 NAT 成公网 IP），钥匙才是身份。
+    # The advertised connection address and box name are management settings.
     is_local = service.is_local_request(request)
     if not is_local and not has_permission_management():
         raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "local machine required"})
@@ -159,6 +155,8 @@ async def set_box_name(body: BoxNameBody, request: Request):
             status_code=401,
             detail={"code": "pairing_required", "message": "pairing token required"},
         )
+    if not is_local and not service.role_has_capability(rec.get("role"), "box.manage"):
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "box.manage required"})
     service.set_box_profile(body.box_name, body.advertised_addr)
     # 返回与 GET /box 同构的完整形态（含 addresses），前端整包替换状态
     return service.get_box_info()
