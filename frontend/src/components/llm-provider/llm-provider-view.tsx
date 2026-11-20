@@ -115,6 +115,7 @@ const OPENROUTER_TRANSCRIPTION_MODELS = [
 
 interface SimpleProviderCardProps<T extends { id: string; name: string; provider: string; model: string; base_url: string; is_default: boolean }> {
   provider: T
+  readOnly?: boolean
   subtitle?: string
   onEdit: (p: T) => void
   onRefresh: () => void
@@ -125,7 +126,7 @@ interface SimpleProviderCardProps<T extends { id: string; name: string; provider
 }
 
 function SimpleProviderCard<T extends { id: string; name: string; provider: string; model: string; base_url: string; is_default: boolean }>({
-  provider, subtitle, onEdit, onRefresh, onTest, onDelete, onSetDefault, deleteImpact,
+  provider, readOnly = false, subtitle, onEdit, onRefresh, onTest, onDelete, onSetDefault, deleteImpact,
 }: SimpleProviderCardProps<T>) {
   const t = useT()
   const [testing, setTesting] = useState(false)
@@ -210,15 +211,15 @@ function SimpleProviderCard<T extends { id: string; name: string; provider: stri
           {testing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plug className="h-3 w-3" />}
           {t("common.test")}
         </Button>
-        <Button variant="ghost" size="sm" onClick={handleSetDefault} disabled={provider.is_default}>
+        <Button variant="ghost" size="sm" onClick={handleSetDefault} disabled={readOnly || provider.is_default}>
           <Star className="h-3 w-3" />
           {t("common.default")}
         </Button>
-        <Button variant="secondary" size="sm" onClick={() => onEdit(provider)}>
+        <Button variant="secondary" size="sm" onClick={() => onEdit(provider)} disabled={readOnly}>
           <Pencil className="h-3 w-3" />
           {t("common.edit")}
         </Button>
-        <Button variant="destructive" size="sm" disabled={checking} onClick={() => void reviewDelete()}>
+        <Button variant="destructive" size="sm" disabled={readOnly || checking} onClick={() => void reviewDelete()}>
           <Trash2 className="h-3 w-3" />
           {t("common.delete")}
         </Button>
@@ -672,6 +673,7 @@ export function LLMProviderView() {
   // 真正的墙是服务端（/api/config 的路由器级闸门等）；这里只是别让用户
   // 点进一个必然 403 的地方。
   const canWriteConfig = identity?.capabilities?.["config.write"] === true
+  const canManageEmbedding = identity?.role_id === "owner" || identity?.role_id === "admin"
   const canManageKeys = identity?.capabilities?.["key.manage"] === true
   useEffect(() => {
     let alive = true
@@ -1332,8 +1334,8 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
             member/visitor 的界面里这些卡不存在。 */}
         {canWriteConfig && (
           <>
-        {/* Quick setup */}
-        <section className="pm-settings-section">
+        {/* Both quick setup presets also write a global embedding connection. */}
+        {canManageEmbedding && <section className="pm-settings-section">
           <div className="pm-settings-card">
             <div className="pm-settings-card-head">
               <div className="pm-settings-card-head-text min-w-0">
@@ -1351,7 +1353,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
               </div>
             </div>
           </div>
-        </section>
+        </section>}
 
         {/* Models — one section soft-float card */}
         <section className="pm-settings-section">
@@ -1579,10 +1581,12 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
             <div className="pm-settings-card-head">
               <div className="pm-settings-card-head-text">
                 <h2 className="pm-settings-card-kicker">{t("settings.embeddingModels")}<HelpHint label={t("settings.embeddingModels")}>{t("settings.embeddingDesc")}</HelpHint></h2>
+                {!canManageEmbedding && <p className="pm-meta">{t("errors.embedding_admin_required")}</p>}
               </div>
               <Button
                 variant="default"
                 size="sm"
+                disabled={!canManageEmbedding}
                 onClick={() => { setEditingEmb(null); setEmbDialogOpen(true) }}
               >
                 {t("common.add")}
@@ -1595,6 +1599,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                     key={p.id}
                     provider={p}
                     onEdit={(p) => { setEditingEmb(p); setEmbDialogOpen(true) }}
+                    readOnly={!canManageEmbedding}
                     onRefresh={fetchEmbProviders}
                     onTest={testEmbeddingProvider}
                     onDelete={deleteEmbeddingProvider}

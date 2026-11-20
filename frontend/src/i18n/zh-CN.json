@@ -2411,6 +2411,7 @@
     "task_not_cancellable": "找不到任务或无法取消",
     "task_not_retryable": "找不到任务或不处于失败状态",
     "forbidden": "没有权限执行这个操作",
+    "embedding_admin_required": "只有所有者或管理员可以更改全局向量模型配置。",
     "not_found": "找不到该资源",
     "tier_not_subset": "权限档位关系不对：除了「读取」，其它档位只能包含已经有「读取」权限的角色",
     "role_in_use": "这个角色还有 {count} 把钥匙在用。请先用别的角色重发钥匙，再删除它。",

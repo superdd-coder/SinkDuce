@@ -2411,6 +2411,7 @@
     "task_not_cancellable": "Task not found or cannot be cancelled",
     "task_not_retryable": "Task not found or not in failed state",
     "forbidden": "You do not have permission to do this",
+    "embedding_admin_required": "Only the owner or an administrator can change global embedding connections.",
     "not_found": "Resource not found",
     "tier_not_subset": "Invalid permission tier: besides Read, other tiers may only contain roles that already have Read",
     "role_in_use": "This role is still used by {count} key(s). Reissue those keys with another role, then delete it.",

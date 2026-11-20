@@ -74,6 +74,18 @@ def _config_write_gate(request: Request) -> None:
 
 router = APIRouter(dependencies=[Depends(_config_write_gate)])
 
+
+def _require_embedding_admin() -> None:
+    """Background transcript indexing uses these connections across all meetings."""
+    from src.identity import get_actor, may_see_everything
+
+    if not may_see_everything(get_actor()):
+        raise ApiError(
+            403, "embedding_admin_required",
+            "Only the owner or an administrator can change global embedding connections.",
+        )
+
+
 # Config-mutating endpoints each do read-modify-write of the whole
 # config.yaml. They must not interleave: the oneshot dialog fires six
 # provider creates in parallel, and the last stale snapshot to land used to
@@ -456,6 +468,8 @@ def _slot_ref_valid(ref: str | None, providers: list, kind: str) -> bool:
 @router.put("/config")
 @_serialize_writes
 async def update_config(req: ConfigUpdateRequest):
+    if req.section == "embedding":
+        _require_embedding_admin()
     reload_config()
     config = get_config()
 
@@ -998,6 +1012,7 @@ async def _refresh_embedding():
 @router.post("/embedding/providers")
 @_serialize_writes
 async def add_embedding_provider(provider: EmbeddingProviderConfig):
+    _require_embedding_admin()
     config = get_config()
     if provider.provider == "openai":
         provider.base_url = resolve_embedding_base_url(provider.base_url, provider.provider)
@@ -1013,6 +1028,7 @@ async def add_embedding_provider(provider: EmbeddingProviderConfig):
 @router.put("/embedding/providers/{provider_id}")
 @_serialize_writes
 async def update_embedding_provider(provider_id: str, update: dict = Body()):
+    _require_embedding_admin()
     config = get_config()
     previous = next((p.model_copy() for p in config.embedding.providers if p.id == provider_id), None)
     found = _apply_provider_update(
@@ -1039,6 +1055,7 @@ async def update_embedding_provider(provider_id: str, update: dict = Body()):
 @router.delete("/embedding/providers/{provider_id}")
 @_serialize_writes
 async def delete_embedding_provider(provider_id: str):
+    _require_embedding_admin()
     config = get_config()
     target, rest = _remove_provider(
         config.embedding.providers, provider_id, promote=True
@@ -1081,7 +1098,7 @@ async def test_embedding_provider(provider_id: str):
 @router.post("/embedding/providers/{provider_id}/set-default")
 @_serialize_writes
 async def set_default_embedding_provider(provider_id: str):
-    import logging
+    _require_embedding_admin()
     _log = logging.getLogger("api.embedding")
     _log.info("Set default embedding: %s", provider_id)
     config = get_config()

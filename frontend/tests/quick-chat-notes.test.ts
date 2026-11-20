@@ -78,7 +78,10 @@ async function quickChat(kind: "meeting" | "group" | "collection", history: any[
     document: { querySelector: () => null }, window: { setTimeout, clearTimeout } }
   const originals = new Map(Object.keys(environment).map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]))
   for (const [name, value] of Object.entries(environment)) Object.defineProperty(globalThis, name, { configurable: true, value })
-  const render = () => { cursor = 0; return elements(component(props)) }
+  const render = (navigation: { onRefClick?: (id: string) => void; onGroupCite?: (...args: any[]) => void } = {}) => {
+    cursor = 0
+    return elements(component({ ...props, ...navigation }))
+  }
   return { render,
     async settle() { for (let i = 0; i < 4; i++) { render(); effects.splice(0).forEach((fn) => fn()); await new Promise(setImmediate) } },
     async send() {
@@ -94,6 +97,40 @@ async function quickChat(kind: "meeting" | "group" | "collection", history: any[
 }
 
 const note = { id: "note-a", collection: "col-a", title: "Workshop follow-through" }
+
+for (const kind of ["meeting", "group"] as const) test(`${kind} Quick Chat opens saved citations in the correct transcript`, async () => {
+  const evidence = {
+    id: "e_workshop", kind: "meeting", title: "Workshop", quote: "Bring a notebook.",
+    source: { meeting_id: "room-a" }, location: { sentence_id: "stt_0003", start_time: 12 },
+  }
+  const otherMeeting = { ...evidence, source: { meeting_id: "room-b" } }
+  const timeOnly = { ...otherMeeting, location: { start_time: 0 } }
+  const h = await quickChat(kind, [
+    { id: "answer", role: "assistant", content: "Bring a notebook. [cite:e_workshop]", metadata: { citations: [evidence] } },
+  ])
+  try {
+    await h.settle()
+    const calls: unknown[][] = []
+    const tree = h.render(kind === "meeting"
+      ? { onRefClick: (id) => calls.push([id]) }
+      : { onGroupCite: (...args) => calls.push(args) })
+    for (const name of ["CitationScope", "ConversationAssets"]) {
+      const open = tree.find(element => element.type.name === name)?.props.onOpenMeeting
+      assert.equal(typeof open, "function", name)
+      if (kind === "meeting") {
+        assert.equal(open(evidence), true)
+        assert.equal(open(otherMeeting), false)
+        assert.equal(open({ ...evidence, location: { start_time: 0 } }), false)
+        assert.deepEqual(calls.splice(0), [["stt_0003"]])
+      } else {
+        assert.equal(open(otherMeeting), true)
+        assert.equal(open(timeOnly), true)
+        assert.deepEqual(calls.splice(0), [[0, "stt_0003", "room-b", 12], [0, "", "room-b", 0]])
+      }
+      assert.equal(open({ ...evidence, location: {} }), false)
+    }
+  } finally { h.dispose() }
+})
 
 for (const kind of ["meeting", "collection"] as const) test(`${kind} Quick Chat puts the controls in a title-free header before the messages`, async () => {
   const h = await quickChat(kind, [

@@ -424,6 +424,67 @@ def test_settings_delete_impact_and_default_succession(indexes, monkeypatch, tmp
     asyncio.run(change())
 
 
+def test_only_administrators_can_change_global_transcript_connections(indexes, monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from src import config as config_module
+    from src.api.routes import config as routes
+    from src.identity import Actor, acl, can, reset_actor, roles, set_actor
+
+    _, _, first, second, _ = indexes
+    path = tmp_path / "config.yaml"
+    save_config(services.config, path)
+    original = path.read_bytes()
+    monkeypatch.setattr(config_module, "CONFIG_PATH", path)
+    monkeypatch.setattr(config_module, "_config", None)
+    monkeypatch.setattr(roles, "IDENTITY_DIR", tmp_path / "identity")
+    monkeypatch.setattr(roles, "ROLES_PATH", roles.IDENTITY_DIR / "roles.json")
+    monkeypatch.setattr(acl, "DOMAIN_ACL_PATH", roles.IDENTITY_DIR / "domain_acl.json")
+    role = roles.create_custom_role(name="Settings editor", capabilities={"config.write": True})
+    editor = Actor(id="settings-device", kind="key", role_id=role.id)
+    assert can(editor, "config.write") and not can(editor, "meeting.read")
+    refresh = AsyncMock()
+    wake = Mock()
+    monkeypatch.setattr(routes, "async_reload_services", refresh)
+    monkeypatch.setattr(embedding_index, "connections_changed", wake)
+    app = FastAPI()
+    app.include_router(routes.router, prefix="/api")
+    providers = "/api/embedding/providers"
+    with TestClient(app) as client:
+        token = set_actor(editor)
+        try:
+            assert client.get(providers).status_code == 200
+            for method, url, payload in [
+                ("POST", providers, {"id": "C", "model": "C"}),
+                ("PUT", f"{providers}/{first.id}", {"base_url": "https://alternate.example.test/v1"}),
+                ("POST", f"{providers}/{second.id}/set-default", None),
+                ("DELETE", f"{providers}/{first.id}", None),
+                ("PUT", "/api/config", {"section": "embedding", "data": {"providers": []}}),
+            ]:
+                response = client.request(method, url, json=payload)
+                assert response.status_code == 403, (method, url)
+                assert response.json()["detail"]["code"] == "embedding_admin_required"
+            assert path.read_bytes() == original
+            refresh.assert_not_awaited()
+            wake.assert_not_called()
+            list_meetings = Mock(return_value=[])
+            monkeypatch.setattr(store, "list_meetings", list_meetings)
+            embedding_index.reconcile(retry_now=True)
+            list_meetings.assert_not_called()
+        finally:
+            reset_actor(token)
+
+        token = set_actor(Actor(id="admin-device", kind="key", role_id="admin"))
+        try:
+            assert client.post(f"{providers}/{second.id}/set-default").status_code == 200
+        finally:
+            reset_actor(token)
+        assert load_config(path).embedding.default.id == second.id
+        refresh.assert_awaited_once()
+        wake.assert_called_once()
+
+
 def test_upgrade_pins_legacy_vectors_without_embedding(indexes):
     from qdrant_client.models import Distance, VectorParams
 

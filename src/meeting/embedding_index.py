@@ -47,11 +47,12 @@ def lookup_space(meeting_id):
 
 def reconcile(*, retry_now=False):
     """Recover interrupted work and schedule exactly the meetings needing a new space."""
+    from src.identity import get_actor, may_see_everything
     from src.meeting import store
     from src.services import services
     from src.tasks import task_manager
 
-    if services.config is None or services.db is None:
+    if not may_see_everything(get_actor()) or services.config is None or services.db is None:
         return
     settings = services.config.embedding
     active = {task["filename"] for task in task_manager.get_active_tasks(task_type="meeting_transcript_index")}

@@ -242,12 +242,19 @@ export function MeetingQuickChat({
     const cite = resolveGroupCite(cites || [], n, { refN, occurrence })
     if (cite?.sentence_id) onGroupCite?.(n, cite.sentence_id, cite.meeting_id, cite.start_time)
   }, [onGroupCite])
-  const openMeetingEvidence = onGroupCite ? (evidence: Evidence) => {
+  const openMeetingEvidence = (evidence: Evidence) => {
     const anchor = meetingEvidenceAnchor(evidence)
     if (!anchor) return false
-    onGroupCite(0, anchor.sentenceId, anchor.meetingId, anchor.startTime)
-    return true
-  } : undefined
+    if (sessionKind === "group" && onGroupCite) {
+      onGroupCite(0, anchor.sentenceId, anchor.meetingId, anchor.startTime)
+      return true
+    }
+    if (sessionKind === "meeting" && anchor.meetingId === meetingId && anchor.sentenceId && onRefClick) {
+      onRefClick(anchor.sentenceId)
+      return true
+    }
+    return false
+  }
   const [indexStatus, setIndexStatus] = useState(indexStatusProp || "")
   const [indexError, setIndexError] = useState("")
   const [indexStarting, setIndexStarting] = useState(false)
