@@ -412,16 +412,14 @@ def _resolve_retry_file_path(collection_id: str, kwargs: dict) -> str | None:
 
 @router.get("/documents/ingest-history")
 def get_ingest_history(collection: str):
-    """Upload history for a collection: every file ingest with status, stage, error."""
+    """File uploads and vector index rebuilds for a collection."""
     # Resolve collection: try as ID first, then display name
     col_meta = (collection_store.get_collection_meta(collection)
                 or collection_store.find_collection_by_name(collection))
     collection_id = col_meta["id"] if col_meta else collection
     _assert_col_visible(collection_id)
-    return {
-        "records": history_store.list_records(collection_id),
-        "counts": history_store.status_counts(collection_id),
-    }
+    records = history_store.list_records(collection_id)
+    return {"records": records, "counts": history_store.status_counts(collection_id, records)}
 
 
 @router.post("/documents/ingest-history/{record_id}/retry")
@@ -430,11 +428,12 @@ def retry_ingest_history(record_id: str, body: IngestRetryRequest):
     col_meta = (collection_store.get_collection_meta(body.collection)
                 or collection_store.find_collection_by_name(body.collection))
     collection_id = col_meta["id"] if col_meta else body.collection
-
     _assert_col_write(collection_id, "file.upload")
     record = history_store.get_record(collection_id, record_id)
     if record is None:
         raise ApiError(404, "record_not_found", "Ingest history record not found")
+    if record.get("task_type") == "embedding_rebuild":
+        raise ApiError(409, "rebuild_in_settings", "Choose the target model in collection settings to rebuild the index.")
     if record.get("status") != "failed":
         raise ApiError(400, "record_not_retryable", "Only failed ingests can be retried")
 
@@ -443,6 +442,10 @@ def retry_ingest_history(record_id: str, body: IngestRetryRequest):
     if not file_path:
         raise ApiError(400, "source_file_missing",
                        "Original file no longer exists on disk")
+
+    from src.rag.collection_utils import get_collection_embedding_config
+    if not get_collection_embedding_config(services.db.get_collection_config(collection_id), collection_id):
+        raise ApiError(409, "embedding_disconnected", "Restore the collection's embedding model before retrying.")
 
     # Clear whatever the failed attempt half-wrote (chunks only — the file
     # record in meta.db / Library stays untouched).

@@ -23,9 +23,9 @@ def collections_list_view() -> list[dict[str, Any]]:
     from src.notes import store as nstore
     from src.tasks import task_manager
     from src.rag.summary_manager import SummaryManager
-    from src.meeting.transcript_index import INTERNAL_QDRANT_COLLECTIONS
+    from src.meeting.transcript_index import is_internal_collection
 
-    names = [c for c in services.db.list_collections() if c not in INTERNAL_QDRANT_COLLECTIONS]
+    names = [c for c in services.db.list_collections() if not is_internal_collection(c)]
     # RBAC：枚举出口必须收窄（该工具不经过 require_collection）
     from src.identity import get_actor
     from src.identity import visibility as _vis

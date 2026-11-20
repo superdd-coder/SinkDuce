@@ -60,9 +60,9 @@ export function CitationLink({ id, children }: { id: string; children: ReactNode
     onClick={(event) => { event.stopPropagation(); open(record) }}>{number}</button>
 }
 
-export function CitationScope({ citations = [], sessionId, children, source: answerSource = "" }: {
+export function CitationScope({ citations = [], sessionId, children, source: answerSource = "", onOpenMeeting }: {
   citations?: Evidence[]; sessionId: string; children: ReactNode
-  onOpenMeeting?: (evidence: Evidence) => void
+  onOpenMeeting?: (evidence: Evidence) => boolean
   source?: string
   onNavigate?: () => void
 }) {
@@ -73,6 +73,7 @@ export function CitationScope({ citations = [], sessionId, children, source: ans
   const collections = useAppStore(state => state.collections)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const openEvidence = (record: Evidence) => {
+    if (record.kind === "meeting" && onOpenMeeting?.(record)) return
     triggerRef.current = document.activeElement instanceof HTMLButtonElement ? document.activeElement : null
     setDetailsOpen(false); setSelected(record); setDialogOpen(true)
   }

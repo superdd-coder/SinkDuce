@@ -94,6 +94,34 @@ async function quickChat(kind: "meeting" | "group" | "collection", history: any[
 }
 
 const note = { id: "note-a", collection: "col-a", title: "Workshop follow-through" }
+
+for (const kind of ["meeting", "collection"] as const) test(`${kind} Quick Chat puts the controls in a title-free header before the messages`, async () => {
+  const h = await quickChat(kind, [
+    { id: "question", role: "user", content: "What is next?" },
+    { id: "answer", role: "assistant", content: "Bring a blank notebook." },
+  ])
+  try {
+    await h.settle()
+    const tree = h.render()
+    const header = tree.find((element) => element.type === "header")
+    assert.ok(header)
+    const row = elements(header)
+    const assets = row.find((element) => element.type.name === "ConversationAssets")
+    assert.ok(assets)
+    if (kind === "meeting") {
+      assert.equal(header.props.className, "pm-meeting-qc-toolbar")
+      assert.equal(assets.props.placement, "below")
+    } else {
+      const panel = tree.find((element) => element.type === "section" && element.props.className === "pm-qc-panel")
+      assert.equal(panel?.props["aria-label"], "library.quickChat · Workshop")
+    }
+    assert.ok(row.some((element) => element.props.title === "library.roundsLimit"))
+    assert.ok(row.some((element) => element.props["aria-label"] === "library.clearConversation"))
+    assert.ok(!row.some((element) => element.props.children === "library.quickChat" || element.props.children === "Workshop"))
+    assert.ok(tree.indexOf(header) < tree.findIndex((element) => element.props.className?.split(" ").includes("pm-qc-thread")))
+  } finally { h.dispose() }
+})
+
 for (const kind of ["meeting", "group", "collection"] as const) {
   test(`${kind} Quick Chat keeps a Note-only answer when reopening history`, async () => {
     const h = await quickChat(kind, [

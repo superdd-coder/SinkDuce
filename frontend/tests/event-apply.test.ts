@@ -85,7 +85,7 @@ test("an unmapped domain plans nothing yet", () => {
 })
 
 test("a config change plans a config refresh", () => {
-  assert.deepEqual(planActions("config", {}), [{ kind: "refreshConfig" }])
+  assert.deepEqual(planActions("config", {}), [{ kind: "refreshConfig" }, { kind: "refreshCollections" }])
 })
 
 test("a task change plans a lock sync for its collection", () => {

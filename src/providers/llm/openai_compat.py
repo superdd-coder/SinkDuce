@@ -9,7 +9,8 @@ from openai import OpenAI
 
 from src.config import LLMProviderConfig
 from src.providers.base import LLMProvider
-from src.providers.llm.parameters import create_chat_completion, prepare_chat_kwargs
+from src.providers.llm.openai_responses import OpenAIResponsesChat, prepare_responses_kwargs, responses_output_text
+from src.providers.llm.parameters import create_chat_completion, is_openai_endpoint, prepare_chat_kwargs, resolve_llm_api_mode
 from src.providers.llm.thinking import is_always_think_error
 from src.providers.llm.thinking import is_thinking_param_unsupported
 from src.providers.llm.thinking import learned_thinking_mode
@@ -103,6 +104,8 @@ def thinking_create_kwargs(
 class OpenAICompatLLM(LLMProvider):
     def __init__(self, config: LLMProviderConfig):
         self._base_url = config.base_url.strip()
+        self._is_openai = is_openai_endpoint(self._base_url)
+        self._api_mode = resolve_llm_api_mode(self._base_url, config.api_mode)
         self._client = OpenAI(
             base_url=self._base_url,
             api_key=config.api_key.strip(),
@@ -133,7 +136,7 @@ class OpenAICompatLLM(LLMProvider):
     def _apply_thinking_kwargs(
         self, kwargs: dict, thinking: bool | None, effort: str | None = None
     ) -> None:
-        if thinking is None:
+        if thinking is None or self._is_openai or self._api_mode == "responses":
             return
         if self._thinking_mode == "none":
             return
@@ -147,16 +150,22 @@ class OpenAICompatLLM(LLMProvider):
             return
         kwargs.update(thinking_create_kwargs(self._is_dashscope, thinking, effort))
 
+    def _create(self, kwargs: dict, thinking: bool | None, effort: str | None, *, client=None):
+        client = client if client is not None else self._client
+        if self._api_mode == "responses":
+            return OpenAIResponsesChat(client.responses.create).create(kwargs, thinking=bool(thinking), effort=effort)
+
+        self._apply_thinking_kwargs(kwargs, thinking, effort)
+        return self._create_with_thinking_fallback(kwargs, thinking, effort, client.chat.completions.create)
+
     def _create_with_thinking_fallback(self, kwargs: dict, thinking: bool | None, effort: str | None, send):
-        """send(kwargs) with a one-shot adaptation to thinking capabilities.
+        """Send a Chat Completions request with one adaptation to thinking capabilities.
 
         Primary classification happens at save time (thinking probe); this
         retry covers models the probe could not classify.
         """
         def compatible_send(request):
-            return create_chat_completion(
-                lambda **kw: send(kw), request, base_url=self._base_url,
-            )
+            return create_chat_completion(send, request, base_url=self._base_url)
 
         try:
             return compatible_send(kwargs)
@@ -229,12 +238,7 @@ class OpenAICompatLLM(LLMProvider):
             kwargs["max_tokens"] = resolved_mt
         if response_format:
             kwargs["response_format"] = response_format
-        self._apply_thinking_kwargs(kwargs, thinking, thinking_effort)
-
-        response = self._create_with_thinking_fallback(
-            kwargs, thinking, thinking_effort,
-            send=lambda kw: self._client.chat.completions.create(**kw),
-        )
+        response = self._create(kwargs, thinking, thinking_effort)
         if not response.choices:
             return ""
         msg = response.choices[0].message
@@ -312,11 +316,7 @@ class OpenAICompatLLM(LLMProvider):
         # Describing an image never benefits from thinking: reasoning tokens
         # sit in front of every one-line answer and multiply per-image
         # latency (measured qwen3.7-flash 30.6s → 7.4s with it off).
-        self._apply_thinking_kwargs(kwargs, thinking=False)
-        response = self._create_with_thinking_fallback(
-            kwargs, thinking=False, effort=None,
-            send=lambda kw: client.chat.completions.create(**kw),
-        )
+        response = self._create(kwargs, thinking=False, effort=None, client=client)
         if not response.choices:
             return ""
         return _strip_think(response.choices[0].message.content or "")
@@ -351,12 +351,7 @@ class OpenAICompatLLM(LLMProvider):
             kwargs["max_tokens"] = resolved_mt
         if response_format:
             kwargs["response_format"] = response_format
-        self._apply_thinking_kwargs(kwargs, thinking, thinking_effort)
-
-        stream = self._create_with_thinking_fallback(
-            kwargs, thinking, thinking_effort,
-            send=lambda kw: self._client.chat.completions.create(**kw),
-        )
+        stream = self._create(kwargs, thinking, thinking_effort)
         in_think = False
         seen_non_think = False  # first non-think token → transition
         buf = ""
@@ -435,12 +430,7 @@ class OpenAICompatLLM(LLMProvider):
             kwargs["max_tokens"] = resolved_mt
         if response_format:
             kwargs["response_format"] = response_format
-        self._apply_thinking_kwargs(kwargs, thinking, thinking_effort)
-
-        stream = self._create_with_thinking_fallback(
-            kwargs, thinking, thinking_effort,
-            send=lambda kw: self._client.chat.completions.create(**kw),
-        )
+        stream = self._create(kwargs, thinking, thinking_effort)
         in_think = False
         buf = ""  # buffer for partial tag matches
         for chunk in stream:
@@ -496,6 +486,8 @@ class OpenAICompatLLM(LLMProvider):
         import tempfile
         import os
 
+        use_responses = self._api_mode == "responses"
+        endpoint = "/v1/responses" if use_responses else "/v1/chat/completions"
         # Build JSONL — one request object per line
         lines = []
         for i, req in enumerate(requests):
@@ -510,12 +502,12 @@ class OpenAICompatLLM(LLMProvider):
             if req.get("system"):
                 body["messages"].append({"role": "system", "content": req["system"]})
             body["messages"].append({"role": "user", "content": req.get("prompt", "")})
-            body = prepare_chat_kwargs(body, base_url=self._base_url)
+            body = prepare_responses_kwargs(body) if use_responses else prepare_chat_kwargs(body, base_url=self._base_url)
 
             lines.append(json.dumps({
                 "custom_id": str(i),
                 "method": "POST",
-                "url": "/v1/chat/completions",
+                "url": endpoint,
                 "body": body,
             }, ensure_ascii=False))
 
@@ -533,7 +525,7 @@ class OpenAICompatLLM(LLMProvider):
             # Create batch
             batch = self._client.batches.create(
                 input_file_id=uploaded.id,
-                endpoint="/v1/chat/completions",
+                endpoint=endpoint,
                 completion_window="24h",
             )
             logger.info("Batch: created batch %s", batch.id)
@@ -573,6 +565,8 @@ class OpenAICompatLLM(LLMProvider):
                         if choices:
                             text = choices[0].get("message", {}).get("content", "")
                             results[idx] = _strip_think(text or "")
+                        elif output_items := body.get("output"):
+                            results[idx] = _strip_think(responses_output_text(output_items))
                 except Exception:
                     continue
             return results

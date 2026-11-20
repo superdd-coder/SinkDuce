@@ -122,7 +122,7 @@ export interface Meeting {
   recording_live?: boolean
   created_at: string
   updated_at: string
-  transcript_index_status?: "" | "building" | "ready" | "failed"
+  transcript_index_status?: "" | "building" | "ready" | "failed" | "waiting_model"
   transcript_index_error?: string
 }
 

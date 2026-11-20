@@ -580,8 +580,8 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
     </div>
   )
 
-  const collectionFileActions = activeTab === "files" && (
-    <div className="pm-collection-tabs-actions">
+  const collectionFileActions = (
+    <div className="pm-collection-tabs-actions" inert={activeTab !== "files"}>
       <Button
         type="button"
         variant="ghost"
@@ -678,7 +678,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
                       <MoreVertical className="h-4 w-4" />
                     </button>
                   )}
-                  <div className="pm-qc-fab-park" data-pm-qc-fab-anchor hidden={activeTab === "config"} />
+                  <div className="pm-qc-fab-park" data-pm-qc-fab-anchor />
                 </div>
               </div>
             </header>
@@ -774,7 +774,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
                         <ScrollArea className="h-full">
                           {/* Soft pad so nested card shadows aren’t clipped */}
                           <div className="px-0.5 pb-6">
-                            <CollectionConfig collection={activeCollection} />
+                            <CollectionConfig collection={activeCollection} onOpenIngestHistory={() => setIngestOpen(true)} />
                           </div>
                         </ScrollArea>
                       )}
@@ -879,6 +879,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
 
       {activeCollection && (
         <IngestHistoryDialog
+          key={activeCollection}
           collection={activeCollection}
           open={ingestOpen}
           onOpenChange={setIngestOpen}

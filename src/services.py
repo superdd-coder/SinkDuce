@@ -501,10 +501,10 @@ def init_services(*, preload_transcription: bool = True):
     # silently keep being used after the user updates Settings.
     _invalidate_enrichment_llm_cache()
 
-    services.db = QdrantManager(
-        host=resolve_qdrant_host(config.qdrant.host),
-        port=resolve_qdrant_port(config.qdrant.port),
-    )
+    host = resolve_qdrant_host(config.qdrant.host)
+    port = resolve_qdrant_port(config.qdrant.port)
+    if getattr(services.db, "endpoint", None) != (host, port):
+        services.db = QdrantManager(host=host, port=port)
 
     # Embedding provider — only from user config
     emb_cfg = config.embedding.default
@@ -551,7 +551,7 @@ def init_services(*, preload_transcription: bool = True):
         buffer_ratio=0.5,
     ) if services.embedding else None
 
-    services.retriever = Retriever(db=services.db, embedding=services.embedding) if services.embedding else None
+    services.retriever = Retriever(db=services.db, embedding=services.embedding)
     services.reranker = Reranker(provider=services.reranker_provider, top_k=config.rag.rerank_top_k) if services.reranker_provider else None
 
     _bind_llm_dependents()

@@ -23,6 +23,10 @@ def _ccol(collection_id: str):
     from src.identity import get_actor
     from src.identity import visibility as _vis
 
+    from src.meeting.transcript_index import is_internal_collection
+    if is_internal_collection(collection_id):
+        from fastapi import HTTPException
+        raise HTTPException(404, "Collection not found")
     actor = get_actor()
     if actor is None:
         return None
@@ -57,13 +61,20 @@ def _emit_collection(event_type: str, collection_id: str) -> None:
     emit(event_type, scope={"collection_id": collection_id})
 
 
+@router.get("/collections/embedding-options")
+def embedding_options():
+    """Collection editors need model choices, but do not need connection settings."""
+    fields = {"id", "name", "model", "dimensions", "is_default"}
+    return [provider.model_dump(include=fields) for provider in services.config.embedding.providers]
+
+
 @router.get("/collections")
 def list_collections():
     """List all collections with their metadata."""
     # Get existing Qdrant collections
-    from src.meeting.transcript_index import INTERNAL_QDRANT_COLLECTIONS
+    from src.meeting.transcript_index import is_internal_collection
 
-    qdrant_names = [c for c in services.db.list_collections() if c not in INTERNAL_QDRANT_COLLECTIONS]
+    qdrant_names = [c for c in services.db.list_collections() if not is_internal_collection(c)]
 
     # RBAC（2026-09-16）：库列表是最直接的枚举出口——不可见的库必须**不出现在响应里**
     # （不是前端过滤：那意味着数据已到客户端）。
@@ -107,6 +118,12 @@ def list_collections():
             logger.exception("[Collections] permission probe failed for %s", meta["id"])
             perms = {t: False for t in ("read", "write", "delete", "config")}
 
+        from src.rag.collection_utils import embedding_status
+
+        try:
+            availability = embedding_status(services.db.get_collection_config(qdrant_name), qdrant_name)
+        except Exception:
+            availability = {"embedding_disconnected": True}
         try:
             info = services.db.get_collection_info(qdrant_name)
             result.append({
@@ -115,6 +132,7 @@ def list_collections():
                 "points_count": info.get("points_count", 0),
                 "archived": bool(meta.get("archived")),
                 "permissions": perms,
+                **availability,
             })
         except Exception:
             result.append({
@@ -123,6 +141,7 @@ def list_collections():
                 "points_count": 0,
                 "archived": bool(meta.get("archived")),
                 "permissions": perms,
+                **availability,
             })
 
     # Library list: alphabetical by display name (case-insensitive)
@@ -133,14 +152,24 @@ def list_collections():
 @router.post("/collections")
 def create_collection(req: CollectionCreateRequest):
     """Create a new collection."""
+    from src.identity import authorize, get_actor
+
+    collection_id = collections_store.generate_id()
+    authorize(get_actor(), "collection.create", {"collection_id": collection_id})
     # Check for duplicate display name
     existing = collections_store.find_collection_by_name(req.name)
     if existing:
         return {"error": f"Collection '{req.name}' already exists"}
     logger.info("Creating collection: %s (dimensions=%s, mode=%s)", req.name, req.dimensions, req.chunk_mode)
-    if not services.embedding:
-        return {"error": "Embedding provider not configured. Please configure it in Settings first."}
-    dimensions = req.dimensions or services.embedding.dimensions
+    from src.rag.collection_utils import new_collection_provider
+    from src.providers.embedding import create_embedding_provider
+
+    try:
+        provider = new_collection_provider(req.embedding_provider_id, model=req.embedding_model,
+                                           base_url=req.embedding_base_url, provider=req.embedding_provider)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    dimensions = req.dimensions or provider.dimensions or create_embedding_provider(provider).dimensions
     chunk_config = {
         "chunk_mode": req.chunk_mode,
         "parent_strategy": req.parent_strategy,
@@ -161,24 +190,11 @@ def create_collection(req: CollectionCreateRequest):
         "agent_max_iterations": req.agent_max_iterations,
         "rerank_top_k": req.rerank_top_k,
     }
-    if req.embedding_provider_id is not None:
-        chunk_config["embedding_provider_id"] = req.embedding_provider_id
+    chunk_config["embedding_provider_id"] = provider.id
     if req.rerank_provider_id is not None:
         chunk_config["rerank_provider_id"] = req.rerank_provider_id
-    if req.embedding_provider is not None:
-        chunk_config["embedding_provider"] = req.embedding_provider
-    if req.embedding_model is not None:
-        chunk_config["embedding_model"] = req.embedding_model
-    if req.embedding_base_url is not None:
-        chunk_config["embedding_base_url"] = req.embedding_base_url
     from src.secrets import skip_secret_write
 
-    if req.embedding_api_key is not None and not skip_secret_write(
-        "embedding_api_key", req.embedding_api_key
-    ):
-        chunk_config["embedding_api_key"] = req.embedding_api_key
-    if req.embedding_batch_size is not None:
-        chunk_config["embedding_batch_size"] = req.embedding_batch_size
     if req.rerank_provider is not None:
         chunk_config["rerank_provider"] = req.rerank_provider
     if req.rerank_model is not None:
@@ -194,16 +210,6 @@ def create_collection(req: CollectionCreateRequest):
     # Persist explicitly so UI checkbox and ingest path share the same stored value
     # (not only via _DEFAULT_COLLECTION_CONFIG merge on read).
     chunk_config["cloud_parsing"] = bool(req.cloud_parsing)
-
-    # Create metadata first to get ID
-    collection_id = collections_store.generate_id()
-
-    # 建库闸门（RBAC）：必须在**任何副作用之前**。
-    # 曾经只靠 create_collection_meta 里的接缝，而它在 db.create_collection 之后
-    # ——被拒的用户仍会留下一个孤儿空集合（2026-09-16 审计发现）。
-    from src.identity import authorize, get_actor
-
-    authorize(get_actor(), "collection.create", {"collection_id": collection_id})
 
     # Create in Qdrant using ID as name
     services.db.create_collection(collection_id, vector_size=dimensions, chunk_config=chunk_config)
@@ -233,9 +239,9 @@ def delete_collection(collection_id: str):
     if not services.db.collection_exists(collection_id):
         return {"error": f"Collection '{meta['name']}' does not exist in database"}
 
-    from src.meeting.transcript_index import INTERNAL_QDRANT_COLLECTIONS
+    from src.meeting.transcript_index import is_internal_collection
 
-    collections = [c for c in services.db.list_collections() if c not in INTERNAL_QDRANT_COLLECTIONS]
+    collections = [c for c in services.db.list_collections() if not is_internal_collection(c)]
     if len(collections) <= 1:
         return {"error": "Cannot delete the only remaining collection"}
 
@@ -345,7 +351,30 @@ def get_collection_config(collection_id: str):
 
     # Use collection_id as Qdrant name
     config = services.db.get_collection_config(collection_id)
-    return redact_mapping(config) if isinstance(config, dict) else config
+    from src.rag.collection_utils import embedding_status
+    return redact_mapping({**config, **embedding_status(config, collection_id)})
+
+
+@router.post("/collections/{collection_id}/embedding-rebuild")
+async def rebuild_embedding(collection_id: str, provider_id: str = Body(embed=True)):
+    from fastapi import HTTPException
+    from src.config import EmbeddingBinding
+    from src.rag.collection_utils import get_collection_embedding_config, new_collection_provider
+    from src.rag.embedding_rebuild import queue_rebuild
+
+    _gate_write(collection_id, "collection.update")
+    if not collections_store.get_collection_meta(collection_id):
+        raise HTTPException(404, "Collection not found")
+    if not provider_id:
+        raise HTTPException(400, "Select an embedding model.")
+    try:
+        provider = new_collection_provider(provider_id)
+        current = get_collection_embedding_config(services.db.get_collection_config(collection_id), collection_id)
+        target = EmbeddingBinding.from_provider(current if current and current.id == provider_id else provider)
+        task = queue_rebuild(collection_id, target)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"task_id": task.id, "state": "queued"}
 
 
 @router.put("/collections/{collection_id}/config")

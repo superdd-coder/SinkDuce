@@ -8,16 +8,24 @@ import re
 from collections.abc import Callable
 from typing import Any, TypeVar
 
+from src.config import LLMApiMode
+from src.providers.openai_endpoint import is_openai_endpoint as is_openai_endpoint
+
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 # Provider instances can be short lived. Keep learned capabilities scoped to the
 # endpoint, model, and reasoning settings for the current process only.
 _PARAMETER_RULES: dict[tuple[str, str, str], frozenset[str]] = {}
+_VENDOR_THINKING_FIELDS = {"thinking", "enable_thinking", "thinking_budget"}
+
+
+def resolve_llm_api_mode(base_url: str, selected: LLMApiMode | None = None) -> LLMApiMode:
+    return selected or ("responses" if is_openai_endpoint(base_url) else "chat_completions")
 
 
 def _key(kwargs: dict, base_url: str) -> tuple[str, str, str]:
-    extra = kwargs.get("extra_body") or {}
+    extra = {} if is_openai_endpoint(base_url) else kwargs.get("extra_body") or {}
     posture = {
         "reasoning_effort": kwargs.get("reasoning_effort"),
         "thinking": extra.get("thinking"),
@@ -31,15 +39,54 @@ def _key(kwargs: dict, base_url: str) -> tuple[str, str, str]:
     )
 
 
+def _openai_messages(messages: list[dict]) -> list[dict]:
+    """Keep tool text paired with its call and send images after the full result batch."""
+    from src.prompts import CHAT_TOOL_IMAGE_EVIDENCE
+
+    result = []
+    images = []
+    for index, message in enumerate(messages):
+        if message["role"] != "tool":
+            result.append({key: value for key, value in message.items() if key != "reasoning_content"})
+            continue
+        content = message["content"]
+        call_id = message["tool_call_id"]
+        if isinstance(content, list):
+            tool_images = [part for part in content if part.get("type") == "image_url"]
+            content = [part for part in content if part.get("type") == "text"] or ""
+            if tool_images:
+                images.append({"type": "text", "text": CHAT_TOOL_IMAGE_EVIDENCE.format(tool_call_id=call_id)})
+                images.extend(tool_images)
+        result.append({"role": "tool", "tool_call_id": call_id, "content": content})
+
+        at_batch_end = index + 1 == len(messages) or messages[index + 1]["role"] != "tool"
+        if images and at_batch_end:
+            result.append({"role": "user", "content": images})
+            images = []
+    return result
+
+
 def prepare_chat_kwargs(kwargs: dict, *, base_url: str = "") -> dict:
-    """Apply previously learned restrictions without mutating the request."""
+    """Prepare the endpoint's wire format and apply learned restrictions."""
     prepared = dict(kwargs)
     rules = _PARAMETER_RULES.get(_key(kwargs, base_url), frozenset())
+    openai_endpoint = is_openai_endpoint(base_url)
     if "temperature" in rules:
         prepared.pop("temperature", None)
-    if "max_tokens" in rules and "max_tokens" in prepared:
+    if (openai_endpoint or "max_tokens" in rules) and "max_tokens" in prepared:
         limit = prepared.pop("max_tokens")
         prepared.setdefault("max_completion_tokens", limit)
+    if prepared.get("tools") == []:
+        prepared.pop("tools")
+    if not prepared.get("tools") and prepared.get("tool_choice") in ("auto", "none"):
+        prepared.pop("tool_choice")
+    if openai_endpoint:
+        extra = prepared.pop("extra_body", None) or {}
+        extra = {key: value for key, value in extra.items() if key not in _VENDOR_THINKING_FIELDS}
+        if extra:
+            prepared["extra_body"] = extra
+        if "messages" in prepared:
+            prepared["messages"] = _openai_messages(prepared["messages"])
     return prepared
 
 

@@ -34,32 +34,32 @@ class OpenAICompatEmbedding(EmbeddingProvider):
             timeout=httpx.Timeout(1800, connect=30),
         )
         self._model = config.model.strip()
-        self._batch_size = min(config.batch_size, self.MAX_BATCH_SIZE)
+        self._batch_size = min(
+            config.batch_size if config.batch_size > 0 else self.MAX_BATCH_SIZE,
+            self.MAX_BATCH_SIZE,
+        )
         self._dimensions = config.dimensions
         if self._dimensions <= 0:
             self._dimensions = self._detect_dimensions()
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         all_embeddings = []
-        batch_size = min(self._batch_size, self.MAX_BATCH_SIZE)
+        batch_size = self._batch_size
         logger.info("Embedding %d texts in batches of %d (model=%s)", len(texts), batch_size, self._model)
         for i in range(0, len(texts), batch_size):
             batch = [_truncate(t) for t in texts[i : i + batch_size]]
-            kwargs = {"input": batch, "model": self._model}
-            if self._dimensions > 0:
-                kwargs["dimensions"] = self._dimensions
-            response = self._client.embeddings.create(**kwargs)
-            # Sort by index to guarantee order matches input
-            sorted_data = sorted(response.data, key=lambda d: d.index)
-            all_embeddings.extend([d.embedding for d in sorted_data])
+            all_embeddings.extend(self._embed_batch(batch))
         return all_embeddings
 
     def embed_query(self, text: str) -> list[float]:
-        kwargs = {"input": [_truncate(text)], "model": self._model}
-        if self._dimensions > 0:
-            kwargs["dimensions"] = self._dimensions
-        response = self._client.embeddings.create(**kwargs)
-        return response.data[0].embedding
+        return self._embed_batch([_truncate(text)])[0]
+
+    def _embed_batch(self, batch: list[str]) -> list[list[float]]:
+        response = self._client.embeddings.create(input=batch, model=self._model, **self._request_options())
+        return [item.embedding for item in sorted(response.data, key=lambda item: item.index)]
+
+    def _request_options(self) -> dict:
+        return {"dimensions": self._dimensions} if self._dimensions > 0 else {}
 
     @property
     def dimensions(self) -> int:

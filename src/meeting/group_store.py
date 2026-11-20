@@ -73,10 +73,28 @@ def _default_title(meeting_title: str, n: int) -> str:
     return f"{base} 等 {n} 场"
 
 
+def _apply_member_archive_state(group: MeetingGroup) -> MeetingGroup:
+    """Use member state for populated groups and the saved flag for empty groups."""
+    from .store import get_meeting
+
+    has_meetings = False
+    for member in group.members:
+        meeting = get_meeting(member.meeting_id)
+        if meeting is None:
+            continue
+        has_meetings = True
+        if not meeting.archived:
+            group.archived = False
+            return group
+    if has_meetings:
+        group.archived = True
+    return group
+
+
 def _save(group: MeetingGroup) -> MeetingGroup:
     group.updated_at = _now()
     _write_json(_group_path(group.id), _to_dict(group))
-    return group
+    return _apply_member_archive_state(group)
 
 
 def create_group(
@@ -100,14 +118,19 @@ def create_group(
     )
     _write_json(_group_path(group.id), _to_dict(group))
     logger.info("Created meeting group id=%s title=%r", group.id, group.title)
-    return group
+    return _apply_member_archive_state(group)
 
 
-def get_group(group_id: str) -> MeetingGroup | None:
+def _read_group(group_id: str) -> MeetingGroup | None:
     data = _read_json(_group_path(group_id))
     if data is None:
         return None
     return _from_dict(data)
+
+
+def get_group(group_id: str) -> MeetingGroup | None:
+    group = _read_group(group_id)
+    return _apply_member_archive_state(group) if group is not None else None
 
 
 def list_groups() -> list[MeetingGroup]:
@@ -118,7 +141,7 @@ def list_groups() -> list[MeetingGroup]:
         if not data:
             continue
         try:
-            out.append(_from_dict(data))
+            out.append(_apply_member_archive_state(_from_dict(data)))
         except Exception:
             logger.warning("skip bad group file %s", path, exc_info=True)
     out.sort(key=lambda g: g.last_chat_at or g.updated_at, reverse=True)
@@ -131,21 +154,21 @@ def groups_for_meeting(meeting_id: str) -> list[MeetingGroup]:
 
 
 def add_member(group_id: str, meeting_id: str) -> MeetingGroup:
-    group = get_group(group_id)
+    group = _read_group(group_id)
     if group is None:
         raise FileNotFoundError(group_id)
     mid = (meeting_id or "").strip()
     if not mid:
         raise ValueError("meeting_id is required")
     if any(m.meeting_id == mid for m in group.members):
-        return group
+        return _apply_member_archive_state(group)
     next_n = max((m.n for m in group.members), default=0) + 1
     group.members.append(MeetingGroupMember(meeting_id=mid, n=next_n))
     return _save(group)
 
 
 def remove_member(group_id: str, meeting_id: str) -> MeetingGroup:
-    group = get_group(group_id)
+    group = _read_group(group_id)
     if group is None:
         raise FileNotFoundError(group_id)
     mid = (meeting_id or "").strip()
@@ -163,7 +186,7 @@ def drop_meeting_from_all_groups(meeting_id: str) -> None:
 
 
 def touch_chat(group_id: str) -> MeetingGroup:
-    group = get_group(group_id)
+    group = _read_group(group_id)
     if group is None:
         raise FileNotFoundError(group_id)
     group.last_chat_at = _now()
@@ -171,7 +194,7 @@ def touch_chat(group_id: str) -> MeetingGroup:
 
 
 def rename_group(group_id: str, title: str) -> MeetingGroup:
-    group = get_group(group_id)
+    group = _read_group(group_id)
     if group is None:
         raise FileNotFoundError(group_id)
     name = (title or "").strip()
@@ -182,7 +205,7 @@ def rename_group(group_id: str, title: str) -> MeetingGroup:
 
 
 def set_group_archived(group_id: str, archived: bool) -> MeetingGroup:
-    group = get_group(group_id)
+    group = _read_group(group_id)
     if group is None:
         raise FileNotFoundError(group_id)
     group.archived = bool(archived)

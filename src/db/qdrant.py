@@ -4,6 +4,8 @@ import logging
 import uuid
 from typing import Any
 
+from src.db.index_routing import IndexRoutingClient
+from qdrant_client.qdrant_client import QdrantClient as RealQdrantClient
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
@@ -58,7 +60,8 @@ _DEFAULT_COLLECTION_CONFIG = {
 }
 
 # Fields that cannot be changed after collection creation
-_LOCKED_FIELDS = {"dimensions", "chunk_mode"}
+_LOCKED_FIELDS = {"dimensions", "chunk_mode", "embedding_binding", "embedding_provider_id",
+                  "embedding_provider", "embedding_model", "embedding_base_url", "embedding_api_key"}
 
 
 def get_default_collection_config() -> dict:
@@ -68,7 +71,16 @@ def get_default_collection_config() -> dict:
 
 class QdrantManager:
     def __init__(self, host: str = "localhost", port: int = 6333):
+        self.endpoint = (host, port)
         self.client = QdrantClient(host=host, port=port)
+
+    @property
+    def client(self):
+        return self._client
+
+    @client.setter
+    def client(self, client):
+        self._client = IndexRoutingClient(client) if isinstance(client, RealQdrantClient) else client
 
     def create_collection(
         self,
@@ -77,6 +89,16 @@ class QdrantManager:
         chunk_config: dict | None = None,
     ) -> None:
         logger.info("Create collection: %s (vector_size=%d)", name, vector_size)
+        if not name.startswith("__"):
+            from src.config import EmbeddingBinding, EmbeddingConfig
+            from src.rag.collection_utils import new_collection_provider
+            from src.services import services
+
+            if isinstance(getattr(services.config, "embedding", None), EmbeddingConfig):
+                chunk_config = dict(chunk_config or {})
+                provider = new_collection_provider(chunk_config.get("embedding_provider_id"))
+                chunk_config.update(embedding_binding=EmbeddingBinding.from_provider(provider, vector_size).model_dump(),
+                                    embedding_provider_id=provider.id, embedding_model=provider.model)
         try:
             self.client.create_collection(
                 collection_name=name,
@@ -93,6 +115,7 @@ class QdrantManager:
                     "creation; collection already exists — continuing",
                     name,
                 )
+                return
             else:
                 raise exc
         logger.info("[Qdrant] collection=%s sparse_vectors_config={\"sparse\": SparseVectorParams()}", name)
@@ -108,10 +131,14 @@ class QdrantManager:
             )
 
     def collection_exists(self, name: str) -> bool:
+        if isinstance(self.client, IndexRoutingClient):
+            return self.client.collection_exists(name)
         collections = self.client.get_collections().collections
         return any(c.name == name for c in collections)
 
     def list_collections(self) -> list[str]:
+        if isinstance(self.client, IndexRoutingClient):
+            return self.client.list_names()
         return [c.name for c in self.client.get_collections().collections]
 
     def clear_sparse_locks(self) -> int:
@@ -139,7 +166,10 @@ class QdrantManager:
         return cleared
 
     def delete_collection(self, name: str) -> None:
-        self.client.delete_collection(collection_name=name)
+        if isinstance(self.client, IndexRoutingClient) and not name.startswith("__"):
+            self.client.delete_logical(name)
+        else:
+            self.client.delete_collection(collection_name=name)
 
     def get_vector_size(self, name: str) -> int | None:
         """Get the actual vector dimension from Qdrant (authoritative, not from config)."""
@@ -176,6 +206,7 @@ class QdrantManager:
         ids: list[str],
         vectors: list[list[float]],
         payloads: list[dict[str, Any]],
+        expected_binding=None,
     ) -> None:
         if len(ids) != len(vectors) or len(ids) != len(payloads):
             raise ValueError("Point ID, dense vector and payload lengths must match")
@@ -185,7 +216,16 @@ class QdrantManager:
             PointStruct(id=id_, vector=vec, payload=pl)
             for id_, vec, pl in zip(ids, vectors, payloads)
         ]
-        self.client.upsert(collection_name=collection, points=points)
+        if expected_binding is None:
+            self.client.upsert(collection_name=collection, points=points)
+            return
+        from src.db.index_routing import collection_work
+        from src.rag.collection_utils import get_collection_embedding_config
+        with collection_work(collection).commit:
+            current = get_collection_embedding_config(self.get_collection_config(collection), collection)
+            if current is None or not expected_binding.resolve([current]) or current.dimensions != expected_binding.dimensions:
+                raise ValueError("The collection's embedding model changed before the upload completed.")
+            self.client.upsert(collection_name=collection, points=points)
 
     def upsert_sparse_vectors(
         self,
@@ -281,11 +321,14 @@ class QdrantManager:
     def delete_points(self, collection: str, ids: list[str]) -> None:
         self.client.delete(collection_name=collection, points_selector=ids)
 
-    def delete_by_filter(self, collection: str, key: str, value: Any) -> int:
+    def delete_by_filter(self, collection: str, key: str, value: Any, *, keep_ids: list[str] | None = None) -> int:
         """Delete points matching a filter. Returns the number of deleted points."""
         filter_condition = Filter(
             must=[FieldCondition(key=key, match=MatchValue(value=value))]
         )
+        if keep_ids:
+            from qdrant_client.models import HasIdCondition
+            filter_condition.must_not = [HasIdCondition(has_id=keep_ids)]
         try:
             count = self.client.count(
                 collection_name=collection,
@@ -361,7 +404,8 @@ class QdrantManager:
                         **(points[0].payload["chunk_config"] or {}),
                     }
         except Exception:
-            pass
+            logger.exception("Could not read the index configuration for %s", collection)
+            raise
         return dict(_DEFAULT_COLLECTION_CONFIG)
 
     def hybrid_search(
@@ -429,8 +473,30 @@ class QdrantManager:
         by_id = {str(p.id): {"id": str(p.id), "payload": p.payload or {}} for p in points}
         return [by_id[str(pid)] for pid in ids if str(pid) in by_id]
 
+    def pin_legacy_embedding(self, collection, settings):
+        """Write the upgrade-time identity once, without changing document vectors."""
+        from src.db.index_routing import collection_work
+        from src.rag.collection_utils import collection_binding
+
+        with collection_work(collection).commit:
+            config = self.get_collection_config(collection)
+            if config.get("embedding_binding"):
+                return config
+            size = self.get_vector_size(collection)
+            binding = collection_binding(config, settings, size)
+            if size and binding:
+                config.update(embedding_binding=binding.model_dump(), embedding_provider_id=binding.provider_id,
+                              embedding_model=binding.model, dimensions=size)
+                self._store_config(collection, config, size)
+            return config
+
     def update_collection_config(self, collection: str, updates: dict) -> dict:
         """Update collection config with partial updates. Returns error dict or merged config."""
+        from src.db.index_routing import collection_work
+        with collection_work(collection).commit:
+            return self._update_collection_config(collection, updates)
+
+    def _update_collection_config(self, collection: str, updates: dict) -> dict:
         current = self.get_collection_config(collection)
 
         # Validate locked fields
@@ -446,11 +512,13 @@ class QdrantManager:
         if vector_size is None:
             vector_size = merged.get("dimensions", 1536)
 
-        # Save back
+        self._store_config(collection, merged, vector_size)
+        return merged
+
+    def _store_config(self, collection, config, vector_size):
         self.upsert_points(
             collection=collection,
             ids=[_CONFIG_POINT_ID],
             vectors=[[0.0] * vector_size],
-            payloads=[{"collection_config": merged, "chunk_type": "__config__"}],
+            payloads=[{"collection_config": config, "chunk_type": "__config__"}],
         )
-        return merged

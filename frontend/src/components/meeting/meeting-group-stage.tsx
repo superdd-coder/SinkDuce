@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type TransitionEvent
 import { Archive, ArchiveRestore, Check, FilePlus2, PanelRightClose, Pencil, Trash2, X } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
+import { findGroupTranscriptIndex } from "@/lib/group-cites"
 import { canOperateMeetingGroup, canCreateMeeting } from "@/lib/meeting-perms"
 import { useT } from "@/i18n/use-t"
 import { useAppStore } from "@/stores/app-store"
@@ -19,24 +20,6 @@ import { MeetingQuickChat } from "./meeting-quick-chat"
 import { TranscriptTab } from "./transcript-panel"
 import { MediaBar, type MediaBarHandle } from "./media-bar"
 import { apiUrl, withTokenQuery } from "@/api/origin"
-
-function findTranscriptHit(
-  segs: TranscriptSegment[],
-  sentenceId?: string,
-): TranscriptSegment | undefined {
-  const raw = (sentenceId || "").trim()
-  if (!raw || segs.length === 0) return undefined
-  const exact = segs.find((s) => s.sentence_id === raw || s.sentence_id?.endsWith(raw))
-  if (exact) return exact
-  const num = raw.match(/(\d+)/)?.[1]
-  if (!num) return undefined
-  const padded = `stt_${num.padStart(4, "0")}`
-  const byId = segs.find((s) => s.sentence_id === padded || s.sentence_id?.endsWith(padded))
-  if (byId) return byId
-  const idx = parseInt(num, 10) - 1
-  if (idx >= 0 && idx < segs.length) return segs[idx]
-  return undefined
-}
 
 export function MeetingGroupStage({
   groupId,
@@ -71,6 +54,7 @@ export function MeetingGroupStage({
   const [titleDraft, setTitleDraft] = useState("")
   const mediaBarRef = useRef<MediaBarHandle | null>(null)
   const pendingSeekRef = useRef<number | null>(null)
+  const transcriptRequestRef = useRef(0)
   const noop = useRef(() => {}).current
 
   const onGroupChangedRef = useRef(onGroupChanged)
@@ -88,9 +72,11 @@ export function MeetingGroupStage({
     setOverlayOpen(false)
     overlayOpenRef.current = false
     setSegments([])
+    setFocusRef(undefined)
     setEditingTitle(false)
     pendingSeekRef.current = null
     reload()
+    return () => { transcriptRequestRef.current += 1 }
   }, [groupId, reload])
 
   const meetingById = useMemo(() => {
@@ -105,24 +91,19 @@ export function MeetingGroupStage({
         const m = meetingById.get(mem.meeting_id)
         return {
           id: mem.meeting_id,
-          title: m?.title || mem.meeting_id,
+          title: m?.title || "",
           created_at: m?.created_at,
         }
       }),
     [group, meetingById],
   )
 
-  const seekPlayer = (start?: number) => {
-    const t = start != null && Number.isFinite(start) ? start : 0
-    pendingSeekRef.current = t
-    mediaBarRef.current?.seekTo(t)
-  }
-
   useEffect(() => {
-    const t = pendingSeekRef.current
-    if (t == null || !overlayMeeting) return
+    const start = pendingSeekRef.current
+    if (start == null || !overlayMeeting) return
     const id = requestAnimationFrame(() => {
-      mediaBarRef.current?.seekTo(t)
+      pendingSeekRef.current = null
+      mediaBarRef.current?.seekTo(start)
     })
     return () => cancelAnimationFrame(id)
   }, [overlayMeeting?.id, segments, focusRef?.ts])
@@ -137,6 +118,7 @@ export function MeetingGroupStage({
   }
 
   const closeOverlay = () => {
+    transcriptRequestRef.current += 1
     setOverlayOpen(false)
     pendingSeekRef.current = null
     setPlaybackTime(null)
@@ -146,7 +128,9 @@ export function MeetingGroupStage({
     }
   }
 
-  const openOverlay = async (n: number, sentenceId?: string, meetingId?: string) => {
+  const openOverlay = async (n: number, sentenceId?: string, meetingId?: string, startTime?: number) => {
+    const request = ++transcriptRequestRef.current
+    if (group?.id !== groupId) return
     // The cite snapshot's meeting_id is authoritative: roster n is reused
     // after a member leaves and a new one joins with the same number.
     const mem = meetingId
@@ -157,23 +141,26 @@ export function MeetingGroupStage({
       return
     }
     const cached = meetingById.get(mem.meeting_id)
-    if (cached) setOverlayMeeting(cached)
-    setOverlayOpen(true)
-    setPlaybackTime(null)
     try {
-      const m = cached || (await getMeeting(mem.meeting_id))
-      setOverlayMeeting(m)
-      const trs = await getMeetingTranscript(mem.meeting_id)
-      const segs = (trs.segments || []) as TranscriptSegment[]
-      setSegments(segs)
-      const hit = findTranscriptHit(segs, sentenceId)
-      const focusId = hit?.sentence_id || sentenceId || segs[0]?.sentence_id
-      if (focusId) {
-        setFocusRef({ id: focusId, ts: Date.now() })
+      const [m, transcript] = await Promise.all([
+        cached ?? getMeeting(mem.meeting_id),
+        getMeetingTranscript(mem.meeting_id),
+      ])
+      if (request !== transcriptRequestRef.current) return
+      const rows = transcript.segments
+      const index = findGroupTranscriptIndex(rows, sentenceId, startTime)
+      if (index < 0 && (sentenceId || startTime !== undefined)) {
+        toast.error(t("meeting.citePassageUnavailable"))
+        return
       }
-      seekPlayer(hit?.start ?? segs[0]?.start ?? 0)
+      setOverlayMeeting(m)
+      setSegments(rows)
+      setPlaybackTime(null)
+      setFocusRef(index < 0 ? undefined : { id: `_idx_${index}`, ts: Date.now() })
+      pendingSeekRef.current = rows[index]?.start ?? null
+      setOverlayOpen(true)
     } catch {
-      setSegments([])
+      if (request === transcriptRequestRef.current) toast.error(t("meeting.citeTranscriptLoadFailed"))
     }
   }
 
@@ -320,7 +307,7 @@ export function MeetingGroupStage({
               onClose={() => {}}
               layout="dock"
               sessionKind="group"
-              onGroupCite={(n, sentenceId, meetingId) => void openOverlay(n, sentenceId, meetingId)}
+              onGroupCite={(n, sentenceId, meetingId, startTime) => void openOverlay(n, sentenceId, meetingId, startTime)}
               citeMeetings={citeMeetings}
             />
           )}
@@ -375,8 +362,9 @@ export function MeetingGroupStage({
           ) : null}
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-1">
             <TranscriptTab
+              key={focusRef?.ts ?? overlayMeeting?.id}
               segments={segments}
-              onSegmentClick={(start) => seekPlayer(start)}
+              onSegmentClick={(start) => mediaBarRef.current?.seekTo(start)}
               focusRef={focusRef}
               speakerNames={overlayMeeting?.speaker_names ?? {}}
               playbackTime={playbackTime}

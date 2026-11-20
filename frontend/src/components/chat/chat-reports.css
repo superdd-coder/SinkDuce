@@ -162,7 +162,6 @@
   padding: 0 !important;
   gap: 0 !important;
   overflow: hidden;
-  background: var(--pm-float) !important;
 }
 .pm-report-head {
   display: flex;
@@ -300,8 +299,6 @@
 .pm-report-sources > div { display: flex; align-items: baseline; gap: 8px; margin: 12px 0; }
 .pm-report-sources .pm-report-meta { font-size: 12px; line-height: 1.6; }
 .pm-report-paper .chat-md-visual--report { position: relative; margin: 24px 0 10px; border: 1px solid var(--report-line); border-radius: 18px; background: #fff; overflow: hidden; }
-.pm-report-paper .chat-md-visual--report .chat-md-visual-toolbar { display: flex; position: absolute; z-index: 2; top: 10px; right: 10px; gap: 2px; padding: 4px; border: 1px solid var(--report-line); border-radius: 12px; background: #ffffffed; backdrop-filter: blur(12px); opacity: .18; transition: opacity 160ms var(--pm-ease); }
-.pm-report-paper .chat-md-visual--report:is(:hover,:focus-within) .chat-md-visual-toolbar { opacity: 1; }
 .pm-report-paper .chat-md-visual-toolbar button { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 8px; background: transparent; color: #64726a; cursor: pointer; }
 .pm-report-paper .chat-md-visual-toolbar button:hover { background: var(--report-surface); color: var(--pm-green-deep); }
 .pm-report-paper .chat-md-visual-toolbar button:focus-visible { outline: 2px solid var(--pm-green); outline-offset: 1px; }
@@ -313,7 +310,6 @@
 .pm-report-paper .chat-md-code-block { margin: 24px 0; overflow: hidden; border-radius: 14px; background: var(--report-surface); }
 .pm-report-paper .chat-md-code-header { padding: 10px 16px 0; font: 11px/1.6 var(--type-font-ui); color: var(--report-muted); }
 .pm-report-paper .chat-md-code-block pre { margin: 0; padding: 14px 16px; overflow: auto; font: 12px/1.7 ui-monospace,monospace; }
-@media (hover: none) { .pm-report-paper .chat-md-visual--report .chat-md-visual-toolbar { opacity: 1; } }
 .pm-report-empty { display: grid; place-items: center; flex: 1; gap: 14px; padding: 40px; color: var(--pm-muted); font: var(--type-ui); }
 
 @container (max-width: 760px) {

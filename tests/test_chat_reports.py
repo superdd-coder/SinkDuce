@@ -242,14 +242,15 @@ def test_incomplete_source_image_fence_does_not_leak_internal_fields_or_external
     e['quote'] = '![remote](https://invalid.test/tracker.png)<img src="file:///etc/passwd">'
     output = render_html(report).decode()
     assert '<img' not in output and 'file:///' not in output and 'tracker.png' not in output
-def test_source_caption_page_must_match_its_bound_evidence(tmp_path):
+@pytest.mark.parametrize("field_prefix", ["", "evidence_id_"])
+def test_source_caption_page_must_match_its_bound_evidence(tmp_path, field_prefix):
     from src.reports.store import ReportStore
     from src.chatbox.citations import EvidenceRegistry
     store=ReportStore(tmp_path,session_exists=lambda sid:True)
     e=EvidenceRegistry('s').register('Verified source text.',{'file_id':'a','page_number':4})
     with pytest.raises(ValueError,match='[Cc]aption'):
-        store.save('s','Report',f"来源：第 7 页结构图 [cite:{e['id']}]。",[e])
-    assert store.save('s','Report',f"来源：第 4 页结构图 [cite:{e['id']}]。",[e])['revision']==1
+        store.save('s','Report',f"来源：第 7 页结构图 [cite:{field_prefix}{e['id']}]。",[e])
+    assert store.save('s','Report',f"来源：第 4 页结构图 [cite:{field_prefix}{e['id']}]。",[e])['revision']==1
 
 
 def test_unmodified_legacy_caption_does_not_block_an_unrelated_local_edit(tmp_path):

@@ -172,6 +172,13 @@ def test_group_stage_title_card_with_labeled_action_card():
     assert "align-items: stretch" in head
 
 
+def test_group_stage_uses_the_shared_meeting_card_gutter():
+    css = CSS.read_text(encoding="utf-8")
+    group_stage = css.split(".pm-meeting-group-stage {", 1)[1].split("}", 1)[0]
+    assert "padding: var(--pm-meeting-shadow-gutter)" in group_stage
+    assert "box-sizing: border-box" in group_stage
+
+
 def test_group_stage_has_no_member_side_rail():
     """Right member sidebar is gone; the cite transcript opens in its old spot."""
     src = STAGE.read_text(encoding="utf-8")

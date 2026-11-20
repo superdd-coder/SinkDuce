@@ -36,9 +36,10 @@ def test_index_meeting_transcripts_upserts_points_and_deletes_old():
         llm=None,
     )
     assert n == 1
-    db.delete_by_filter.assert_called_once_with(
-        TRANSCRIPT_COLLECTION, "meeting_id", "m1"
-    )
+    db.delete_by_filter.assert_not_called()
+    removal = db.client.delete.call_args.kwargs["points_selector"]
+    assert removal.must[0].match.value == "m1"
+    assert removal.must[1].range.gte == 1
     db.upsert_points.assert_called_once()
     kwargs = db.upsert_points.call_args.kwargs
     assert kwargs["collection"] == TRANSCRIPT_COLLECTION

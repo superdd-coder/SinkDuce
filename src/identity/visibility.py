@@ -48,7 +48,8 @@ def visible_collection_ids(actor: Actor) -> set[str] | None:
 
 
 def is_collection_visible(actor: Actor, collection_id: str | None) -> bool:
-    if not collection_id:
+    from src.meeting.transcript_index import is_internal_collection
+    if not collection_id or is_internal_collection(collection_id):
         return False
     if may_see_everything(actor):
         return True

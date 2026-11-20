@@ -55,7 +55,8 @@ def test_every_chat_surface_can_save_a_report_and_restore_its_reference(tmp_path
     assert for_sessions(store).read(sid, saved[0]["id"])["revision"] == 2
 
 
-def test_ordinary_answer_receives_stable_citation_ids_and_persists_full_excerpt(tmp_path, monkeypatch):
+@pytest.mark.parametrize("field_prefix", ["", "evidence_id_"])
+def test_ordinary_answer_receives_stable_citation_ids_and_persists_full_excerpt(tmp_path, monkeypatch, field_prefix):
     from src.chatbox import agent as module
     store = SessionStore(str(tmp_path / "sessions.db"))
     store.create_session(session_id="quick_col_a", collections=["col_a"])
@@ -67,9 +68,9 @@ def test_ordinary_answer_receives_stable_citation_ids_and_persists_full_excerpt(
         if calls == 1:
             return _tool_round("lookup_collection", '{"query":"A fact"}')
         text = "\n".join(str(m.get("content")) for m in kwargs["messages"] if m["role"] == "tool")
-        match = re.search(r'e_[a-f0-9]{20}', text)
-        assert match, "The answering model must see server-issued citation identities"
-        return _text_round(f"A supported fact.[cite:{match.group()}]")
+        match = re.search(r'\[cite:(e_[a-f0-9]{20})\]', text)
+        assert match, "The answering model must receive the complete citation marker"
+        return _text_round(f"A supported fact.[cite:{field_prefix}{match[1]}]")
     llm._client.chat.completions.create.side_effect = response
     direct = MagicMock()
     direct.retrieve.return_value = SimpleNamespace(context="A supported fact. " * 30, chunks=[

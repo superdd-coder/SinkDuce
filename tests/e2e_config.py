@@ -1,6 +1,7 @@
 """Shared config for all tests — reads ports from .env once."""
 
 import os
+import urllib.request
 
 _ENV_FILE = os.path.join(os.path.dirname(__file__), "..", ".env")
 _ENV_CACHE: dict[str, str] | None = None
@@ -49,14 +50,13 @@ def qdrant_base() -> str:
 
 
 # Live Hub suites create and remove fixtures, so their target must be explicit.
-HUB_TEST_URL = os.environ.get("SINKDUCE_TEST_INSTANCE_URL", "").rstrip("/")
+HUB_TEST_URL = (os.environ.get("SINKDUCE_TEST_INSTANCE_URL") or os.environ.get("SINKDUCE_HUB_TEST_URL", "")).strip().rstrip("/")
 HUB_SELF_URL = os.environ.get("SINKDUCE_TEST_SELF_URL", HUB_TEST_URL).rstrip("/")
 
 
 def hub_test_instance_ready() -> bool:
     if not HUB_TEST_URL:
         return False
-    import urllib.request
 
     try:
         with urllib.request.urlopen(HUB_TEST_URL + "/health", timeout=3) as response:

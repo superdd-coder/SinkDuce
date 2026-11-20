@@ -9,7 +9,7 @@ import type { Meeting, SpeakerMatch, TranscriptSegment } from "@/api/client"
 import { PeoplePicker } from "@/components/meeting/people-picker"
 import { PeopleManager } from "@/components/llm-provider/people-manager"
 import { useT } from "@/i18n/use-t"
-import { findPlayingSegmentIndex } from "@/lib/transcript-playback"
+import { findPlayingSegmentIndex, formatTranscriptTime as formatTime } from "@/lib/transcript-playback"
 import { recordJump } from "@/lib/perf-hud"
 
 interface TranscriptPanelProps {
@@ -752,12 +752,6 @@ function SpeakerCard({
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-export function formatTime(seconds: number): string {
-  const m = Math.floor(seconds / 60)
-  const s = Math.floor(seconds % 60)
-  return `${m}:${s.toString().padStart(2, "0")}`
-}
 
 /** Convert tab_(sec|blue|cus)_NN → T1, T2, ...
  *

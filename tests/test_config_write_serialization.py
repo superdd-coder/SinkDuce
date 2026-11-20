@@ -13,7 +13,11 @@ import asyncio
 from copy import deepcopy
 from unittest.mock import AsyncMock, patch
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 import src.api.routes.config as config_routes
+import src.config as config_module
 from src.config import (
     AppConfig,
     EmbeddingProviderConfig,
@@ -21,6 +25,47 @@ from src.config import (
     RerankProviderConfig,
     TranscriptionProviderConfig,
 )
+
+
+def test_llm_api_mode_round_trips_through_settings(tmp_path, monkeypatch):
+    from src.providers.llm import thinking
+
+    config_file = tmp_path / "config.yaml"
+    config_module.save_config(AppConfig(), config_file)
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_file)
+    monkeypatch.setattr(config_routes, "async_refresh_llm_runtime", AsyncMock())
+    probes = []
+
+    def probe(base_url, api_key, model):
+        probes.append(base_url)
+        return "toggle"
+
+    monkeypatch.setattr(thinking, "probe_thinking_mode", probe)
+    app = FastAPI()
+    app.include_router(config_routes.router, prefix="/api")
+    app.dependency_overrides[config_routes._config_write_gate] = lambda: None
+
+    gateway = "https://gateway.example.test/v1"
+    official = "https://api.openai.com/v1"
+    with TestClient(app) as client:
+        path = "/api/llm/providers"
+        created = client.post(path, json={
+            "base_url": gateway, "model": "fixture-model", "api_key": "fixture-key", "api_mode": "responses",
+        }).json()
+        assert created["api_mode"] == "responses"
+        assert not probes
+
+        url = f"{path}/{created['id']}"
+        assert client.put(url, json={"api_mode": "chat_completions"}).json()["api_mode"] == "chat_completions"
+        assert probes == [gateway]
+        assert client.put(url, json={"base_url": official}).status_code == 200
+        assert client.put(url, json={"api_mode": "unknown"}).status_code == 422
+        assert client.get(path).json()[0]["api_mode"] == "chat_completions"
+        assert config_module.load_config(config_file).llm.providers[0].api_mode == "chat_completions"
+
+        automatic = client.post(path, json={"base_url": official, "model": "gpt-4o-mini"}).json()
+        assert automatic["api_mode"] is None
+        assert client.get(path).json()[1]["api_mode"] is None
 
 
 def test_concurrent_provider_creates_all_persist():

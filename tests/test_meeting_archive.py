@@ -70,6 +70,54 @@ class TestMeetingArchiveRoutes:
 
 
 class TestGroupArchiveRoutes:
+    def test_archiving_last_member_archives_group(self, client):
+        http, first = client
+        from src.meeting.store import create_meeting
+
+        second = create_meeting("Follow-up")
+        gid = http.post("/meeting-groups", json={"meeting_id": first.id}).json()["id"]
+        url = f"/meeting-groups/{gid}"
+        assert http.post(f"{url}/members", json={"meeting_id": second.id}).status_code == 200
+
+        assert http.post(f"/meetings/{first.id}/archive").status_code == 200
+        assert http.get(url).json()["archived"] is False
+
+        assert http.post(f"/meetings/{second.id}/archive").status_code == 200
+        archived = http.get(url).json()
+        assert archived["archived"] is True
+        assert http.get("/meeting-groups").json() == [archived]
+
+        assert http.post(f"/meetings/{second.id}/unarchive").status_code == 200
+        restored = http.get(url).json()
+        assert restored["archived"] is False
+        assert restored["members"] == archived["members"]
+        meetings = http.get("/meetings", params={"include_archived": True}).json()
+        assert {m["id"]: m["archived"] for m in meetings} == {first.id: True, second.id: False}
+
+    def test_existing_group_reflects_members_archived_before_the_update(self, client):
+        http, meeting = client
+        from src.meeting.store import update_meeting
+
+        group = http.post("/meeting-groups", json={"meeting_id": meeting.id}).json()
+        update_meeting(meeting.id, archived=True)
+
+        assert http.get("/meeting-groups").json()[0]["archived"] is True
+        assert http.get(f"/meeting-groups/{group['id']}").json()["archived"] is True
+
+    def test_adding_an_active_member_restores_an_archived_group(self, client):
+        http, first = client
+        from src.meeting.store import create_meeting, get_meeting
+
+        gid = http.post("/meeting-groups", json={"meeting_id": first.id}).json()["id"]
+        url = f"/meeting-groups/{gid}"
+        assert http.post(f"{url}/archive").json()["archived"] is True
+
+        second = create_meeting("Follow-up")
+        added = http.post(f"{url}/members", json={"meeting_id": second.id})
+        assert added.json()["archived"] is False
+        assert get_meeting(first.id).archived is True
+        assert http.delete(f"{url}/members/{second.id}").json()["archived"] is True
+
     def test_group_archive_cascades_to_members(self, client):
         http, meeting = client
         from src.meeting.store import create_meeting, get_meeting

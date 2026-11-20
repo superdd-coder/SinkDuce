@@ -118,7 +118,10 @@ def test_worker_discovers_pending_current_lists_and_new_project_model(qa, vector
     assert search.pending_projects() == []
     services.config.embedding.default.model = "another-example-model"
     assert search.retrieve(PROJECT, "gate", 10) == []
-    assert search.pending_projects() == [PROJECT]
+    # Editing the connection disconnects this project until its original model returns.
+    assert search.pending_projects() == []
+    services.config.embedding.default.model = "example-vectors"
+    assert search.retrieve(PROJECT, "gate", 10)
     collections.set_archived(PROJECT, True)
     assert search.pending_projects() == []
 
@@ -183,3 +186,47 @@ def test_index_task_checks_cancellation_after_embedding(qa, vector_index, monkey
     with pytest.raises(RuntimeError):
         asyncio.run(search.index_task(task, PROJECT))
     assert not search.retrieve(PROJECT, "gate", 10)
+
+
+def test_embedding_cutover_keeps_questions_and_replies_searchable(qa, vector_index, monkeypatch):
+    from src.config import EmbeddingBinding
+    from src.rag import embedding_rebuild
+
+    db, encoder = vector_index
+    saved_exchange(qa)
+    search = index()
+    search.sync_project(PROJECT)
+    next_model = EmbeddingProviderConfig(id="next", model="next", dimensions=3)
+    services.config.embedding.providers.append(next_model)
+    monkeypatch.setattr(embedding_rebuild, "create_embedding_provider", lambda config: encoder)
+    embedding_rebuild.rebuild_collection(PROJECT, EmbeddingBinding.from_provider(next_model))
+    trace = []
+    assert {hit.text for hit in search.retrieve(PROJECT, "gate", 10, on_trace=trace.append)} == {QUESTION, ANSWER}
+    assert [(event["model"], event["dimensions"], event["mode"]) for event in trace] == [("next", 3, "dense")]
+    search.sync_project(PROJECT)
+    assert {hit.text for hit in search.retrieve(PROJECT, "gate", 10)} == {QUESTION, ANSWER}
+
+
+def test_failed_qa_index_switch_keeps_the_previous_model(qa, vector_index, monkeypatch):
+    import sqlite3
+    from contextlib import closing
+    from src.config import EmbeddingBinding
+    from src.file_mgmt import store as files
+    from src.rag import embedding_rebuild
+
+    db, encoder = vector_index
+    saved_exchange(qa)
+    search = index()
+    search.sync_project(PROJECT)
+    with closing(files.get_db(PROJECT)) as conn:
+        conn.execute("""CREATE TRIGGER fixture_switch_error BEFORE UPDATE OF model_key ON qa_index_points
+                        BEGIN SELECT RAISE(ABORT, 'unavailable fixture storage'); END""")
+        conn.commit()
+    target = EmbeddingProviderConfig(id="alternate", model="alternate", dimensions=3)
+    services.config.embedding.providers.append(target)
+    monkeypatch.setattr(embedding_rebuild, "create_embedding_provider", lambda _: encoder)
+    with pytest.raises(sqlite3.IntegrityError, match="unavailable fixture storage"):
+        embedding_rebuild.rebuild_collection(PROJECT, EmbeddingBinding.from_provider(target))
+    trace = []
+    assert {hit.text for hit in search.retrieve(PROJECT, "gate", 10, on_trace=trace.append)} == {QUESTION, ANSWER}
+    assert trace[0]["model"] == "example-vectors" and db.list_collections() == [PROJECT]

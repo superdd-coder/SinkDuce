@@ -651,8 +651,8 @@ function createResizableImageExtension() {
           min-height: 40px;
           font-size: 12px;
           font-style: italic;
-          color: #374151;
-          background: rgba(255,255,255,0.95);
+          color: var(--sd-text);
+          background: var(--sd-surface-overlay);
           border: 1px solid #3b82f6;
           border-radius: 4px;
           padding: 6px 8px;

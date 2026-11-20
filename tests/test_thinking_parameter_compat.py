@@ -66,6 +66,14 @@ def test_unsupported_thinking_message_does_not_need_structured_param():
     )
 
 
+def test_openai_probe_does_not_send_the_third_party_thinking_toggle(monkeypatch):
+    def unexpected_client(**_kwargs):
+        pytest.fail("OpenAI does not use the provider-specific thinking probe")
+
+    monkeypatch.setattr(thinking, "OpenAI", unexpected_client)
+    assert thinking.probe_thinking_mode("https://api.openai.com/v1", "fixture-key", MODEL) == "none"
+
+
 @pytest.mark.parametrize("param", [None, "tool_choice"])
 def test_tool_choice_rejection_does_not_reject_thinking(param):
     assert not thinking.is_thinking_param_unsupported(

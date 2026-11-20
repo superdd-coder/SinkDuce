@@ -5,6 +5,7 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, model_validator
 
+from src.config import EmbeddingBinding
 from src.speakers.models import SpeakerMatch, SpeakerSlotVector
 
 
@@ -145,6 +146,9 @@ class Meeting(BaseModel):
     archived: bool = False  # kept on disk, hidden from LLM meeting query tools
     transcript_index_status: str = ""  # "" | building | ready | failed
     transcript_index_error: str = ""
+    transcript_embedding: EmbeddingBinding | None = None
+    transcript_index_collection: str = ""
+    transcript_retry_after: float = 0
     #: 创建者（actor id）。**创建者例外**（member 可操作自己建的会议）靠它判定——
     #: 见 `src/identity/policy.py` 的 `_check_domain`。缺省 None：存量会议没有，
     #: 那条例外对它们不生效（保守，避免把老数据当成"人人所有"）。

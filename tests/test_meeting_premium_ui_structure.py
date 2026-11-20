@@ -192,10 +192,11 @@ def test_meeting_nested_paper_cards_exist():
     title = css.split(".pm-meeting-title-card {", 1)[1].split("}", 1)[0]
     assert "#ffffff" in title or "#fff" in title
     assert "--pm-shadow-sm" in title
-    # Soft shadows not clipped: stage-surface overflow visible + shadow gutter
+    # Shared shadow gutter and unclipped card shadows.
+    stage = css.split(".pm-meeting-stage {", 1)[1].split("}", 1)[0]
     surface = css.split(".pm-meeting-stage-surface {", 1)[1].split("}", 1)[0]
     assert "overflow: visible" in surface
-    assert "--pm-meeting-shadow-gutter" in surface
+    assert "--pm-meeting-shadow-gutter: 12px" in stage
     # Tight L↔R card gap (not double full gutters)
     assert "--pm-meeting-col-gap" in surface
     # No hard dividers between title/player or under content tabs
@@ -596,6 +597,16 @@ def test_meeting_quick_chat_matches_collection_pm_qc_chrome():
     assert "pm-qc-empty" in qc
     # Legacy filled bubbles removed
     assert "bg-[var(--pm-green-soft)] ml-6" not in qc
+
+
+def test_meeting_quick_chat_controls_take_up_space_above_the_messages():
+    studio = MEETING_STUDIO.read_text(encoding="utf-8")
+    css = INDEX_CSS.read_text(encoding="utf-8")
+    assert "pm-meeting-side-chat-label" not in studio
+    assert '{sideSurfaceDisplay !== "chat" && (\n' in studio
+    toolbar = css.split(".pm-meeting-qc-toolbar {", 1)[1].split("}", 1)[0]
+    assert "position: relative" in toolbar
+    assert "flex-shrink: 0" in toolbar
 
 
 def test_speaker_sample_text_is_single_line():

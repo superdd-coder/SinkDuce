@@ -7,10 +7,11 @@ import pytest
 from src.providers.llm.openai_compat import OpenAICompatLLM
 
 
-def llm(endpoint="https://gateway.test/v1", model="model", key="key"):
+def llm(endpoint="https://gateway.test/v1", model="model", key="key", api_mode="chat_completions"):
     result = object.__new__(OpenAICompatLLM)
     result._base_url = endpoint
     result._model = model
+    result._api_mode = api_mode
     result.supports_vision = False
     result._client = SimpleNamespace(api_key=key)
     return result
@@ -31,6 +32,8 @@ def test_automatic_vision_probe_is_semantic_cached_and_endpoint_scoped(tmp_path,
     assert probe.call_count == 2
     assert vision.ensure_chat_vision(llm(key="different")) is True
     assert probe.call_count == 3
+    assert vision.ensure_chat_vision(llm(api_mode="responses")) is True
+    assert probe.call_count == 4
     assert "key" not in "".join(p.read_text() for p in tmp_path.glob("*.json"))
 
 

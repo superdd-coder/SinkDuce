@@ -22,8 +22,8 @@ import { useShallow } from "zustand/react/shallow"
 import {
   getLLMProviders, type LLMProvider,
   getEmbeddingProviders, createEmbeddingProvider, updateEmbeddingProvider,
-  deleteEmbeddingProvider, testEmbeddingProvider, setDefaultEmbeddingProvider,
-  type EmbeddingProvider,
+  deleteEmbeddingProvider, getEmbeddingProviderImpact, testEmbeddingProvider, setDefaultEmbeddingProvider,
+  OPENAI_EMBEDDING_BASE_URL, type EmbeddingProvider,
   getRerankProviders, createRerankProvider, updateRerankProvider,
   deleteRerankProvider, testRerankProvider, setDefaultRerankProvider,
   type RerankProvider,
@@ -119,16 +119,28 @@ interface SimpleProviderCardProps<T extends { id: string; name: string; provider
   onEdit: (p: T) => void
   onRefresh: () => void
   onTest: (id: string) => Promise<{ success: boolean; error?: string }>
+  deleteImpact?: typeof getEmbeddingProviderImpact
   onDelete: (id: string) => Promise<{ message?: string; error?: string }>
   onSetDefault: (id: string) => Promise<{ message?: string; error?: string }>
 }
 
 function SimpleProviderCard<T extends { id: string; name: string; provider: string; model: string; base_url: string; is_default: boolean }>({
-  provider, subtitle, onEdit, onRefresh, onTest, onDelete, onSetDefault,
+  provider, subtitle, onEdit, onRefresh, onTest, onDelete, onSetDefault, deleteImpact,
 }: SimpleProviderCardProps<T>) {
   const t = useT()
   const [testing, setTesting] = useState(false)
   const [status, setStatus] = useState<"unknown" | "ready" | "error">("unknown")
+
+  const [impact, setImpact] = useState<Awaited<ReturnType<typeof getEmbeddingProviderImpact>> | null>(null)
+  const [checking, setChecking] = useState(false)
+
+  const reviewDelete = async () => {
+    if (!deleteImpact) return handleDelete()
+    setChecking(true)
+    try { setImpact(await deleteImpact(provider.id)) }
+    catch { toast.error(t("settings.impactFailed")) }
+    finally { setChecking(false) }
+  }
 
   const statusClass =
     status === "ready" ? "is-ready" : status === "error" ? "is-error" : ""
@@ -156,6 +168,7 @@ function SimpleProviderCard<T extends { id: string; name: string; provider: stri
         toast.success(
           res.message || t("settings.providerDeleted", { name: provider.name || t("common.unnamed") }),
         )
+        setImpact(null)
         onRefresh()
       }
     } catch { toast.error(t("settings.deleteFailed")) }
@@ -205,11 +218,25 @@ function SimpleProviderCard<T extends { id: string; name: string; provider: stri
           <Pencil className="h-3 w-3" />
           {t("common.edit")}
         </Button>
-        <Button variant="destructive" size="sm" onClick={handleDelete}>
+        <Button variant="destructive" size="sm" disabled={checking} onClick={() => void reviewDelete()}>
           <Trash2 className="h-3 w-3" />
           {t("common.delete")}
         </Button>
       </div>
+      {impact && <Dialog open onOpenChange={open => { if (!open) setImpact(null) }}>
+        <DialogContent className="pm-dialog max-w-md"><DialogHeader>
+          <DialogTitle>{t("settings.deleteEmbeddingTitle", {model: provider.name || provider.model})}</DialogTitle>
+          <DialogDescription>{t(impact.last_model ? "settings.lastEmbeddingImpact" : "settings.meetingEmbeddingImpact")}</DialogDescription>
+        </DialogHeader>
+        {impact.collections.length > 0 && <div>
+          <p>{t("settings.libraryEmbeddingImpact")}</p>
+          <ul className="max-h-48 overflow-y-auto list-disc pl-5">{impact.collections.map(c => <li key={c.id}>{c.name}</li>)}</ul>
+        </div>}
+        <DialogFooter>
+          <Button variant="secondary" onClick={() => setImpact(null)}>{t("common.cancel")}</Button>
+          <Button variant="destructive" onClick={() => void handleDelete()}>{t("common.delete")}</Button>
+        </DialogFooter></DialogContent>
+      </Dialog>}
     </div>
   )
 }
@@ -292,9 +319,11 @@ function SimpleProviderDialog<T extends { id: string }>({
   }, [provider, open])
 
   const set = (key: string, value: string) => setForm((prev) => ({ ...prev, [key]: value }))
+  const openAIEmbedding = modelFetchSection === "embedding" && form.provider === "openai"
+  const modelBaseUrl = form.base_url?.trim() || (openAIEmbedding ? OPENAI_EMBEDDING_BASE_URL : "")
 
   const fetchModels = async () => {
-    if (!form.base_url?.trim()) {
+    if (!modelBaseUrl) {
       toast.error(t("settings.enterBaseUrlFirst"))
       return
     }
@@ -302,7 +331,7 @@ function SimpleProviderDialog<T extends { id: string }>({
     setFetchingModels(true)
     try {
       const res = await getAvailableModels(modelFetchSection, {
-        base_url: form.base_url,
+        base_url: modelBaseUrl,
         api_key: form.api_key || undefined,
         provider: form.provider || undefined,
       })
@@ -386,7 +415,7 @@ function SimpleProviderDialog<T extends { id: string }>({
                             variant="ghost"
                             size="icon-sm"
                             onClick={fetchModels}
-                            disabled={fetchingModels || !form.base_url?.trim()}
+                            disabled={fetchingModels || !modelBaseUrl}
                             title={t("settings.fetchModels")}
                           >
                             {fetchingModels ? (
@@ -396,7 +425,7 @@ function SimpleProviderDialog<T extends { id: string }>({
                             )}
                           </Button>
                         </div>
-                        {availableModels.length === 0 && !fetchingModels && form.base_url?.trim() && (
+                        {availableModels.length === 0 && !fetchingModels && modelBaseUrl && (
                           <p className="pm-settings-dlg-card-hint mt-1.5">
                             {t("settings.refreshToFetch")}
                           </p>
@@ -1094,7 +1123,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
     { key: "name", label: t("common.name"), placeholder: t("settings.embedding") },
     { key: "provider", label: t("library.provider"), options: embOptions },
     { key: "model", label: t("library.model"), placeholder: "text-embedding-3-small" },
-    { key: "base_url", label: t("settings.baseUrl"), placeholder: "https://api.openai.com/v1" },
+    { key: "base_url", label: t("settings.baseUrl"), placeholder: OPENAI_EMBEDDING_BASE_URL },
     { key: "api_key", label: t("settings.apiKey"), type: "password", placeholder: "sk-..." },
     { key: "batch_size", label: t("settings.batchSize"), type: "number", placeholder: "10" },
   ]
@@ -1569,6 +1598,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                     onRefresh={fetchEmbProviders}
                     onTest={testEmbeddingProvider}
                     onDelete={deleteEmbeddingProvider}
+                    deleteImpact={getEmbeddingProviderImpact}
                     onSetDefault={setDefaultEmbeddingProvider}
                   />
                 ))}

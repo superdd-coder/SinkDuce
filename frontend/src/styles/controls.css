@@ -133,7 +133,7 @@
 .pm-chat-tool-icon.is-on:hover { background: var(--sd-selected-hover); color: var(--sd-selected-ink); }
 .pm-chat-tool-icon:hover:not(.is-on), .pm-review-nav-row:hover, .pm-report-history-entry:hover { background: var(--sd-hover); color: var(--sd-ink); }
 .pm-report-history-entry.is-selected, .pm-review-comment.is-active, .pm-review-comment.is-history.is-active { background: var(--sd-selected) !important; box-shadow: none !important; border-color: transparent !important; }
-.pm-web-confirm-card { background: var(--sd-surface-raised); border-color: transparent; border-radius: 20px; box-shadow: var(--sd-shadow-control); }
+.pm-web-confirm-card { background: var(--sd-surface-overlay); border-color: transparent; border-radius: 20px; box-shadow: var(--sd-shadow-control); }
 .pm-web-confirm-target-select .pm-select-trigger--tag { background: var(--sd-field); color: var(--sd-text); }
 .pm-web-confirm-target-select .pm-select-trigger--tag:hover:not(.is-disabled) { background: var(--sd-hover); }
 
@@ -156,11 +156,11 @@
 .pm-report-history-entry time, .pm-report-history-summary { color: var(--sd-muted); }
 .pm-report-history-entry.is-selected .pm-report-history-dot { background: var(--sd-brand); box-shadow: none; }
 .pm-report-history-check { width: 21px; height: 21px; padding: 4px; border-radius: 50%; background: var(--sd-menu-mark); color: var(--sd-brand); }
-.pm-review-block-action { border-radius: 50%; background: var(--sd-surface-raised); box-shadow: var(--sd-shadow-control); }
+.pm-review-block-action { border-radius: 50%; box-shadow: var(--sd-shadow-control); }
 .pm-review-followup textarea { border-radius: var(--sd-radius-field); background: var(--sd-field); color: var(--sd-text); }
 .pm-review-followup textarea:focus-visible { outline: 2px solid var(--sd-focus); outline-offset: 2px; }
 
-.pm-float-bar { border: 0; border-radius: var(--sd-radius-pill); background: var(--sd-surface-overlay); box-shadow: var(--sd-shadow-float); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); }
+.pm-float-bar { border: 0; border-radius: var(--sd-radius-pill); background: var(--sd-surface-overlay); box-shadow: var(--sd-shadow-float); }
 .pm-float-bar-panel { border: 0; border-radius: var(--sd-radius-card); background: var(--sd-surface-overlay); box-shadow: var(--sd-shadow-float); padding: 16px; }
 .pm-float-bar-sep, .pm-float-bar-panel-rule { background: transparent; }
 .pm-float-bar-panel-input { border-color: transparent; border-radius: var(--sd-radius-pill); background: var(--sd-field); color: var(--sd-ink); }

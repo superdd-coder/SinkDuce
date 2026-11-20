@@ -21,6 +21,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
+import { Progress } from "@/components/ui/progress"
 import {
   Tabs,
   TabsList,
@@ -38,7 +39,7 @@ import {
   getIngestHistory,
   retryIngest,
   type IngestHistoryRecord,
-} from "@/api/collections"
+} from "@/api/client"
 import { useT } from "@/i18n/use-t"
 import { formatApiError } from "@/api/http"
 
@@ -55,6 +56,9 @@ const STAGE_KEYS: Record<string, string> = {
   storing: "stageStoring",
   summary: "stageSummary",
   interrupted: "stageInterrupted",
+  checking_model: "stageCheckingModel",
+  reindexing: "stageReindexing",
+  publishing_index: "stagePublishingIndex",
 }
 
 function stageLabel(stage: string, t: (k: string) => string): string {
@@ -205,7 +209,7 @@ export function IngestHistoryDialog({
       : ""
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={onOpenChange} onOpenChangeComplete={visible => { if (!visible) setTab("all") }}>
       <DialogContent className="pm-dialog pm-suggest-dialog">
         <DialogHeader className="shrink-0">
           <DialogKicker>{t("library.ingestKicker")}</DialogKicker>
@@ -259,7 +263,9 @@ export function IngestHistoryDialog({
                 <StatusChip status={r.status} />
                 <div className="pm-ingest-row-body">
                   <span className="pm-ingest-row-name">
-                    <span className="pm-ingest-row-file">{r.filename}</span>
+                    <span className="pm-ingest-row-file">
+                      {r.task_type === "embedding_rebuild" ? t("library.rebuildRecord", { model: r.model || "—" }) : r.filename}
+                    </span>
                     {r.attempt > 0 && (
                       <span
                         className="pm-ingest-attempt"
@@ -269,7 +275,7 @@ export function IngestHistoryDialog({
                       </span>
                     )}
                   </span>
-                  <span className="pm-ingest-row-meta">
+                  <span className={r.task_type === "embedding_rebuild" ? "pm-ingest-row-meta flex-wrap" : "pm-ingest-row-meta"}>
                     {r.status === "failed" ? (
                       <>
                         <span className="pm-ingest-stage-tag">
@@ -285,14 +291,24 @@ export function IngestHistoryDialog({
                         t,
                       )
                     ) : null}
+                    {r.task_type === "embedding_rebuild" && r.total != null && (
+                      <span className="tabular-nums">
+                        {t("library.rebuildCount", { done: r.processed ?? 0, total: r.total })} · {r.progress ?? 0}%
+                      </span>
+                    )}
                   </span>
+                  {r.task_type === "embedding_rebuild" && r.status === "processing" && r.total != null && (
+                    <Progress role="progressbar" aria-label={t("library.rebuildProgress")}
+                      aria-valuemin={0} aria-valuemax={100} aria-valuenow={r.progress ?? 0}
+                      value={r.progress} className="mt-1 h-1" />
+                  )}
                 </div>
                 {(r.status === "success" || r.status === "failed") && (
                   <span className="pm-ingest-row-time">
                     {fmtTime(r.finished_at)}
                   </span>
                 )}
-                {r.status === "failed" && (
+                {r.status === "failed" && r.task_type !== "embedding_rebuild" && (
                   <Button
                     type="button"
                     variant="ghost"

@@ -1,5 +1,5 @@
 import { HelpHint } from "@/components/shared/help-hint"
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useId } from "react"
 import {
   Dialog,
   DialogContent,
@@ -14,8 +14,9 @@ import { FieldLabel } from "@/components/ui/field-label"
 import { Eye, EyeOff, Loader2, RefreshCw, Star, Wrench } from "lucide-react"
 import { DropdownSelect } from "@/components/ui/dropdown-select"
 import { cn } from "@/lib/utils"
-import { createLLMProvider, updateLLMProvider, getAvailableModels, updateConfig, type LLMProvider } from "@/api/client"
+import { createLLMProvider, updateLLMProvider, getAvailableModels, updateConfig, type LLMProvider, type LLMApiMode } from "@/api/client"
 import { useProviderTypes } from "@/hooks/use-provider-types"
+import { resolveLLMApiMode } from "@/lib/llm-api-mode"
 import { toast } from "sonner"
 import { useT } from "@/i18n/use-t"
 
@@ -31,6 +32,7 @@ const defaultForm = {
   provider: "openai_compatible",
   model: "",
   base_url: "",
+  api_mode: null as LLMApiMode | null,
   api_key: "",
   is_default: false,
   function_call_model_ids: [] as string[],
@@ -41,6 +43,7 @@ const defaultForm = {
 
 export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: AddProviderDialogProps) {
   const t = useT()
+  const apiModeId = useId()
   const [form, setForm] = useState(defaultForm)
   const [showApiKey, setShowApiKey] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -56,6 +59,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
         provider: provider.provider || "openai_compatible",
         model: provider.model || "",
         base_url: provider.base_url || "",
+        api_mode: provider.api_mode ?? null,
         api_key: provider.api_key || "",
         is_default: provider.is_default,
         function_call_model_ids: (provider as { function_call_model_ids?: string[] }).function_call_model_ids || [],
@@ -147,7 +151,8 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
         name: form.name.trim(),
         provider: form.provider,
         model: form.default_model || form.selected_models[0],
-        base_url: form.base_url,
+        base_url: form.base_url.trim(),
+        api_mode: form.api_mode,
         api_key: form.api_key || undefined,
         function_call_model_ids: form.function_call_model_ids,
         selected_models: form.selected_models,
@@ -291,6 +296,18 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
                     value={form.base_url}
                     onChange={(e) => set("base_url", e.target.value)}
                     placeholder="https://api.openai.com/v1"
+                  />
+                </div>
+                <div className="pm-settings-dlg-field">
+                  <FieldLabel htmlFor={apiModeId}>{t("settings.apiMode")}</FieldLabel>
+                  <DropdownSelect
+                    id={apiModeId}
+                    value={resolveLLMApiMode(form.base_url, form.api_mode)}
+                    onChange={(value) => setForm((prev) => ({ ...prev, api_mode: value as LLMApiMode }))}
+                    options={[
+                      { value: "responses", label: "Responses API" },
+                      { value: "chat_completions", label: "Chat Completions API" },
+                    ]}
                   />
                 </div>
                 <div className="pm-settings-dlg-field">

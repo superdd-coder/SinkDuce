@@ -113,6 +113,8 @@ async def lifespan(app: FastAPI):
     from src.qa.search_index import index_task, watch_pending
 
     task_manager.register_handler("qa_index", index_task)
+    from src.rag.embedding_rebuild import rebuild_task
+    task_manager.register_handler("embedding_rebuild", rebuild_task)
 
     from src.meeting.transcription.onnx.threads import configure_host_math_threads
 
@@ -133,6 +135,11 @@ async def lifespan(app: FastAPI):
 
     start_sysaudio_watchdog()
     await task_manager.start()
+    from src.rag.embedding_rebuild import recover_rebuilds
+    try:
+        recover_rebuilds()
+    except Exception:
+        logger.warning("Could not recover pending embedding rebuilds", exc_info=True)
     # Load RapidOCR weights in the background so the first upload is not
     # blocked by ONNX session init. Failure is non-fatal (retried on ingest).
     import asyncio
@@ -163,6 +170,7 @@ async def lifespan(app: FastAPI):
             pending_ids = {
                 row["task_id"] for row in task_persistence.pending_upload_tasks()
             }
+            pending_ids.update(task.id for task in task_manager.get_all_tasks())
             marked = history_store.mark_interrupted(exclude_task_ids=pending_ids)
             if marked:
                 logger.info("Marked %d ingest history row(s) interrupted", marked)
@@ -182,13 +190,16 @@ async def lifespan(app: FastAPI):
     # requests can spawn per-session background tasks. Sharing the FastAPI
     # lifespan keeps a single process for HTTP API + MCP.
     from src.mcp.server import session_lifespan as _mcp_lifespan
+    from src.meeting.embedding_index import watch_connections
+    meeting_embedding_watch = asyncio.create_task(watch_connections())
     qa_index_watch = asyncio.create_task(watch_pending())
     try:
         async with _mcp_lifespan():
             yield
     finally:
         qa_index_watch.cancel()
-        await asyncio.gather(qa_index_watch, return_exceptions=True)
+        meeting_embedding_watch.cancel()
+        await asyncio.gather(qa_index_watch, meeting_embedding_watch, return_exceptions=True)
         await _staging_store.stop()
         await task_manager.stop()
         stop_sysaudio_watchdog()

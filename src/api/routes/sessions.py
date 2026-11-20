@@ -253,15 +253,34 @@ def get_session(session_id: str):
     # Filter out internal tool/function messages — they are LLM conversation
     # context (tool_call + tool_result pairs), not user-visible chat content.
     visible_msgs = [m for m in msgs if m.role in ("user", "assistant")]
+    from src.chatbox.citations import message_citation_metadata
     from src.chatbox.qa_evidence import history_permitted
+    from src.identity import get_actor, visibility
+
+    has_search_details = any(m.metadata and (m.metadata.get("skipped_collections") or m.metadata.get("embedding_searches"))
+                             for m in visible_msgs)
+    visible = visibility.visible_collection_ids(get_actor()) if has_search_details else None
 
     def render(m):
         permitted = history_permitted(m.metadata)
+        if permitted:
+            metadata = message_citation_metadata(session_id, m)
+        elif (m.metadata or {}).get("source_unavailable"):
+            metadata = {"source_unavailable": True}
+        else:
+            metadata = {"qa_source_unavailable": True}
+        if visible is not None and metadata:
+            metadata = dict(metadata)
+            if "skipped_collections" in metadata:
+                metadata["skipped_collections"] = [cid for cid in metadata["skipped_collections"] if cid in visible]
+            if "embedding_searches" in metadata:
+                metadata["embedding_searches"] = [row for row in metadata["embedding_searches"]
+                                                  if row.get("collection") in visible]
         return MessageResponse(
             id=m.id, session_id=m.session_id, role=m.role, created_at=m.created_at,
             content=m.content if permitted or (m.metadata or {}).get("source_unavailable") else "Q&A source unavailable",
             sources=m.sources if permitted else None,
-            metadata=m.metadata if permitted or (m.metadata or {}).get("source_unavailable") else {"qa_source_unavailable": True},
+            metadata=metadata,
         )
     return SessionDetailResponse(
         id=session.id,

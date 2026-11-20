@@ -21,7 +21,7 @@ import re
 import httpx
 from openai import OpenAI
 
-from .parameters import create_chat_completion
+from .parameters import create_chat_completion, is_openai_endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +107,8 @@ def probe_thinking_mode(
     inconclusive (auth/network/other errors) — callers keep the previous
     value in that case.
     """
+    if is_openai_endpoint(base_url):
+        return "none"
     if is_dashscope is None:
         is_dashscope = "dashscope.aliyuncs.com" in (base_url or "")
     extra = _thinking_off_extra_body(is_dashscope)

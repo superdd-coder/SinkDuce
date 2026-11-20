@@ -8,6 +8,8 @@ import { ReportCards } from "@/components/chat/report-cards"
 import { NoteChangeCards } from "@/components/chat/note-change-cards"
 import { mergeNoteChanges, type NoteChange } from "@/lib/note-changes"
 import { SourcesCard } from "@/components/chat/sources-card"
+import { RetrievalDetails } from "@/components/chat/retrieval-details"
+import type { EmbeddingSearch } from "@/lib/embedding-searches"
 import { StreamingAnswerBody } from "@/components/chat/streaming-answer-body"
 import { applyChatArtifacts, selectedConversationReport, type ReportReference } from "@/lib/chat-reports"
 import type { Evidence } from "@/lib/chat-citations"
@@ -27,6 +29,8 @@ import {
   GROUP_CITE_HOVER_DELAY_MS,
   GROUP_CITE_RE_SOURCE,
   groupCitesFromToolTrace,
+  groupMeetingSources,
+  meetingEvidenceAnchor,
   mergeGroupCites,
   nextGroupCiteOccurrence,
   parseCitesFromToolBody,
@@ -67,6 +71,8 @@ interface QAMessage {
   reportReviews?: ReviewBatch[]
   thinkingContent?: string
   sources?: { text: string; score: number; metadata: Record<string, unknown> }[]
+  skippedCollections?: string[]
+  embeddingSearches?: EmbeddingSearch[]
   groupCites?: GroupCite[]
   isStreaming?: boolean
   isNew?: boolean
@@ -160,7 +166,7 @@ export function MeetingQcFab({
             className={cn(
               "absolute right-full mr-2 px-2.5 py-1.5",
               "rounded-full whitespace-nowrap",
-              "border border-white/50 backdrop-blur-[8px]",
+              "border border-white/50 bg-popover",
               "-top-5",
               hintExiting
                 ? "animate-[hint-retract_0.4s_cubic-bezier(0.4,0,0.2,1)_both]"
@@ -169,7 +175,6 @@ export function MeetingQcFab({
             style={{
               color: "var(--pm-green, #1A5E3D)",
               pointerEvents: "none",
-              background: "color-mix(in srgb, #fff 72%, transparent)",
             }}
           >
             <span className="pm-meta whitespace-nowrap text-[var(--pm-green)]">{hintMessage}</span>
@@ -209,7 +214,7 @@ interface MeetingQuickChatProps {
   indexStatus?: Meeting["transcript_index_status"]
   /** group — session group_{id}, citations [n], no index overlay */
   sessionKind?: "meeting" | "group"
-  onGroupCite?: (n: number, sentenceId?: string, meetingId?: string) => void
+  onGroupCite?: (n: number, sentenceId?: string, meetingId?: string, startTime?: number) => void
   citeMeetings?: CiteMeetingLookup[]
 }
 
@@ -235,8 +240,14 @@ export function MeetingQuickChat({
     refN?: number,
   ) => {
     const cite = resolveGroupCite(cites || [], n, { refN, occurrence })
-    onGroupCite?.(n, cite?.sentence_id, cite?.meeting_id)
+    if (cite?.sentence_id) onGroupCite?.(n, cite.sentence_id, cite.meeting_id, cite.start_time)
   }, [onGroupCite])
+  const openMeetingEvidence = onGroupCite ? (evidence: Evidence) => {
+    const anchor = meetingEvidenceAnchor(evidence)
+    if (!anchor) return false
+    onGroupCite(0, anchor.sentenceId, anchor.meetingId, anchor.startTime)
+    return true
+  } : undefined
   const [indexStatus, setIndexStatus] = useState(indexStatusProp || "")
   const [indexError, setIndexError] = useState("")
   const [indexStarting, setIndexStarting] = useState(false)
@@ -281,7 +292,7 @@ export function MeetingQuickChat({
   }, [open, sessionId])
 
   useEffect(() => {
-    if (!open || indexStatus !== "building") return
+    if (!open || (indexStatus !== "building" && indexStatus !== "waiting_model")) return
     let stop = false
     const tick = async () => {
       try {
@@ -598,7 +609,7 @@ export function MeetingQuickChat({
     data: Record<string, unknown>,
     setSources: (s: QAMessage["sources"]) => void,
   ) => {
-    if (Array.isArray(data.citations) || Array.isArray(data.report_changes) || Array.isArray(data.note_changes)) {
+    if ([data.citations, data.report_changes, data.note_changes, data.embedding_searches, data.skipped_collections].some(Array.isArray)) {
       setMessages((previous) => previous.map((m) => m.id === assistantId ? {
         ...applyChatArtifacts(m, data),
         noteChanges: mergeNoteChanges(m.noteChanges, data.note_changes),
@@ -716,42 +727,22 @@ export function MeetingQuickChat({
     <div
       {...attachments.dropProps}
       className={cn(
-        "pm-qc-panel relative",
+        "pm-qc-panel pm-meeting-quick-chat",
         layout === "dock" && "pm-meeting-qc-dock-inner",
       )}
       style={layout === "rail" ? { width: SIDEBAR_W } : undefined}
     >
-      {/*
-        Dock: side-head already shows Chat title + diamond close — no second title
-        bar / divider. Tools row (Clear) floats over thread with soft fade only.
-        Rail: full Collection-style identity header.
-      */}
-      <header
-        className={cn(
-          "pm-qc-header",
-          layout === "dock" && "pm-qc-header--dock",
-          layout === "dock" && "pm-qc-header--dock-tools-only",
-        )}
-      >
-        <div className="min-w-0 flex items-center gap-2.5">
-          {layout !== "dock" && (
-            <span className="pm-qc-header-icon" aria-hidden>
-              <MessageCircle className="size-3.5" strokeWidth={2} />
-            </span>
-          )}
-          <div className="min-w-0">
-            {layout !== "dock" && (
-              <p className="pm-qc-header-title">{t("library.quickChat")}</p>
-            )}
-            {layout !== "dock" && (
-              <p className="pm-qc-header-sub truncate" title={meetingTitle}>
-                {meetingTitle}
-              </p>
-            )}
-          </div>
-        </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          <ConversationAssets key={sessionId} messages={loadingHistory ? [] : messages} sessionId={sessionId} refreshKey={`${messages.length}:${streaming}`} onOpenReport={setPreviewReport} />
+      <header className="pm-meeting-qc-toolbar">
+        <ConversationAssets
+          key={sessionId}
+          messages={loadingHistory ? [] : messages}
+          sessionId={sessionId}
+          refreshKey={`${messages.length}:${streaming}`}
+          onOpenReport={setPreviewReport}
+          onOpenMeeting={openMeetingEvidence}
+          placement="below"
+        />
+        <div className="pm-meeting-qc-actions">
           {msgCount > 0 && (
             <span
               className={cn(
@@ -790,7 +781,9 @@ export function MeetingQuickChat({
       {sessionKind !== "group" && indexStatus !== "ready" && !attachments.drafts.length && !messages.length ? (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-7">
           <div className="pm-qc-empty">
-          {indexStatus === "building" ? (
+          {indexStatus === "waiting_model" ? (
+            <p className="pm-qc-empty-sub">{t("meeting.waitingEmbedding")}</p>
+          ) : indexStatus === "building" ? (
             <>
               <span className="pm-qc-empty-icon" aria-hidden>
                 <Loader2 className="size-5 animate-spin" strokeWidth={1.75} />
@@ -832,7 +825,6 @@ export function MeetingQuickChat({
         }}
         className={cn(
           "pm-qc-thread",
-          layout === "dock" && "pm-qc-thread--dock",
           !hasMessages && !loadingHistory && "pm-qc-thread--empty",
         )}
       >
@@ -868,65 +860,59 @@ export function MeetingQuickChat({
                   )}
                 >
                   <span className="pm-qc-msg-role pm-qc-msg-role--ai">{t("chat.assistant")}</span>
-                  <div className="pm-qc-bubble pm-qc-bubble--assistant">
-                    {msg.thinkingContent && (
-                      <details
-                        className="pm-qc-thinking"
-                        open={msg.isStreaming && !msg.content ? true : undefined}
-                      >
-                        <summary>
-                          {t("chat.thinking")}
-                          {msg.isStreaming && !msg.content && (
-                            <Loader2 className="size-2.5 animate-spin inline ml-1" />
+                  <CitationScope citations={msg.citations} source={msg.content} sessionId={sessionId || ""} onOpenMeeting={openMeetingEvidence}>
+                    <div className="pm-qc-bubble pm-qc-bubble--assistant">
+                      {msg.thinkingContent && (
+                        <details
+                          className="pm-qc-thinking"
+                          open={msg.isStreaming && !msg.content ? true : undefined}
+                        >
+                          <summary>
+                            {t("chat.thinking")}
+                            {msg.isStreaming && !msg.content && (
+                              <Loader2 className="size-2.5 animate-spin inline ml-1" />
+                            )}
+                          </summary>
+                          <p>{msg.thinkingContent}</p>
+                        </details>
+                      )}
+                      {msg.content ? (
+                        <div className="pm-qc-answer break-words">
+                          {((!onGroupCite && msg.citations?.length) || msg.content.includes("[cite:")) ? (
+                            <StreamingAnswerBody content={msg.content} isStreaming={!!msg.isStreaming} richContent />
+                          ) : (
+                            <TimeContent
+                              content={msg.content}
+                              onRefClick={onRefClick}
+                              onGroupCite={onGroupCite
+                                ? (n, occurrence, refN) => handleGroupCite(n, occurrence, msg.groupCites, refN)
+                                : undefined}
+                              groupCites={enrichGroupCites(msg.groupCites || [], citeMeetings)}
+                            />
                           )}
-                        </summary>
-                        <p>{msg.thinkingContent}</p>
-                      </details>
-                    )}
-                    {msg.content ? (
-                      <div className="pm-qc-answer break-words">
-                        <CitationScope citations={msg.citations} source={msg.content} sessionId={sessionId || ""} onOpenMeeting={(evidence) => {
-                          const mid = String(evidence.source.meeting_id || "")
-                          const sid = String(evidence.location.sentence_id || "")
-                          if (sessionKind === "group" && onGroupCite) {
-                            const cite = (msg.groupCites || []).find((c) => c.meeting_id === mid)
-                            onGroupCite(cite?.n || 0, sid, mid)
-                          } else if (sid) onRefClick?.(sid)
-                        }}>
-                        {(msg.citations?.length || msg.content.includes("[cite:")) ? <StreamingAnswerBody content={msg.content} isStreaming={!!msg.isStreaming} richContent /> : <TimeContent
-                          content={msg.content}
-                          onRefClick={onRefClick}
-                          onGroupCite={onGroupCite
-                            ? (n, occurrence, refN) => handleGroupCite(n, occurrence, msg.groupCites, refN)
-                            : undefined}
-                          groupCites={enrichGroupCites(msg.groupCites || [], citeMeetings)}
-                        />}
-                        </CitationScope>
-                      </div>
-                    ) : msg.isStreaming ? (
-                      <div className="pm-qc-typing">
-                        <Loader2 className="size-3.5 animate-spin" />
-                        <span>{t("chat.educing")}</span>
-                      </div>
-                    ) : (
-                      <p className="pm-qc-bubble-text">{msg.content}</p>
-                    )}
-                    {!msg.isStreaming && <NoteChangeCards notes={msg.noteChanges} />}
-                    <ReportCards reports={msg.reportChanges} onOpenReport={setPreviewReport} />
-                    {msg.role === "assistant" && !msg.isStreaming && (() => {
-                      const groupShown = displayedGroupCites(msg.content, enrichGroupCites(msg.groupCites || [], citeMeetings))
-                      const sources = groupShown.length ? groupShown.map(item => ({
-                        text: '', score: 1, metadata: {
-                          id: `${item.meeting_id}:${item.sentence_id || item.ref_n || item.displayIndex}`,
-                          source_type: 'meeting', meeting_id: item.meeting_id,
-                          sentence_id: item.sentence_id, source_label: item.title || t('meeting.thisMeeting'),
-                        },
-                      })) : msg.sources || []
-                      return sources.length ? <CitationScope citations={msg.citations} source={msg.content} sessionId={sessionId || ""}>
-                        <SourcesCard sources={sources}/>
-                      </CitationScope> : null
-                    })()}
-                  </div>
+                        </div>
+                      ) : msg.isStreaming ? (
+                        <div className="pm-qc-typing">
+                          <Loader2 className="size-3.5 animate-spin" />
+                          <span>{t("chat.educing")}</span>
+                        </div>
+                      ) : (
+                        <p className="pm-qc-bubble-text">{msg.content}</p>
+                      )}
+                      {!msg.isStreaming && <NoteChangeCards notes={msg.noteChanges} />}
+                      <ReportCards reports={msg.reportChanges} onOpenReport={setPreviewReport} />
+                      {!msg.isStreaming && (() => {
+                        const meetingSources = onGroupCite
+                          ? groupMeetingSources(msg.content, msg.groupCites || [], msg.citations, citeMeetings)
+                          : []
+                        const sources = (msg.sources || []).filter((row) => !onGroupCite || row.metadata?.source_type !== "meeting")
+                        return <SourcesCard sources={sources} meetingSources={meetingSources} />
+                      })()}
+                      {!!(msg.embeddingSearches?.length || msg.skippedCollections?.length) && (
+                        <RetrievalDetails searches={msg.embeddingSearches} skipped={msg.skippedCollections} />
+                      )}
+                    </div>
+                  </CitationScope>
                 </div>
               ),
             )}
@@ -1000,7 +986,7 @@ export function MeetingQuickChat({
             "absolute right-full",
             "mr-3 px-2.5 py-1.5",
             "rounded-full whitespace-nowrap",
-            "bg-[var(--pm-float,#fdfbf7)]",
+            "bg-popover",
             "shadow-[var(--pm-shadow-sm)]",
             "-top-6",
             hintExiting

@@ -7,6 +7,8 @@ consecutive excerpt refs) — and resolves to the span's first sentence.
 */
 
 import { MEETING_CITE_RE_SOURCE, parseMeetingRefGroups } from "./meeting-ref-chips.ts"
+import { citationOrder, type Evidence } from "./chat-citations.ts"
+import type { TranscriptSegment } from "../api/meeting.ts"
 
 /** Hover debounce before the meeting-name tooltip opens. */
 export const GROUP_CITE_HOVER_DELAY_MS = 400
@@ -15,6 +17,7 @@ export type GroupCite = {
   n: number
   meeting_id?: string
   sentence_id?: string
+  start_time?: number
   ref_n?: number
   title?: string
   date?: string
@@ -30,6 +33,26 @@ export type CiteMeetingLookup = {
   id: string
   title: string
   created_at?: string
+}
+
+export type GroupMeetingSource = {
+  id: string
+  title: string
+  date?: string
+  excerpts: Evidence[]
+}
+
+function transcriptTime(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+export function meetingEvidenceAnchor(evidence: Evidence) {
+  if (evidence.kind !== "meeting" || typeof evidence.source.meeting_id !== "string") return undefined
+  const meetingId = evidence.source.meeting_id.trim()
+  const location = evidence.location
+  const sentenceId = typeof location.sentence_id === "string" ? location.sentence_id.trim() : ""
+  const startTime = transcriptTime(location.start_time)
+  if (meetingId && (sentenceId || startTime !== undefined)) return { meetingId, sentenceId, startTime }
 }
 
 /** Optional wrapping parens / extra brackets around `[n]`, `[n:k]` or `[n:k-l]`.
@@ -53,24 +76,59 @@ export function paddedSentenceId(refN: number): string {
   return `stt_${String(refN).padStart(4, "0")}`
 }
 
+function sentenceKey(id: string): string {
+  const ref = /(?:^|[_:-])stt_(\d+)$/.exec(id)?.[1] ?? /^(\d+)$/.exec(id)?.[1]
+  return ref ? paddedSentenceId(Number(ref)) : id
+}
+
+/** Resolve a citation against the original sentence IDs, or its saved playback time. */
+export function findGroupTranscriptIndex(
+  segments: readonly Pick<TranscriptSegment, "sentence_id" | "start" | "end">[],
+  sentenceId?: string,
+  startTime?: number,
+): number {
+  const id = sentenceId?.trim()
+  if (id) {
+    const exact = segments.findIndex((segment) => segment.sentence_id === id)
+    if (exact >= 0) return exact
+    const key = sentenceKey(id)
+    const alias = segments.findIndex((segment) => !!segment.sentence_id && sentenceKey(segment.sentence_id) === key)
+    if (alias >= 0) return alias
+  }
+  const time = transcriptTime(startTime)
+  if (time !== undefined) {
+    const exact = segments.findIndex((segment) => segment.start === time)
+    if (exact >= 0) return exact
+    return segments.findIndex((segment) => segment.start < time && time < segment.end)
+  }
+  // Older transcript-only records do not send sentence IDs. Their refs are one-based row numbers.
+  if (id && segments.every((segment) => !segment.sentence_id)) {
+    const ref = /^stt_(\d+)$/.exec(sentenceKey(id))?.[1]
+    const index = Number(ref) - 1
+    if (index >= 0 && index < segments.length) return index
+  }
+  return -1
+}
+
 export function resolveGroupCite(
   cites: GroupCite[],
   n: number,
   opts?: { refN?: number; occurrence?: number },
 ): GroupCite | undefined {
   const list = cites.filter((c) => c.n === n)
+  if (list.length === 0) return undefined
   if (opts?.refN != null && Number.isFinite(opts.refN)) {
     const padded = paddedSentenceId(opts.refN)
     const hit = list.find(
-      (c) =>
-        c.ref_n === opts.refN ||
-        c.sentence_id === padded ||
-        c.sentence_id?.endsWith(padded),
+      (c) => c.ref_n === opts.refN || sentenceKey(c.sentence_id || "") === padded,
     )
     if (hit) return hit
+    const meeting = list.find((cite) => cite.meeting_id)
     return {
       n,
-      meeting_id: list[0]?.meeting_id,
+      meeting_id: meeting?.meeting_id,
+      title: meeting?.title,
+      date: meeting?.date,
       sentence_id: padded,
       ref_n: opts.refN,
     }
@@ -83,12 +141,11 @@ export function resolveGroupCiteByRefN(
   refN: number,
 ): GroupCite | undefined {
   const padded = paddedSentenceId(refN)
-  return cites.find(
-    (c) =>
-      c.ref_n === refN ||
-      c.sentence_id === padded ||
-      c.sentence_id?.endsWith(padded),
+  const matches = cites.filter(
+    (c) => c.ref_n === refN || sentenceKey(c.sentence_id || "") === padded,
   )
+  const first = matches[0]
+  if (first && matches.every((cite) => cite.n === first.n && cite.meeting_id === first.meeting_id)) return first
 }
 
 export function parseGroupCites(raw: unknown): GroupCite[] {
@@ -108,6 +165,7 @@ export function parseGroupCites(raw: unknown): GroupCite[] {
       n,
       meeting_id: mid || undefined,
       sentence_id: sid || undefined,
+      start_time: transcriptTime(rec.start_time),
       ref_n: Number.isFinite(refN) && refN > 0 ? refN : undefined,
       title: title || undefined,
       date: date || undefined,
@@ -194,12 +252,12 @@ function isoDateOnly(raw?: string): string {
   return d.toISOString().slice(0, 10)
 }
 
-export function formatGroupCiteDate(date?: string): string {
+export function formatGroupCiteDate(date?: string, locale?: string): string {
   const raw = isoDateOnly(date)
   if (!raw) return ""
   const d = new Date(`${raw}T00:00:00`)
   if (Number.isNaN(d.getTime())) return raw
-  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
+  return d.toLocaleDateString(locale, { year: "numeric", month: "short", day: "numeric" })
 }
 
 export function enrichGroupCites(
@@ -301,4 +359,51 @@ export function displayedGroupCites(
     })
   }
   return out
+}
+
+/** One meeting per source, with a distinct link for each cited passage. */
+export function groupMeetingSources(
+  content: string,
+  groupCites: GroupCite[],
+  citations: Evidence[] = [],
+  meetings: CiteMeetingLookup[] = [],
+): GroupMeetingSource[] {
+  const byMeeting = new Map(meetings.map((meeting) => [meeting.id, meeting]))
+  const groups = new Map<string, GroupMeetingSource>()
+  const seen = new Set<string>()
+  const add = (evidence: Evidence, date?: string) => {
+    const anchor = meetingEvidenceAnchor(evidence)
+    if (!anchor) return
+    const { meetingId, sentenceId, startTime } = anchor
+    const key = JSON.stringify([meetingId, sentenceId ? sentenceKey(sentenceId) : startTime])
+    if (seen.has(key)) return
+    seen.add(key)
+    const meeting = byMeeting.get(meetingId)
+    const title = meeting?.title || evidence.title
+    const label = title === meetingId || title === "Source" ? "" : title
+    const group: GroupMeetingSource = groups.get(meetingId) ?? { id: meetingId, title: "", excerpts: [] }
+    group.title ||= label
+    group.date ||= date || isoDateOnly(meeting?.created_at)
+    group.excerpts.push(evidence)
+    groups.set(meetingId, group)
+  }
+
+  const byId = new Map(citations.map((evidence) => [evidence.id, evidence]))
+  // Prefer saved evidence for a passage that has both citation formats.
+  for (const id of citationOrder(content)) {
+    const evidence = byId.get(id)
+    if (evidence) add(evidence)
+  }
+  for (const cite of displayedGroupCites(content, groupCites)) {
+    if (!cite.meeting_id || !cite.sentence_id) continue
+    add({
+      id: `meeting:${cite.meeting_id}:${cite.sentence_id}`,
+      kind: "meeting",
+      title: cite.title || "",
+      quote: "",
+      source: { meeting_id: cite.meeting_id },
+      location: { sentence_id: cite.sentence_id, start_time: cite.start_time },
+    }, cite.date)
+  }
+  return [...groups.values()]
 }

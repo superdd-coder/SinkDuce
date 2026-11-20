@@ -1,8 +1,6 @@
-/* Menu family 02 — soft glass, shared by form selects and every workspace.
-   Selection is a pale capsule; the only solid mark is a white circular check.
-   Keep destructive/status colors semantic, and put glass on the outer surface only. */
+/* Form selects and workspace menus share an opaque surface in both themes.
+   Selection and hover colors are painted over that surface. */
 :root {
-  --sd-menu-surface: linear-gradient(140deg, #ffffffd9, #ffffffe8 42%, #f6f9f6be);
   --sd-menu-rail: #c8d1ca1a;
   --sd-menu-ink: #34473b;
   --sd-menu-muted: #78877e;
@@ -17,7 +15,6 @@
   --pm-menu-ease: var(--sd-menu-ease);
 }
 .dark {
-  --sd-menu-surface: linear-gradient(140deg, #303a34f2, #26322be8);
   --sd-menu-rail: #131e1740;
   --sd-menu-ink: #e1eae4;
   --sd-menu-muted: #a1b3a7;
@@ -34,11 +31,9 @@
     .sd-menu-surface) {
   border: 0 !important;
   border-radius: 28px !important;
-  background: var(--sd-menu-surface) !important;
+  background: var(--sd-surface-overlay) !important;
   color: var(--sd-menu-ink);
   box-shadow: var(--sd-menu-shadow) !important;
-  backdrop-filter: blur(32px) saturate(1.08);
-  -webkit-backdrop-filter: blur(32px) saturate(1.08);
   outline: none;
 }
 :is(.pm-menu, .pm-select-menu, .pm-timeline-menu, .pm-ws-menu, .pm-files-menu,
@@ -110,7 +105,6 @@
 .pm-select-menu { z-index: 450; max-width: calc(100vw - 24px); }
 .pm-select-opt + .pm-select-opt, .pm-menu-item + .pm-menu-item { margin-top: 3px; }
 .pm-select-filter { border: 0 !important; border-radius: 99px; margin-bottom: 6px; background: var(--sd-field) !important; }
-.pm-menu .pm-select-menu { backdrop-filter: none; }
 
 /* One glass surface with an independently anchored root. Child panels may
    extend the surface, but never stretch the root or change its item padding. */
@@ -144,6 +138,7 @@
 .sd-menu-icon-button:hover, .sd-menu-icon-button[aria-expanded="true"] { background: var(--sd-menu-parent); }
 .sd-multi-options { overflow-y: auto; min-height: 70px; max-height: 320px; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .sd-multi-options .pm-menu-item { min-height: 54px; padding: 9px 12px !important; margin-top: 3px; }
+.sd-multi-options .pm-menu-item:disabled { color: var(--sd-menu-muted) !important; }
 .sd-multi-options .pm-menu-item > span:not(.sd-menu-check) { flex: 1; min-width: 0; overflow: hidden; }
 .sd-multi-options .sd-menu-label { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .sd-menu-empty { padding: 28px 14px; font-size: 12px; text-align: center; color: var(--sd-menu-muted); }
@@ -165,13 +160,6 @@
 .pm-report-history-entry { min-height: 52px; }
 .pm-date-panel { padding: 16px !important; }
 .pm-date-day.is-on { background: var(--sd-menu-selected) !important; }
-@media (prefers-reduced-transparency: reduce) {
-  :is(.pm-menu, .pm-select-menu, .pm-date-panel, .pm-timeline-menu, .pm-ws-menu, .pm-files-menu,
-      .pm-slash-menu, .pm-assets-card, .pm-report-history-menu, .pm-review-popover, .pm-lt-menu,
-      .pm-chat-pop, .sd-project-menu, .sd-folder-popover, .sd-menu-surface) {
-    background: var(--sd-surface-overlay) !important; backdrop-filter: none; -webkit-backdrop-filter: none;
-  }
-}
 .pm-menu.sd-select-menu { display: flex; flex-direction: column; width: 240px; overflow: hidden; transform: none; }
 .sd-select-search { flex: 0 0 37px; margin: 2px 2px 8px; }
 .sd-select-options { min-height: 0; max-height: 320px; overflow-y: auto; overscroll-behavior: contain; }

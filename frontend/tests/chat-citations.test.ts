@@ -100,6 +100,28 @@ test("artifact events retain reports while updating the current answer's evidenc
   assert.equal(message.citations[0].id, "e_a")
 })
 
+test("skipped collections survive later chat events and history replay", async () => {
+  const { applyChatArtifacts } = await import("../src/lib/chat-reports.ts")
+  const stored = { skipped_collections: ["books", null, 123, "minutes"] }
+  const answer = applyChatArtifacts({ skippedCollections: [] as string[] }, stored)
+  assert.deepEqual(answer.skippedCollections, ["books", "minutes"])
+  assert.deepEqual(applyChatArtifacts(answer, { citations: [] }).skippedCollections, ["books", "minutes"])
+})
+
+test("retrieval details replay only completed searches and distinguish models with equal dimensions", async () => {
+  const { embeddingSearches } = await import("../src/lib/embedding-searches.ts")
+  const { applyChatArtifacts } = await import("../src/lib/chat-reports.ts")
+  const a = { collection: "first", model: "model-a", provider_id: "a", provider_name: "Alpha", dimensions: 3, mode: "dense" }
+  const b = { ...a, collection: "second", model: "model-b", provider_id: "b", mode: "hybrid" }
+  const rows = embeddingSearches([{ ...a, kind: "retrieval_fallback" }, { ...a, query: "variant" }, b,
+    { ...b, kind: "plan", collection: "planned" }, { ...a, dimensions: 0 }, null])
+  assert.deepEqual(rows, [a, b])
+  const history = { embedding_searches: rows, skipped_collections: ["offline"] }
+  const answer = applyChatArtifacts({ embeddingSearches: [], skippedCollections: [] }, history)
+  assert.deepEqual(applyChatArtifacts(answer, { citations: [] }), { ...answer, citations: [] })
+  assert.deepEqual(answer, { embeddingSearches: [a, b], skippedCollections: ["offline"] })
+})
+
 test("long-report navigation follows real headings and excludes code examples", async () => {
   const { reportSections } = await import("../src/lib/chat-reports.ts")
   const source = "```md\n## An example\n```\n\n" + Array.from({ length: 4 }, (_, i) => `## Part ${i + 1}\n\n${"Details. ".repeat(200)}\n\n`).join("")

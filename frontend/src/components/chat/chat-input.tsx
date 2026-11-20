@@ -291,7 +291,7 @@ export function ChatInput() {
           </button>
           <MultiSelectMenu open={showCollections} onClose={() => setShowCollections(false)} anchorRef={buttonRef}
             value={selectedCollections} onChange={setSelectedCollections} label={t("common.collections")}
-            options={collections.map(col => ({ value: col.id, label: col.name, description: col.archived ? t("library.archivedTag") : undefined }))} />
+            options={collections.map(col => ({ value: col.id, label: col.name, disabled: col.embedding_disconnected, description: col.embedding_disconnected ? t("library.embeddingDisconnected") : col.archived ? t("library.archivedTag") : undefined }))} />
         </div>
 
         <span className="flex-1" />

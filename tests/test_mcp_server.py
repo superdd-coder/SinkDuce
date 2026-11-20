@@ -285,6 +285,7 @@ class TestToolSignatures:
         import inspect
         sig = inspect.signature(update_collection_config)
         assert "chunk_mode" not in sig.parameters
+        assert "embedding_provider_id" not in sig.parameters
         assert "embedding_provider" not in sig.parameters
         assert "embedding_model" not in sig.parameters
 

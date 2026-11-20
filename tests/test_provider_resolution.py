@@ -105,8 +105,8 @@ class TestCollectionEmbeddingResolution:
             called_cfg = mock_create.call_args[0][0]
             assert called_cfg.id == "emb-1"
 
-    def test_resolve_nonexistent_provider_id_falls_back(self):
-        """Invalid embedding_provider_id falls back to global default."""
+    def test_unresolved_embedding_provider_is_disconnected(self):
+        """Unknown historical providers must never fall through to a different model."""
         config = _make_embedding_config()
         mock_db = MagicMock()
         mock_db.get_vector_size.return_value = 512
@@ -120,11 +120,8 @@ class TestCollectionEmbeddingResolution:
             mock_create.return_value = MagicMock(dimensions=512)
 
             col_config = {"embedding_provider_id": "nonexistent"}
-            get_collection_embedding(col_config, "test_col")
-
-            mock_create.assert_called_once()
-            called_cfg = mock_create.call_args[0][0]
-            assert called_cfg.id == "emb-1"
+            assert get_collection_embedding(col_config, "test_col") is None
+            mock_create.assert_not_called()
 
     def test_actual_dim_overrides_provider_dim(self):
         """Collection's actual vector size overrides provider's dimensions."""

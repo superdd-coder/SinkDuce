@@ -248,7 +248,7 @@ def test_group_cites_every_hit_sentence_in_retrieve_order():
     hits = [
         {
             "meeting_id": "m_b",
-            "sentences": [{"ref_n": 6, "sentence_id": "stt_0006", "text": "2.80"}],
+            "sentences": [{"ref_n": 6, "sentence_id": "stt_0006", "text": "2.80", "start_time": 0.0}],
         },
         {
             "meeting_id": "m_a",
@@ -272,6 +272,7 @@ def test_group_cites_every_hit_sentence_in_retrieve_order():
             "sentence_id": "stt_0006",
             "title": "Beta",
             "date": "2026-08-12",
+            "start_time": 0.0,
         },
         {
             "n": 1,

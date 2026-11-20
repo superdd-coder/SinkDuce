@@ -12,6 +12,21 @@ def task_collection(task_id: str, task: Any | None = None) -> str | None:
     return getattr(task, "collection", None) or args.get("collection")
 
 
+def restore_task_requester(saved):
+    """Restore a server-recorded requester. Unattributed jobs cannot run as the owner."""
+    from src.identity.actor import Actor
+
+    if isinstance(saved, dict) and all(isinstance(saved.get(k), str) and saved[k] for k in ("id", "kind", "role_id")):
+        kind = saved["kind"]
+        if kind == "key" or (kind in {"local", "system"} and saved["id"] == kind and saved["role_id"] == "owner"):
+            return Actor(id=saved["id"], kind=kind, role_id=saved["role_id"])
+    return Actor(id="unattributed", kind="anonymous", role_id="")
+
+
+def _collection_write_action(task_type):
+    return "collection.update" if task_type == "embedding_rebuild" else "file.update"
+
+
 def _task_access(actor: Any, task_id: str, task: Any, *, write: bool) -> bool:
     from src.identity.policy import can, is_owner
     from src.identity.visibility import is_collection_visible
@@ -32,7 +47,7 @@ def _task_access(actor: Any, task_id: str, task: Any, *, write: bool) -> bool:
     collection = task_collection(task_id, task)
     if not write:
         return not collection or is_collection_visible(actor, collection)
-    return bool(collection) and can(actor, "file.update", {"collection_id": collection})
+    return bool(collection) and can(actor, _collection_write_action(kind), {"collection_id": collection})
 
 
 def require_execution_permission(actor, task_type: str, collection: str, args: dict) -> None:
@@ -52,7 +67,7 @@ def require_execution_permission(actor, task_type: str, collection: str, args: d
         authorize(actor, "meeting.update", {"meeting": meeting.model_dump()})
         if task_type != "upload":
             return
-    authorize(actor, "file.update", {"collection_id": collection})
+    authorize(actor, _collection_write_action(task_type), {"collection_id": collection})
 
 
 def can_see_task(actor: Any, task_id: str, task: Any | None = None) -> bool:

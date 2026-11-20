@@ -139,3 +139,16 @@ def test_handler_skips_persist_after_done(store):
 
     asyncio.run(consume_all())
     assert _assistant_messages(store, sid) == []
+
+
+def test_interrupted_answer_keeps_completed_search_details(store):
+    agent = _stub_agent(store)
+    row = {"collection": "fixture", "model": "vector-a", "dimensions": 4, "mode": "dense"}
+    async def chat_stream(*args, **kwargs):
+        yield {"type": "tool_result", "embedding_searches": [row], "skipped_collections": ["offline"]}
+        yield {"type": "token", "content": "Partial answer"}
+    agent.chat_stream = chat_stream
+    sid = store.create_session(title="Fixture").id
+    _closed_mid_stream(agent, sid)
+    meta = _assistant_messages(store, sid)[0].metadata
+    assert meta["embedding_searches"] == [row] and meta["skipped_collections"] == ["offline"]

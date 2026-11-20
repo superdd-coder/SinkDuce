@@ -41,12 +41,12 @@ export function MultiSelectMenu({ open, onClose, anchorRef, value, onChange, opt
       {bulkPresence.mounted && <div className={`sd-multi-bulk${bulkPresence.shown ? " is-open" : ""}`} role="menu" aria-label={t("menus.bulk")} id={`${id}-bulk`} ref={bulkPanel} data-menu-list
         inert={!open || !bulkOpen || undefined} aria-hidden={!open || !bulkOpen || undefined}>
         <MenuItem disabled={!results.some(option => !option.disabled && !value.includes(option.value))} onClick={() => { onChange([...new Set([...value, ...results.filter(option => !option.disabled).map(option => option.value)])]); closeBulk() }}><CheckCheck size={16} />{t("menus.selectResults")}</MenuItem>
-        <MenuItem disabled={!value.length} onClick={() => { onChange(value.filter(key => options.some(option => option.value === key && option.disabled))); closeBulk() }}><Eraser size={16} />{t("menus.clearSelection")}</MenuItem>
+        <MenuItem disabled={!value.length} onClick={() => { onChange([]); closeBulk() }}><Eraser size={16} />{t("menus.clearSelection")}</MenuItem>
       </div>}
     </div>
     <div className="sd-multi-options" role="listbox" aria-label={label} aria-multiselectable="true" data-menu-list>
       {results.map(option => <MenuItem key={option.value} role="option" aria-selected={value.includes(option.value)} disabled={option.disabled}
-        title={option.label} active={value.includes(option.value)} onClick={() => toggle(option.value)}>
+        title={option.description || option.label} active={value.includes(option.value)} onClick={() => toggle(option.value)}>
         {option.icon || <FolderClosed className="sd-menu-icon" size={18} aria-hidden />}
         <span><span className="sd-menu-label">{option.label}</span>{option.description && <small className="sd-menu-description">{option.description}</small>}</span>
         <MenuCheck checked={value.includes(option.value)} />

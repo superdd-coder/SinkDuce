@@ -1,4 +1,4 @@
-"""Persistent ingest history for upload tasks.
+"""Persistent collection history for file uploads and embedding index rebuilds.
 
 One JSON file per collection (``data/task_history/<collection_id>.json``)
 recording every file ingest as a row: queued → processing → success/failed,
@@ -8,8 +8,7 @@ per-file retry.
 
 Writes go through a module-level cache + lock; every mutation flushes to
 disk (cheap at this scale: rows are small, mutations are a handful per
-file).  Upload tasks only — background maintenance (sparse_recalc,
-doc_summary, consolidate) is deliberately not recorded here.
+file). Rebuild counters stay in memory between stages and flush on completion.
 """
 
 from __future__ import annotations
@@ -83,8 +82,11 @@ def record_queued(
     filename: str,
     kwargs: dict | None = None,
     file_id: str = "",
+    *,
+    task_type: str = "upload",
+    model: str = "",
 ) -> dict:
-    """Create (or reset) the history row for an enqueued upload task.
+    """Create or reset the history row for an upload or rebuild.
 
     Re-enqueueing a known task_id (crash recovery) reuses and resets the
     existing row instead of duplicating it.
@@ -103,7 +105,7 @@ def record_queued(
             "filename": filename,
             "collection_id": collection_id,
             "file_id": file_id or (kwargs or {}).get("file_id", ""),
-            "task_type": "upload",
+            "task_type": task_type,
             "status": "queued",
             "stage": "",
             "error": "",
@@ -111,6 +113,8 @@ def record_queued(
             "finished_at": "",
             "kwargs": kwargs or {},
         })
+        if task_type == "embedding_rebuild":
+            row.update(model=model, progress=0, processed=0, total=None)
         _prune(data)
         _flush(collection_id)
         return dict(row)
@@ -126,6 +130,18 @@ def mark_processing(collection_id: str, task_id: str) -> None:
         _flush(collection_id)
 
 
+def update_rebuild_progress(collection_id: str, task_id: str, stage: str, progress: int,
+                            processed: int, total: int | None) -> None:
+    with _LOCK:
+        row = _find_by_task(_load(collection_id), task_id)
+        if not row or row["status"] in TERMINAL_STATUSES:
+            return
+        changed_stage = row["stage"] != stage
+        row.update(status="processing", stage=stage, progress=progress, processed=processed, total=total)
+        if changed_stage:
+            _flush(collection_id)
+
+
 def mark_success(collection_id: str, task_id: str) -> None:
     with _LOCK:
         data = _load(collection_id)
@@ -133,6 +149,8 @@ def mark_success(collection_id: str, task_id: str) -> None:
         if row is None:
             return
         row["status"] = "success"
+        if row.get("task_type") == "embedding_rebuild":
+            row["progress"] = 100
         row["finished_at"] = _now()
         row["error"] = ""
         _flush(collection_id)
@@ -235,9 +253,9 @@ def list_records(collection_id: str) -> list[dict]:
     return rows
 
 
-def status_counts(collection_id: str) -> dict[str, int]:
+def status_counts(collection_id: str, records: list[dict] | None = None) -> dict[str, int]:
     counts = {"queued": 0, "processing": 0, "success": 0, "failed": 0}
-    for row in list_records(collection_id):
+    for row in records if records is not None else list_records(collection_id):
         status = row.get("status")
         if status in counts:
             counts[status] += 1

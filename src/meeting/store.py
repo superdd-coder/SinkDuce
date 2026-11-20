@@ -293,6 +293,9 @@ def update_meeting(meeting_id: str, **fields) -> Meeting:
     # 锁外广播：publish 只做入队，不回调业务代码，但放在锁外能避免将来有人
     # 在订阅端做同步工作时把会议写锁拖长。
     _emit_state_change(meeting_id, before, after)
+    if fields.get("status") == MeetingStatus.completed or fields.get("archived") is False:
+        from src.meeting.embedding_index import connections_changed
+        connections_changed()
     return meeting
 
 
@@ -944,6 +947,8 @@ def discard_recording(meeting_id: str) -> Meeting:
         speaker_slots_status=None,
         speaker_slots_ms=None,
         transcript_index_status="",
+        transcript_index_collection="",
+        transcript_retry_after=0,
         transcript_index_error="",
     )
     logger.info("[DISCARD] Meeting %s fully discarded, reset to 'created'", meeting_id)

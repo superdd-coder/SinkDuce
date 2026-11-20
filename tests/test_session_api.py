@@ -24,6 +24,60 @@ def store(tmp_path):
 
 
 class TestSessionAPI:
+    def test_saved_answer_recovers_only_its_exact_snapshot_citations(self, store):
+        from src.chatbox.citations import EvidenceRegistry, registry_from_history
+        from src.main import app
+
+        sid = store.create_session(title="Index fixture").id
+        source = {"text": "A" * 1600 + "The measured value.", "metadata": {
+            "file_id": "sample-file", "version_id": "revision-a", "page_number": 4, "char_offset": 100,
+        }}
+        original = EvidenceRegistry(sid)
+        original.capture("lookup_collection", "", sources=[source])
+        first, second = original.records()
+        other_session = EvidenceRegistry("other-session").register(source["text"][:1600], source["metadata"])
+        content = (f"Result[cite:evidence_id_{second['id']}] again[cite:{second['id']}]. "
+                   f"Other[cite:evidence_id_{other_session['id']}].")
+        metadata = {"citations": [first], "tool_calls": 1}
+        store.add_message(sid, "assistant", content, sources=[source], metadata=metadata)
+        store.add_message(sid, "assistant", content, sources=[{
+            **source, "metadata": {**source["metadata"], "version_id": "revision-b"},
+        }], metadata={"citations": []})
+        store.add_message(sid, "assistant", content, sources=[source], metadata={"qa_projects": ["restricted"]})
+        with patch("src.api.routes.sessions.services") as svc, patch(
+            "src.chatbox.qa_evidence.search_index.can_read", return_value=False,
+        ):
+            svc.session_store = store
+            client = local_owner_client(app)
+            result = client.get(f"/api/sessions/{sid}")
+            history = registry_from_history(store, sid)
+        assert result.status_code == 200
+        repaired, wrong_version, denied = result.json()["messages"]
+        assert repaired["metadata"] == {**metadata, "citations": [first, second]}
+        assert second["quote"] == "The measured value." and second["location"] == {"char_offset": 1700}
+        assert wrong_version["metadata"]["citations"] == []
+        assert denied["metadata"] == {"qa_source_unavailable": True}
+        assert denied["sources"] is None
+        assert history.used(content) == [second]
+        assert store.get_messages(sid)[0].metadata == metadata
+
+    def test_retrieval_details_respect_current_collection_access(self, store):
+        from src.main import app
+
+        session = store.create_session(title="Fixture search")
+        rows = [{"collection": cid, "model": cid, "dimensions": 4} for cid in ("available", "removed")]
+        store.add_message(session.id, "assistant", "Answer", metadata={
+            "skipped_collections": ["offline", "removed"], "embedding_searches": rows})
+        with patch("src.api.routes.sessions.services") as svc, patch(
+            "src.identity.visibility.visible_collection_ids", return_value={"available", "offline"},
+        ):
+            svc.session_store = store
+            client = local_owner_client(app)
+            response = client.get(f"/api/sessions/{session.id}")
+        assert response.status_code == 200
+        meta = response.json()["messages"][0]["metadata"]
+        assert meta["skipped_collections"] == ["offline"] and meta["embedding_searches"] == rows[:1]
+
     def test_create_session(self, store):
         """POST /api/sessions with defaults."""
         from src.main import app

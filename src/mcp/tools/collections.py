@@ -124,7 +124,7 @@ async def get_collection(collection: str, ctx: Context | None = None) -> str:
 )
 async def create_collection(
     name: str,
-    dimensions: int = 1024,
+    dimensions: int | None = None,
     chunk_mode: str = "normal",
     parent_strategy: str = "paragraph",
     chunk_size: int = 512,
@@ -164,11 +164,21 @@ async def create_collection(
     def _run() -> dict[str, Any]:
         from src.services import services
         from src.collections import store as cstore
+        from src.identity import authorize, get_actor
+
+        collection_id = cstore.generate_id()
+        authorize(get_actor(), "collection.create", {"collection_id": collection_id})
 
         if services.db.collection_exists(name):
             return err(f"Collection '{name}' already exists")
-        if not services.embedding:
-            return err("Embedding provider not configured")
+        from src.rag.collection_utils import new_collection_provider
+        from src.providers.embedding import create_embedding_provider
+        try:
+            provider = new_collection_provider(embedding_provider_id, model=embedding_model,
+                                               base_url=embedding_base_url, provider=embedding_provider)
+        except ValueError as exc:
+            return err(str(exc))
+        size = dimensions or provider.dimensions or create_embedding_provider(provider).dimensions
 
         chunk_config: dict[str, Any] = {
             "chunk_mode": chunk_mode,
@@ -188,18 +198,7 @@ async def create_collection(
             "agent_max_iterations": agent_max_iterations,
             "rerank_top_k": rerank_top_k,
         }
-        if embedding_provider_id is not None:
-            chunk_config["embedding_provider_id"] = embedding_provider_id
-        if embedding_provider is not None:
-            chunk_config["embedding_provider"] = embedding_provider
-        if embedding_model is not None:
-            chunk_config["embedding_model"] = embedding_model
-        if embedding_base_url is not None:
-            chunk_config["embedding_base_url"] = embedding_base_url
-        if embedding_api_key is not None:
-            chunk_config["embedding_api_key"] = embedding_api_key
-        if embedding_batch_size is not None:
-            chunk_config["embedding_batch_size"] = embedding_batch_size
+        chunk_config["embedding_provider_id"] = provider.id
         if rerank_provider_id is not None:
             chunk_config["rerank_provider_id"] = rerank_provider_id
         if rerank_provider is not None:
@@ -213,17 +212,12 @@ async def create_collection(
         if allowed_file_types is not None:
             chunk_config["allowed_file_types"] = allowed_file_types
 
-        collection_id = cstore.generate_id()
-        # RBAC：闸门必须在副作用之前（与 HTTP 侧同一修法）。否则被拒者仍留孤儿空集合。
-        from src.identity import authorize, get_actor
-
-        authorize(get_actor(), "collection.create", {"collection_id": collection_id})
-        services.db.create_collection(collection_id, vector_size=dimensions, chunk_config=chunk_config)
+        services.db.create_collection(collection_id, vector_size=size, chunk_config=chunk_config)
         cstore.create_collection_meta(collection_id, name, qdrant_name=collection_id)
         return ok(
             id=collection_id,
             message=f"Collection '{name}' created",
-            dimensions=dimensions,
+            dimensions=size,
         )
 
     return to_json(await run_sync(_run))
@@ -274,7 +268,7 @@ def _cfg_update_shape(payload: Any, args: dict[str, Any]) -> Any:
         "search_mode", "sparse_llm_tokenize",
         "contextual_enabled", "contextual_window",
         "agent_enabled", "agent_max_iterations",
-        "embedding_provider_id", "rerank_top_k", "allowed_file_types",
+        "rerank_top_k", "allowed_file_types",
     ),
 )
 async def update_collection_config(
@@ -293,7 +287,6 @@ async def update_collection_config(
     contextual_window: int | None = None,
     agent_enabled: bool | None = None,
     agent_max_iterations: int | None = None,
-    embedding_provider_id: str | None = None,
     rerank_top_k: int | None = None,
     allowed_file_types: list[str] | None = None,
     ctx: Context | None = None,
@@ -303,9 +296,8 @@ async def update_collection_config(
     ``collection`` must be a collection **ID** from :func:`list_collections`
     (e.g. ``"col_abc123"``), NOT the display name.
 
-    Destructive fields (``chunk_mode``, ``embedding_*`` other than
-    ``embedding_provider_id``) are rejected. Changes only take effect
-    for newly uploaded files.
+    Change the embedding model in collection settings and confirm the index
+    rebuild there. Other indexing settings apply to newly uploaded files.
     """
     def _run() -> dict[str, Any]:
         from src.services import services
@@ -324,7 +316,6 @@ async def update_collection_config(
                 "search_mode": search_mode, "sparse_llm_tokenize": sparse_llm_tokenize,
                 "contextual_enabled": contextual_enabled, "contextual_window": contextual_window,
                 "agent_enabled": agent_enabled, "agent_max_iterations": agent_max_iterations,
-                "embedding_provider_id": embedding_provider_id,
                 "rerank_top_k": rerank_top_k, "allowed_file_types": allowed_file_types,
             }.items() if v is not None
         }
@@ -387,9 +378,9 @@ async def delete_collection(collection: str, ctx: Context | None = None) -> str:
 
         if e := require_collection(collection):
             return e
-        from src.meeting.transcript_index import INTERNAL_QDRANT_COLLECTIONS
+        from src.meeting.transcript_index import is_internal_collection
 
-        collections = [c for c in services.db.list_collections() if c not in INTERNAL_QDRANT_COLLECTIONS]
+        collections = [c for c in services.db.list_collections() if not is_internal_collection(c)]
         if len(collections) <= 1:
             return err("Cannot delete the only remaining collection")
         # RBAC：可见性 + 删除档授权，必须在破坏之前

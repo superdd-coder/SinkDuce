@@ -24,6 +24,53 @@ after(async () => {
   else Reflect.deleteProperty(globalThis, "localStorage")
 })
 
+test("retrieval details follow developer mode and skipped collections remain visible in both modes", async (t) => {
+  const { RetrievalDetails } = await server.ssrLoadModule("/src/components/chat/retrieval-details.tsx")
+  const { useAppStore } = await server.ssrLoadModule("/src/stores/app-store.ts")
+  const snapshot = useAppStore.getInitialState()
+  const original = { collections: snapshot.collections, developerMode: snapshot.developerMode }
+  t.after(() => { Object.assign(snapshot, original) })
+  snapshot.collections = [{ id: "online", name: "Library A" }, { id: "offline", name: "Library B" }]
+  const searches = [{ collection: "online", provider_id: "p", provider_name: "Test connection", model: "sample-encoder", dimensions: 3, mode: "dense" }]
+  const render = (skipped: string[]) => renderToStaticMarkup(createElement(RetrievalDetails, { searches, skipped }))
+
+  for (const developerMode of [false, true]) {
+    snapshot.developerMode = developerMode
+    const html = render(["online", "offline"])
+    assert.match(html, /<p role="note">[^<]*Library B<\/p>/)
+    assert.doesNotMatch(html, /<p role="note">[^<]*Library A/)
+    if (developerMode) {
+      assert.match(html, /<summary[^>]*>Retrieval details<\/summary>/)
+      assert.match(html, /sample-encoder/)
+    } else {
+      assert.doesNotMatch(html, /<details|sample-encoder|Test connection/)
+      assert.equal(render([]), "")
+    }
+  }
+})
+
+test("table rows and streaming text link the same verified excerpt when a model adds the ID field name", async () => {
+  const { CitationScope, CitationText } = await server.ssrLoadModule("/src/components/chat/citation-scope.tsx")
+  const { AnswerMarkdown } = await server.ssrLoadModule("/src/components/chat/answer-markdown.tsx")
+  const id = "e_" + "a3".repeat(10)
+  const other = "e_" + "b4".repeat(10)
+  const citations = [id, other].map((id, index) => ({
+    id, kind: "document", title: "Source " + index, quote: "Measured value", source: {}, location: {},
+  }))
+  const row = "First[cite:evidence_id_" + other + "] next[cite:" + id + "] again[cite:" + other + "]"
+  const missing = "[cite:evidence_id_e_" + "0".repeat(20) + "]"
+  const source = "| Measurement |\n| --- |\n| " + row + " |\n| Unverified" + missing + " |"
+  const render = (child: ReturnType<typeof createElement>) =>
+    renderToStaticMarkup(createElement(CitationScope, { citations, source, sessionId: "sample" }, child))
+  const html = render(createElement(AnswerMarkdown, { source }))
+  assert.match(html, /<table\b/)
+  assert.match(html, /Unverified〔\?〕/)
+  for (const result of [html, render(createElement(CitationText, { source: row, streaming: true }))]) {
+    assert.deepEqual([...result.matchAll(/aria-label="(\d+ · Source \d)"/g)].map(match => match[1]),
+      ["1 · Source 1", "2 · Source 0", "1 · Source 1"])
+  }
+})
+
 test('historical redlines render a numeric correction inside one rich-text paragraph',async()=>{
   const {AnswerMarkdown}=await server.ssrLoadModule('/src/components/chat/answer-markdown.tsx')
   const html=renderToStaticMarkup(createElement(AnswerMarkdown,{source:'Stock is **36 units**. Keep this sentence.',previousSource:'Stock is **24 units**. Keep this sentence.'}))

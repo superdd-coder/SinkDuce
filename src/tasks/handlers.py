@@ -1498,6 +1498,9 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
     loop = asyncio.get_running_loop()
     ingest_trace = None
 
+    from src.db.index_routing import collection_work
+    work = collection_work(collection)
+    await work.acquire_upload()
     try:
         set_current_task(task.id)
         t_start = time.time()
@@ -2085,6 +2088,8 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
         update(mid_lo, f"Enrich+Embed 0/{total_mid}…")
 
         embedding = get_collection_embedding(config, collection)
+        if embedding is None:
+            raise ValueError("The collection's embedding model is disconnected.")
 
         def _on_embed_done(n: int):
             mid_work.done(n)
@@ -2291,9 +2296,12 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                 )
 
             t_store = time.time()
+            from src.config import EmbeddingBinding
+            pin = getattr(embedding, "index_binding", None)
             services.db.upsert_points(
                 collection=collection, ids=ids, vectors=embeddings,
                 payloads=payloads,
+                **({"expected_binding": pin} if isinstance(pin, EmbeddingBinding) else {}),
             )
             # Add sparse vectors separately — does not touch dense vectors
             if sparse_vectors:
@@ -2421,6 +2429,8 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                 pass
         clear_current_task()
         raise Exception(f"Failed to process {filename_param}: {e}")
+    finally:
+        work.release_writer()
 
 
 # ---------------------------------------------------------------------------

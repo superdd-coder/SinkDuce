@@ -94,6 +94,7 @@ export function MeetingList({
   const [branchSettled, setBranchSettled] = useState(0)
   /** The collapsed 已归档 fold at the bottom of the list. */
   const [archiveOpen, setArchiveOpen] = useState(false)
+  const [selectedArchiveMeetingId, setSelectedArchiveMeetingId] = useState<string | null>(null)
   /** New-group-from-meeting dialog. */
   const [newGroupFor, setNewGroupFor] = useState<Meeting | null>(null)
   const [newGroupTitle, setNewGroupTitle] = useState("")
@@ -144,41 +145,28 @@ export function MeetingList({
     return m
   }, [meetings])
 
-  // A meeting is shown under a group when both are in the same section.
-  const { membersByGroup, visibleGroupIdsByMeeting, groupedMeetingIds } = useMemo(() => {
+  const { membersByGroup, groupIdsByMeeting, archivedGroupMemberIds, archivedGroupIds } = useMemo(() => {
     const membersByGroup = new Map<string, Meeting[]>()
-    const visibleGroupIdsByMeeting = new Map<string, string[]>()
-    const groupedMeetingIds = new Set<string>()
+    const groupIdsByMeeting = new Map<string, string[]>()
+    const archivedGroupMemberIds = new Set<string>()
+    const archivedGroupIds = new Set<string>()
     for (const group of groups) {
+      if (group.archived) archivedGroupIds.add(group.id)
       const members: Meeting[] = []
       for (const { meeting_id } of group.members) {
-        groupedMeetingIds.add(meeting_id)
         const meeting = meetingById.get(meeting_id)
-        if (!meeting || Boolean(meeting.archived) !== Boolean(group.archived)) continue
+        if (!meeting) continue
         members.push(meeting)
-        const groupIds = visibleGroupIdsByMeeting.get(meeting_id) ?? []
+        if (group.archived) archivedGroupMemberIds.add(meeting_id)
+        const groupIds = groupIdsByMeeting.get(meeting_id) ?? []
         groupIds.push(group.id)
-        visibleGroupIdsByMeeting.set(meeting_id, groupIds)
+        groupIdsByMeeting.set(meeting_id, groupIds)
       }
       members.sort((a, b) => tsOf(b.created_at || b.updated_at) - tsOf(a.created_at || a.updated_at))
       membersByGroup.set(group.id, members)
     }
-    return { membersByGroup, visibleGroupIdsByMeeting, groupedMeetingIds }
+    return { membersByGroup, groupIdsByMeeting, archivedGroupMemberIds, archivedGroupIds }
   }, [groups, meetingById])
-
-  const groupOfActive = activeMeeting ? visibleGroupIdsByMeeting.get(activeMeeting) : undefined
-
-  /** Opening a member meeting expands its group so the indented row exists. */
-  useEffect(() => {
-    if (!groupOfActive || groupOfActive.length === 0) return
-    setExpandedIds((prev) => {
-      if (groupOfActive.some((gid) => prev.has(gid))) return prev
-      const next = new Set(prev)
-      next.add(groupOfActive[0])
-      return next
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeMeeting, groupOfActive?.join(",")])
 
   const groupLatestCreatedAt = useCallback((group: MeetingGroup) => {
     const newest = membersByGroup.get(group.id)?.[0]
@@ -190,12 +178,16 @@ export function MeetingList({
     | { kind: "meeting"; key: string; ts: number; meeting: Meeting }
     | { kind: "group"; key: string; ts: number; group: MeetingGroup }
 
-  // Meetings without a group in their section get their own row.
+  // Archived members stay in their group. They get an additional archive row
+  // when they aren't already listed under an archived group.
   const { activeRows, archivedRows } = useMemo(() => {
     const active: Row[] = []
     const archived: Row[] = []
     for (const m of meetings) {
-      if (visibleGroupIdsByMeeting.has(m.id)) continue
+      const listedInGroup = m.archived
+        ? archivedGroupMemberIds.has(m.id)
+        : groupIdsByMeeting.has(m.id)
+      if (listedInGroup) continue
       const row: Row = { kind: "meeting", key: m.id, ts: tsOf(m.created_at || m.updated_at), meeting: m }
       ;(m.archived ? archived : active).push(row)
     }
@@ -206,17 +198,30 @@ export function MeetingList({
     active.sort((a, b) => b.ts - a.ts)
     archived.sort((a, b) => b.ts - a.ts)
     return { activeRows: active, archivedRows: archived }
-  }, [meetings, groups, visibleGroupIdsByMeeting, groupLatestCreatedAt])
+  }, [meetings, groups, groupIdsByMeeting, archivedGroupMemberIds, groupLatestCreatedAt])
 
   /** Groups that can still receive drag-drops (archived ones are folded). */
   const droppableGroups = useMemo(() => groups.filter((g) => !g.archived), [groups])
 
-  const expandedGroupId = groupOfActive?.find((id) => expandedIds.has(id))
-  const activeRowKey = activeMeeting
-    ? expandedGroupId
-      ? `${expandedGroupId}:${activeMeeting}`
-      : activeMeeting
-    : activeGroup
+  const groupOfActive = activeMeeting ? groupIdsByMeeting.get(activeMeeting) : undefined
+  const archiveCopySelected = archiveOpen && selectedArchiveMeetingId === activeMeeting &&
+    archivedRows.some((row) => row.kind === "meeting" && row.key === activeMeeting)
+  const expandedGroupId = groupOfActive?.find((id) =>
+    expandedIds.has(id) && (archiveOpen || !archivedGroupIds.has(id)),
+  )
+  const activeRowKey = activeMeeting && expandedGroupId && !archiveCopySelected
+    ? `${expandedGroupId}:${activeMeeting}`
+    : activeMeeting ?? activeGroup
+
+  /** Opening a member meeting expands its group so the indented row exists. */
+  useEffect(() => {
+    if (!groupOfActive?.length || archiveCopySelected) return
+    setExpandedIds((prev) => {
+      if (groupOfActive.some((gid) => prev.has(gid))) return prev
+      return new Set(prev).add(groupOfActive[0])
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeMeeting, groupOfActive?.join(","), archiveCopySelected])
 
   useEffect(() => {
     const activeEl = activeRowKey ? itemRefs.current.get(activeRowKey) : undefined
@@ -255,7 +260,7 @@ export function MeetingList({
       observer.disconnect()
       cancelAnimationFrame(frame)
     }
-  }, [activeRowKey, activeRows, expandedIds, branchSettled, archiveOpen])
+  }, [activeRowKey, activeRows, archivedRows, expandedIds, branchSettled, archiveOpen])
 
   const formatTime = (iso?: string) => {
     if (!iso) return ""
@@ -331,7 +336,7 @@ export function MeetingList({
   }
 
   const renderMeetingRow = (m: Meeting, opts: { key: string; groupId: string | null }) => {
-    const isActive = activeMeeting === m.id
+    const isActive = activeRowKey === opts.key
     /**
      * "录制中"的三条来源：
      * - 本窗口正在录（recordingMeetingId）
@@ -367,7 +372,13 @@ export function MeetingList({
     // ——那种恰恰需要允许删除来清理（后端 409 闸门与此同口径）。
     const isLiveRecording =
       recordingMeetingId === m.id || !!m.recording_live
-    const inAnyGroup = groupedMeetingIds.has(m.id)
+    const inAnyGroup = groupIdsByMeeting.has(m.id)
+    const selectMeeting = () => {
+      // A peer-owned live recording must keep its current recording client.
+      if (lockedByPeerRecording) return
+      setSelectedArchiveMeetingId(m.archived && !opts.groupId ? m.id : null)
+      onSelect(m.id)
+    }
     return (
       <div
         key={opts.key}
@@ -375,19 +386,12 @@ export function MeetingList({
         role="button"
         tabIndex={0}
         onPointerDown={() => void prefetchMeeting(m.id)}
-        onClick={() => {
-          // 别人正在录 → 不进入（进去会抢走/干扰正在录的那个客户端，
-          // 也会让自动回收逻辑误判成孤儿把别人的录制掐断）。
-          // 本窗口自己录的那个不受限（isMine）。
-          if (lockedByPeerRecording) return
-          onSelect(m.id)
-        }}
+        onClick={selectMeeting}
         onKeyDown={(e) => {
           if (e.target !== e.currentTarget) return
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault()
-            if (lockedByPeerRecording) return
-            onSelect(m.id)
+            selectMeeting()
           }
         }}
         draggable={!lockedByPeerRecording}
