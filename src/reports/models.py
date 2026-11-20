@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from src.chatbox.citations import citation_ids
+
 MAX_MARKDOWN = 120_000
 RENDERER_VERSION = "4"
 MAX_CITATIONS = 256
@@ -40,7 +42,7 @@ def _caption_issues(markdown, citations):
             if len(numbers) != 1:
                 continue
             expected = next(iter(numbers))
-            for eid in re.findall(r"\[cite:([^\]]+)\]", segment):
+            for eid in citation_ids(segment):
                 location = by_id.get(eid, {}).get("location", {})
                 actual = location.get("page_number", location.get("slide_number"))
                 if actual is not None and actual != expected:

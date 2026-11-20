@@ -192,7 +192,7 @@ class TestFilterDestructiveFields:
         }
         assert expected.issubset(DESTRUCTIVE_COLLECTION_FIELDS)
 
-    def test_embedding_provider_id_is_NOT_destructive(self):
+    def test_embedding_provider_id_requires_a_confirmed_rebuild(self):
         safe, rejected = filter_destructive_fields({"embedding_provider_id": "new-provider"})
-        assert safe == {"embedding_provider_id": "new-provider"}
-        assert rejected == []
+        assert safe == {}
+        assert rejected == ["embedding_provider_id"]

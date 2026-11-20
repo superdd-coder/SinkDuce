@@ -1,6 +1,7 @@
 import type { ReportComment, CommentFocus, ReportCommentDraft, ReviewBatch } from "@/lib/report-review"
 import { applyChatArtifacts, type ReportReference } from "@/lib/chat-reports"
 import type { Evidence } from "@/lib/chat-citations"
+import type { EmbeddingSearch } from "@/lib/embedding-searches"
 import { create } from "zustand"
 import {
   applyDocumentLang,
@@ -121,6 +122,8 @@ export interface Message {
   content: string
   attachments?: ChatAttachment[]
   sources?: Source[]
+  skippedCollections?: string[]
+  embeddingSearches?: EmbeddingSearch[]
   noteChanges?: NoteChange[]
   citations?: Evidence[]
   reportChanges?: ReportReference[]
@@ -152,6 +155,7 @@ export interface LLMProvider {
 }
 
 export interface CollectionItem {
+  embedding_disconnected?: boolean
   id: string
   name: string
   points_count: number

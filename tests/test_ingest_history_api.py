@@ -48,6 +48,16 @@ class TestListIngestHistory:
 
 
 class TestRetryIngestHistory:
+    def test_rebuild_has_no_file_retry_or_file_cleanup(self):
+        from src.api.routes.documents import retry_ingest_history
+
+        with patch("src.api.routes.documents.history_store") as hs, patch("src.api.routes.documents.services") as svc:
+            hs.get_record.return_value = _record(task_type="embedding_rebuild")
+            with pytest.raises(ApiError) as exc:
+                retry_ingest_history("rebuild", body=MagicMock(collection="colX"))
+        assert exc.value.status_code == 409
+        svc.db.delete_by_filter.assert_not_called()
+
     def test_unknown_record_404(self):
         from src.api.routes.documents import retry_ingest_history
 
@@ -99,6 +109,7 @@ class TestRetryIngestHistory:
 
         with patch("src.api.routes.documents.history_store") as hs, \
              patch("src.api.routes.documents.services") as svc, \
+             patch("src.rag.collection_utils.get_collection_embedding_config", return_value=MagicMock()), \
              patch("src.api.routes.documents.task_manager", tman):
             hs.get_record.return_value = rec
             db = MagicMock()

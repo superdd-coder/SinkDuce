@@ -98,8 +98,8 @@ test("列表的锁判据用 recording_live 且排除自己那一行", () => {
 })
 
 test("点击/键盘/拖拽三条入口都被锁拦住", () => {
-  // 点数与可访问性：锁住时不能进
-  const locks = LIST.match(/if \(lockedByPeerRecording\) return/g) ?? []
-  assert.ok(locks.length >= 2, `点击与键盘两条路都要拦，实得 ${locks.length}`)
+  assert.match(LIST, /const selectMeeting = \(\) => \{\s*(?:\/\/[^\n]*\n\s*)?if \(lockedByPeerRecording\) return/)
+  assert.match(LIST, /onClick=\{selectMeeting\}/)
+  assert.match(LIST, /onKeyDown=\{\(e\) => \{[\s\S]*?selectMeeting\(\)/)
   assert.match(LIST, /draggable=\{!lockedByPeerRecording\}/, "锁住时也不该可拖拽")
 })

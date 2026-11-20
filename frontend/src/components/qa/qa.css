@@ -53,7 +53,6 @@
 .qa-quick-chat-slot { display: grid; grid-template-rows: minmax(0, 1fr); position: absolute; inset: var(--qa-stage-inset); pointer-events: none; }
 .qa-quick-chat-rail { grid-column: 2; position: relative; min-width: 0; min-height: 0; }
 .qa-quick-chat-rail > .pm-qc-float--rail { border-radius: var(--pm-r); }
-.qa-quick-chat-rail .pm-qc-header-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .qa-stage.is-preview { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .qa-detail-slot { min-width: 0; min-height: 0; overflow: hidden; padding: 12px; margin: -12px; opacity: 1; visibility: visible; transition: opacity 240ms var(--pm-ease), visibility 240ms; }
 .qa-stage.is-overview .qa-detail-slot { opacity: 0; visibility: hidden; }

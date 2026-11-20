@@ -143,12 +143,15 @@ export const fetchProviderTypes = () =>
 
 // ── LLM Providers ──
 
+export type LLMApiMode = "responses" | "chat_completions"
+
 export interface LLMProvider {
   id: string
   name: string
   provider: string
   model: string
   base_url: string
+  api_mode?: LLMApiMode | null
   api_key: string
 
   is_default: boolean
@@ -192,6 +195,8 @@ export const setDefaultLLMProvider = (id: string) =>
 
 // ── Embedding Providers ──
 
+export const OPENAI_EMBEDDING_BASE_URL = "https://api.openai.com/v1"
+
 export interface EmbeddingProvider {
   id: string
   name: string
@@ -218,6 +223,9 @@ export const updateEmbeddingProvider = (id: string, data: Partial<EmbeddingProvi
     method: "PUT",
     body: JSON.stringify(data),
   })
+
+export const getEmbeddingProviderImpact = (id: string) =>
+  request<{collections: {id: string; name: string}[]; last_model: boolean}>(`/embedding/providers/${id}/impact`)
 
 export const deleteEmbeddingProvider = (id: string) =>
   request<{ message?: string; error?: string }>(`/embedding/providers/${id}`, {

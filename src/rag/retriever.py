@@ -18,6 +18,13 @@ def _notify_trace(callback, event):
             logger.debug("Retrieval trace callback failed", exc_info=True)
 
 
+def trace_vector_search(callback, event, binding, provider_name, dimensions):
+    if binding is not None:
+        event = {**event, "model": binding.model, "provider_id": binding.provider_id,
+                 "provider_name": provider_name, "dimensions": dimensions}
+    _notify_trace(callback, event)
+
+
 @dataclass
 class RetrievedChunk:
     text: str
@@ -64,6 +71,7 @@ class Retriever:
         filter_condition=None,
         llm=None,
         on_trace=None,
+        meeting_ids: tuple[str, ...] = (),
     ) -> list[RetrievedChunk]:
         # RBAC（2026-09-16）：不可见的库**根本不查**——这是"隐藏"最根本的一道。
         # 在这里拦住而不是"查出来再过滤"：后者意味着内容已经进了结果集，任何
@@ -72,15 +80,61 @@ class Retriever:
             from src.identity import get_actor
             from src.identity import visibility as _visibility
 
-            if not _visibility.is_collection_visible(get_actor(), collection):
+            from src.meeting.transcript_index import TRANSCRIPT_COLLECTION
+            if collection.startswith(TRANSCRIPT_COLLECTION):
+                # Transcript lookups always build a meeting-ID filter, after the
+                # meeting-domain read gate. Never allow an unscoped internal query.
+                allowed = bool(meeting_ids) and all(_visibility.is_meeting_visible(get_actor(), mid) for mid in meeting_ids)
+                if allowed:
+                    from qdrant_client.models import FieldCondition, Filter, MatchAny
+                    scope = FieldCondition(key="meeting_id", match=MatchAny(any=list(meeting_ids)))
+                    filter_condition = Filter(must=[scope, filter_condition] if filter_condition else [scope])
+            else:
+                allowed = _visibility.is_collection_visible(get_actor(), collection)
+            if not allowed:
                 logger.info("[Retriever] collection %r not visible to actor — refused", collection)
                 return []
         except Exception:
             logger.exception("[Retriever] visibility gate failed for %r — refused", collection)
             return []
 
-        emb = embedding_override or self.embedding
+        from contextlib import nullcontext
+        from src.config import EmbeddingBinding
+        from src.db.index_routing import IndexRoutingClient
+        from src.rag.collection_utils import get_collection_embedding_config, EmbeddingDisconnected
+        from src.services import services
+
+        client = getattr(self.db, "client", None)
+        routed = isinstance(client, IndexRoutingClient) and not collection.startswith("__")
+        with client.snapshot(collection) if routed else nullcontext():
+            pin = getattr(embedding_override, "index_binding", None)
+            provider_name = ""
+            if routed and services.config is not None and (embedding_override is None or isinstance(pin, EmbeddingBinding)):
+                cfg = get_collection_embedding_config(self.db.get_collection_config(collection), collection)
+                if cfg is None:
+                    raise EmbeddingDisconnected("Embedding model unavailable.")
+                active = EmbeddingBinding.from_provider(cfg)
+                if pin != active:
+                    from src.providers.embedding import create_embedding_provider
+                    embedding_override = create_embedding_provider(cfg)
+                    if embedding_override is None:
+                        raise EmbeddingDisconnected("Embedding model unavailable.")
+                pin = active
+                provider_name = cfg.name
+            binding = pin if isinstance(pin, EmbeddingBinding) else None
+            return self._search(query, collection, top_k, embedding_override or self.embedding,
+                                search_mode, min_score, filter_condition, llm, on_trace, binding, provider_name)
+
+    def _search(self, query, collection, top_k, emb, search_mode, min_score, filter_condition, llm,
+                on_trace, binding, provider_name):
         query_vector = emb.embed_query(query)
+        if binding:
+            from src.rag.embedding_validation import validate_vectors
+            validate_vectors([query_vector], 1, binding.dimensions or len(query_vector))
+
+        def report_search(event):
+            trace_vector_search(on_trace, event, binding, provider_name, len(query_vector))
+
         logger.debug("[Retriever] col=%s mode=%s dim=%d top_k=%d min_score=%.2f",
                      collection, search_mode, len(query_vector), top_k, min_score)
 
@@ -100,13 +154,13 @@ class Retriever:
 
         if search_mode == "hybrid":
             chunks = self._hybrid_retrieve(query, query_vector, collection, top_k,
-                                           filter_condition=merged_filter, llm=llm, on_trace=on_trace)
+                                           filter_condition=merged_filter, llm=llm, on_trace=report_search)
         else:
-            _notify_trace(on_trace, {"kind": "retrieval", "collection": collection, "mode": "dense"})
             results = self.db.search(
                 collection=collection, query_vector=query_vector, top_k=top_k,
                 filter_condition=merged_filter,
             )
+            report_search({"kind": "retrieval", "collection": collection, "mode": "dense"})
             chunks = self._to_chunks(results)
 
         # Threshold only applies to dense mode (cosine scores 0-1), not hybrid (RRF rank scores)
@@ -171,12 +225,12 @@ class Retriever:
             return chunks
         except Exception as e:
             logger.warning("[Retriever] hybrid fallback → dense: col=%s reason=%s", collection, e)
-            _notify_trace(on_trace, {"kind": "retrieval_fallback", "collection": collection,
-                                     "requested_mode": "hybrid", "mode": "dense", "error": type(e).__name__})
             results = self.db.search(
                 collection=collection, query_vector=query_vector, top_k=top_k,
                 filter_condition=filter_condition,
             )
+            _notify_trace(on_trace, {"kind": "retrieval_fallback", "collection": collection,
+                                     "requested_mode": "hybrid", "mode": "dense", "error": type(e).__name__})
             return self._to_chunks(results)
 
     @staticmethod

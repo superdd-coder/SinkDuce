@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.config import AppConfig, EmbeddingProviderConfig
 from src.file_mgmt.store import (
     COLLECTIONS_DIR,
     EXPECTED_INDEXES,
@@ -151,7 +152,9 @@ def test_collection_create_initializes_db():
     mock_embedding.dimensions = 512
     mock_db = MagicMock()
 
-    with patch.object(services, "embedding", mock_embedding), \
+    config = AppConfig(embedding={"providers": [EmbeddingProviderConfig(model="test", dimensions=512)]})
+    with patch.object(services, "config", config), \
+         patch.object(services, "embedding", mock_embedding), \
          patch.object(services, "db", mock_db):
         req = CollectionCreateRequest(name="test-fm-create")
         result = create_collection(req)
@@ -188,7 +191,9 @@ def test_collection_delete_removes_db():
     mock_db.collection_exists.return_value = True
     mock_db.list_collections.return_value = ["col_a", "col_b"]
 
-    with patch.object(services, "embedding", mock_embedding), \
+    config = AppConfig(embedding={"providers": [EmbeddingProviderConfig(model="test", dimensions=512)]})
+    with patch.object(services, "config", config), \
+         patch.object(services, "embedding", mock_embedding), \
          patch.object(services, "db", mock_db):
         req = CollectionCreateRequest(name="test-fm-delete")
         result = create_collection(req)

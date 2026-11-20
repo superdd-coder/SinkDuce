@@ -35,7 +35,7 @@ def build_collection_directory() -> list[dict[str, str]]:
     fail-closed：可见性判定失败返回**空目录**，绝不回落"不过滤"。
     """
     from src.collections.store import collection_display_name
-    from src.meeting.transcript_index import INTERNAL_QDRANT_COLLECTIONS
+    from src.meeting.transcript_index import is_internal_collection
     from src.services import services
 
     try:
@@ -49,7 +49,7 @@ def build_collection_directory() -> list[dict[str, str]]:
 
     out: list[dict[str, str]] = []
     for cid in services.db.list_collections():
-        if cid in INTERNAL_QDRANT_COLLECTIONS:
+        if is_internal_collection(cid):
             continue
         if visible is not None and cid not in visible:
             continue

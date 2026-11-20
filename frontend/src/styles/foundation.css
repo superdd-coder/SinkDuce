@@ -10,7 +10,7 @@
   --sd-brand-hover: #28634b;
   --sd-surface: #ffffff80;
   --sd-surface-raised: #ffffffe6;
-  --sd-surface-overlay: #fafafaf0;
+  --sd-surface-overlay: #fafafa;
   --sd-field: #22222206;
   /* Interaction colors: neutral hover, emerald selection, solid primary. */
   --sd-hover: #2222220b;
@@ -97,7 +97,7 @@
   --sd-brand-hover: #7bc5a5;
   --sd-surface: #30383399;
   --sd-surface-raised: #303833;
-  --sd-surface-overlay: #2a312ef5;
+  --sd-surface-overlay: #2a312e;
   --sd-field: #ffffff08;
   --sd-hover: #ffffff0c;
   --sd-selected: #284438;
@@ -274,8 +274,6 @@ button.sd-nav-version:hover { background: var(--sd-surface-raised); }
   border: 0;
   border-radius: var(--sd-radius-panel);
   box-shadow: var(--sd-shadow-float) !important;
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
 }
 .pm-dialog.sd-dialog [data-slot="dialog-title"] { font: 550 20px/1.4 var(--type-font-ui) !important; letter-spacing: -.3px !important; text-transform: none; }
 .sd-card { background: var(--sd-surface-raised); border-color: transparent; }

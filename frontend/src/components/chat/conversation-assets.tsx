@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type CSSProperties } from "react"
-import { ArrowUpRight, ChevronDown, Loader2 } from "lucide-react"
-import { getChatAttachments, getChatReports, type ChatAttachment, type ReportReference } from "@/api/client"
+import { ArrowUpRight, ChevronDown, FileOutput, LibraryBig, Loader2 } from "lucide-react"
+import { getChatAttachments, getChatReports, type ChatAttachment, type Evidence, type ReportReference } from "@/api/client"
 import { Popover } from "@/components/ui/popover"
 import { useAppStore } from "@/stores/app-store"
 import { useT } from "@/i18n/use-t"
@@ -18,9 +18,11 @@ const EMPTY_DRAFTS: ChatAttachmentDraft[] = []
 const ASSETS_INSET = 8
 
 /** One session's outputs and sources, available even without generated output. */
-export function ConversationAssets({ sessionId, refreshKey, messages, onOpenReport }: {
+export function ConversationAssets({ sessionId, refreshKey, messages, onOpenReport, onOpenMeeting, placement = "inline" }: {
   sessionId: string | null; refreshKey: string; messages: readonly AssetMessage[]
   onOpenReport: (report: ReportReference) => void
+  onOpenMeeting?: (evidence: Evidence) => boolean
+  placement?: "inline" | "below"
 }) {
   const t = useT()
   const labelId = useId()
@@ -66,24 +68,35 @@ export function ConversationAssets({ sessionId, refreshKey, messages, onOpenRepo
     trigger.current?.focus({ preventScroll: true })
   }
   const sourceCount = uploads.length + retrieved.length
-  return <CitationScope key={sessionId} sessionId={sessionId} citations={retrieved.map((row) => row.evidence)}>
+  const outputLabel = t("chat.assets.output")
+  const sourcesLabel = t("chat.assets.sources")
+  const triggerLabel = `${outputLabel} ${outputs.length} · ${sourcesLabel} ${sourceCount}`
+  const opensBelow = placement === "below"
+  return <CitationScope key={sessionId} sessionId={sessionId} citations={retrieved.map((row) => row.evidence)} onOpenMeeting={onOpenMeeting}>
     <div ref={anchor} className="pm-assets-anchor" style={{ "--pm-assets-inset": `${ASSETS_INSET}px` } as CSSProperties}>
       <Popover.Root open={open} onOpenChange={(value, details) => {
         setOpenSession(value ? sessionId : null)
         if (!value && details.reason === "escape-key") trigger.current?.focus({ preventScroll: true })
       }}>
         <Popover.Trigger ref={trigger} className="pm-assets-trigger"
-          aria-label={`${t("chat.assets.title")} · Output ${outputs.length} · Sources ${sourceCount}`} aria-expanded={open}>
+          aria-label={triggerLabel} title={opensBelow ? triggerLabel : undefined} aria-expanded={open}>
           <span className="pm-assets-counts">
-            <span data-output-count={outputs.length}><span>Output</span><b>{outputs.length}</b></span>
-            <span data-source-count={sourceCount}><span>Sources</span><b>{sourceCount}</b></span>
+            <span data-output-count={outputs.length}>
+              {opensBelow && <FileOutput className="pm-assets-count-icon" size={14} aria-hidden="true" />}
+              <span className="pm-assets-count-label">{outputLabel}</span><b>{outputs.length}</b>
+            </span>
+            <span data-source-count={sourceCount}>
+              {opensBelow && <LibraryBig className="pm-assets-count-icon" size={14} aria-hidden="true" />}
+              <span className="pm-assets-count-label">{sourcesLabel}</span><b>{sourceCount}</b>
+            </span>
           </span>
           <ChevronDown className="pm-assets-trigger-chevron size-3" aria-hidden="true" />
         </Popover.Trigger>
         <Popover.Portal container={anchor} className="pm-assets-portal">
-          <Popover.Positioner side="bottom" align="end" alignOffset={-ASSETS_INSET}
-            sideOffset={({ anchor }) => -anchor.height - ASSETS_INSET}
-            collisionAvoidance={{ side: "none", align: "none", fallbackAxisSide: "none" }} className="pm-assets-positioner">
+          <Popover.Positioner side="bottom" align={opensBelow ? "start" : "end"} alignOffset={-ASSETS_INSET}
+            sideOffset={opensBelow ? 10 : ({ anchor }) => -anchor.height - ASSETS_INSET}
+            collisionAvoidance={{ side: "none", align: "none", fallbackAxisSide: "none" }}
+            className="pm-assets-positioner" data-placement={placement}>
             <Popover.Popup className="pm-assets-card" aria-labelledby={labelId} inert={!open}
               style={{
                 "--pm-assets-stage-max": maxHeight == null ? undefined : `${maxHeight}px`,
@@ -119,7 +132,7 @@ export function ConversationAssetsPanel({ outputs, uploads, retrieved, retrieved
   const listId = useId()
   return <>
     <section className="pm-assets-section pm-assets-output">
-      <h3 className="pm-assets-heading">Output</h3>
+      <h3 className="pm-assets-heading">{t("chat.assets.output")}</h3>
       <div className="pm-assets-list">
         {outputs.map((report) => <button type="button" className="pm-assets-row" data-output="true" key={report.id} title={report.title} onClick={() => onOutput(report)}>
           <DocumentMark kind="report"/><span className="pm-assets-row-body"><span className="pm-assets-row-title">{report.title}</span>
@@ -130,7 +143,7 @@ export function ConversationAssetsPanel({ outputs, uploads, retrieved, retrieved
       </div>
     </section>
     <section className="pm-assets-section pm-assets-uploads">
-      <h3 className="pm-assets-heading">Sources</h3>
+      <h3 className="pm-assets-heading">{t("chat.assets.sources")}</h3>
       <div className="pm-assets-group-label">{t("chat.assets.uploaded")}<span>{uploads.length}</span></div>
       <div className="pm-assets-list">
         {uploads.map((file) => <button type="button" className="pm-assets-row" key={file.id} title={file.filename} data-status={file.status} disabled={!file.attachment} onClick={() => file.attachment && onUpload(file.attachment)}>

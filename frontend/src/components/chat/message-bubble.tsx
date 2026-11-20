@@ -6,6 +6,7 @@ import { ChatAttachmentCards } from "./chat-attachments"
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { ChevronRight, Globe, Loader2, Wrench } from "lucide-react"
 import { SourcesCard } from "./sources-card"
+import { RetrievalDetails } from "./retrieval-details"
 import { NoteChangeCards } from "./note-change-cards"
 import { ThinkingSteps } from "./thinking-steps"
 import { StreamingAnswerBody } from "./streaming-answer-body"
@@ -439,6 +440,9 @@ export const MessageBubble = memo(function MessageBubble({ message, onOpenReport
         <SourcesCard
           sources={message.sources}
         />
+      )}
+      {!!(message.embeddingSearches?.length || message.skippedCollections?.length) && (
+        <RetrievalDetails searches={message.embeddingSearches} skipped={message.skippedCollections} />
       )}
     </div></CitationScope>
   )

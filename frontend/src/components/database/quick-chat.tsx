@@ -6,6 +6,8 @@ import { ConversationAssets } from "@/components/chat/conversation-assets"
 import { CitationScope } from "@/components/chat/citation-scope"
 import { ReportCards } from "@/components/chat/report-cards"
 import { SourcesCard } from "@/components/chat/sources-card"
+import { RetrievalDetails } from "@/components/chat/retrieval-details"
+import type { EmbeddingSearch } from "@/lib/embedding-searches"
 import { applyChatArtifacts, selectedConversationReport, type ReportReference } from "@/lib/chat-reports"
 import type { Evidence } from "@/lib/chat-citations"
 import { useChatAttachments, type ChatAttachmentsManager } from "@/hooks/use-chat-attachments"
@@ -39,6 +41,8 @@ interface QAMessage {
   attachments?: ChatAttachment[]
   thinkingContent?: string
   sources?: { text: string; score: number; metadata: Record<string, unknown> }[]
+  skippedCollections?: string[]
+  embeddingSearches?: EmbeddingSearch[]
   noteChanges?: NoteChange[]
   citations?: Evidence[]
   reportChanges?: ReportReference[]
@@ -793,23 +797,23 @@ export function QuickChat({
   // ── Panel content (Premium compact chat chrome) ──
 
   const panelContent = (
-    <div
-      {...attachments.dropProps} className="pm-qc-panel">
-      {/* Identity header — makes the surface read as Chat, not a doc pane */}
+    <section
+      {...attachments.dropProps}
+      className="pm-qc-panel"
+      aria-label={`${t("library.quickChat")} · ${collectionName}`}
+    >
       <header className="pm-qc-header">
-        <div className="min-w-0 flex items-center gap-2.5">
-          <span className="pm-qc-header-icon" aria-hidden>
-            <MessageCircle className="size-3.5" strokeWidth={2} />
-          </span>
-          <div className="min-w-0">
-            <p className="pm-qc-header-title">{t("library.quickChat")}</p>
-            <p className="pm-qc-header-sub truncate" title={collectionName}>
-              {collectionName}
-            </p>
-          </div>
-        </div>
+        <span className="pm-qc-header-icon" aria-hidden>
+          <MessageCircle className="size-3.5" strokeWidth={2} />
+        </span>
+        <ConversationAssets
+          key={sessionId}
+          messages={loadingHistory ? [] : messages}
+          sessionId={sessionId}
+          refreshKey={`${messages.length}:${streaming}`}
+          onOpenReport={setPreviewReport}
+        />
         <div className="flex items-center gap-1.5 shrink-0">
-          <ConversationAssets key={sessionId} messages={loadingHistory ? [] : messages} sessionId={sessionId} refreshKey={`${messages.length}:${streaming}`} onOpenReport={setPreviewReport} />
           {msgCount > 0 && (
             <span
               className={cn(
@@ -925,6 +929,9 @@ export function QuickChat({
                     {!msg.isStreaming && !!msg.sources?.length && <CitationScope citations={msg.citations} source={msg.content} sessionId={sessionId || ""}>
                       <SourcesCard sources={msg.sources}/>
                     </CitationScope>}
+                    {!!(msg.embeddingSearches?.length || msg.skippedCollections?.length) && (
+                      <RetrievalDetails searches={msg.embeddingSearches} skipped={msg.skippedCollections} />
+                    )}
                   </div>
                 </div>
               )
@@ -974,7 +981,7 @@ export function QuickChat({
           />
         </div>
       </div>
-    </div>
+    </section>
   )
 
   if (previewReport && open) return <ReportWorkspace report={previewReport} chat={panelContent} onClose={() => setPreviewReport(null)} />
@@ -1055,13 +1062,12 @@ export function QuickChat({
               "pm-qc-launcher-hint inline-flex h-8 items-center rounded-full px-2.5",
               "pointer-events-none whitespace-nowrap shrink-0",
               "border border-white/55 text-[color:var(--ze-green,#1A5E3D)]",
-              "shadow-sm backdrop-blur-[10px]",
+              "bg-popover shadow-sm",
               hintExiting
                 ? "animate-[hint-retract_0.4s_cubic-bezier(0.4,0,0.2,1)_both]"
                 : "animate-[hint-emerge_0.55s_cubic-bezier(0.34,1.56,0.64,1)_both]"
             )}
             style={{
-              background: "color-mix(in srgb, #fff 78%, transparent)",
               lineHeight: 1,
               boxSizing: "border-box",
             }}

@@ -1,4 +1,6 @@
 import { HelpHint } from "@/components/shared/help-hint"
+import { RetrievalDetails } from "@/components/chat/retrieval-details"
+import { embeddingSearches, type EmbeddingSearch } from "@/lib/embedding-searches"
 import {
   useState,
   useEffect,
@@ -168,6 +170,7 @@ function SearchTab() {
   const [useAgent, setUseAgent] = useState(false)
   const [minScore, setMinScore] = useState(0)
   const [results, setResults] = useState<RecallResult[]>([])
+  const [details, setDetails] = useState<{ searches: EmbeddingSearch[]; skipped: string[] } | null>(null)
   const [timeMs, setTimeMs] = useState(0)
   const [searchParams, setSearchParams] = useState<Record<string, unknown>>({})
   const [searchContext, setSearchContext] = useState("")
@@ -248,6 +251,7 @@ function SearchTab() {
         ? recallCollections
         : collections.map((c) => c.id)
     setResults([])
+    setDetails(null)
     setSearchContext("")
     setShowContext(false)
     setSearching(true)
@@ -265,6 +269,10 @@ function SearchTab() {
           searchMode === "hybrid" ? sparseLlmTokenize : undefined,
       })
       setResults(res.results || [])
+      setDetails({
+        searches: embeddingSearches(res.retrieval_trace),
+        skipped: (res.errors || []).flatMap(e => e.stage === "retrieve" && typeof e.collection === "string" ? [e.collection] : []),
+      })
       setTimeMs(res.time_ms)
       setSearchParams(res.search_params || {})
       setSearchContext(res.context || "")
@@ -548,6 +556,7 @@ function SearchTab() {
                   )}
                 </div>
               </div>
+              {details && <RetrievalDetails searches={details.searches} skipped={details.skipped} />}
               <div className="pm-recall-crossfade">
                 <div data-active={!(showContext && searchContext)}>
                   {results.length > 0 ? (

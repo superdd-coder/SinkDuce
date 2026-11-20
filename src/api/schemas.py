@@ -41,7 +41,7 @@ class QueryResponse(BaseModel):
 
 class CollectionCreateRequest(BaseModel):
     name: str
-    dimensions: int | None = 1024
+    dimensions: int | None = None
     chunk_mode: str = "normal"
     parent_strategy: str = "paragraph"
     chunk_size: int = 512

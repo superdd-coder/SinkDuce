@@ -80,14 +80,28 @@ class TestPersistTextChannel:
         """_persist_text must never leak into an outgoing API request."""
         from src.chatbox.agent import _sanitize_tool_messages
 
-        msgs = [{
-            "role": "tool", "tool_call_id": "call_v",
-            "content": "ctx",
-            "_persist_text": "secret-ish",
-        }]
+        msgs = [
+            {"role": "assistant", "tool_calls": [{"id": "call_v"}]},
+            {"role": "tool", "tool_call_id": "call_v", "content": "ctx", "_persist_text": "internal"},
+        ]
         out = _sanitize_tool_messages(msgs)
-        assert "_persist_text" not in out[0]
-        assert out[0]["content"] == "ctx"
+        assert "_persist_text" not in out[1]
+        assert out[1]["content"] == "ctx"
+
+    def test_sanitize_pairs_tool_messages_when_history_is_incomplete(self):
+        from src.chatbox.agent import _sanitize_tool_messages
+
+        messages = [
+            {"role": "tool", "tool_call_id": "call_orphan", "content": "Unpaired result"},
+            {"role": "assistant", "tool_calls": [{"id": "call_a"}, {"id": "call_b"}]},
+            {"role": "tool", "tool_call_id": "call_a", "content": "Result A"},
+            {"role": "tool", "tool_call_id": "call_a", "content": "Repeated result"},
+            {"role": "user", "content": "Continue"},
+        ]
+        out = _sanitize_tool_messages(messages)
+        assert [m["role"] for m in out] == ["assistant", "tool", "tool", "user"]
+        assert out[1] == messages[2]
+        assert out[2]["tool_call_id"] == "call_b"
 
 
 # ── Hydration ─────────────────────────────────────────────────

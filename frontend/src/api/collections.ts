@@ -6,6 +6,7 @@ import { apiUrl, currentPairingToken } from "@/api/origin"
 // ── Collections ──
 
 export interface CollectionItem {
+  embedding_disconnected?: boolean
   id: string
   name: string
   points_count: number
@@ -31,7 +32,15 @@ export const unarchiveCollection = (collectionId: string) =>
     method: "POST",
   })
 
+export type CollectionEmbeddingOption = Pick<import("./config").EmbeddingProvider, "id" | "name" | "model" | "dimensions" | "is_default">
+export const getCollectionEmbeddingOptions = () => request<CollectionEmbeddingOption[]>("/collections/embedding-options")
+export const rebuildCollectionEmbedding = (collection: string, providerId: string) =>
+  request<{task_id: string}>(`/collections/${collection}/embedding-rebuild`, {
+    method: "POST", body: JSON.stringify({provider_id: providerId}),
+  })
+
 export interface ChunkConfig {
+  embedding_provider_id?: string
   chunk_mode?: string
   parent_strategy?: string
   chunk_size?: number
@@ -156,6 +165,11 @@ export interface IngestHistoryRecord {
   filename: string
   collection_id: string
   file_id: string
+  task_type?: "upload" | "embedding_rebuild"
+  model?: string
+  progress?: number
+  processed?: number
+  total?: number | null
   status: "queued" | "processing" | "success" | "failed"
   stage: string
   error: string

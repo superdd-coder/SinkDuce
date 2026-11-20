@@ -619,7 +619,13 @@ class TestChatboxEdgeCases:
         store.add_message(main.id, "user", "now")
         main_msgs = agent._build_messages(
             main.id, "now",
-            extra_messages=[{"role": "tool", "tool_call_id": "x", "content": "tool-now"}],
+            extra_messages=[
+                {"role": "assistant", "tool_calls": [{
+                    "id": "x", "type": "function",
+                    "function": {"name": "list_collections", "arguments": "{}"},
+                }]},
+                {"role": "tool", "tool_call_id": "x", "content": "tool-now"},
+            ],
             catalog_text="Knowledge base reference:\n- ColA",
         )
         assert main_msgs[0]["role"] == "system"

@@ -47,6 +47,7 @@ from src.prompts import (
     MAIN_CHAT_FORMATTING_RULES,
     QUICK_CHAT_SYSTEM_PROMPT,
 )
+from src.providers.llm.openai_responses import OpenAIResponsesChat
 from src.rag.search_settings import search_settings
 from src.chatbox.history_access import ChatSources
 
@@ -64,6 +65,8 @@ class ChatResponse:
     note_changes: list[dict] = field(default_factory=list)
     citations: list[dict] = field(default_factory=list)
     report_changes: list[dict] = field(default_factory=list)
+    skipped_collections: list[str] = field(default_factory=list)
+    embedding_searches: list[dict] = field(default_factory=list)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -151,20 +154,29 @@ def _thinking_on_for_tool_round(
     return True
 
 
-def _send_chat_completion(llm, send, kwargs: dict, retry_context=None):
-    """Use provider parameter compatibility for Chat's raw tool/stream requests."""
+def _send_chat_completion(
+    llm, send, kwargs: dict, retry_context=None, *,
+    responses: OpenAIResponsesChat | None = None, thinking: bool = False,
+):
+    """Send a Chat round using its provider's request format."""
     from src.providers.llm.parameters import create_chat_completion
 
     base_url = getattr(llm, "_base_url", "")
     base_url = base_url if isinstance(base_url, str) else ""
-    try:
+
+    def create():
+        if responses is not None:
+            return responses.create(kwargs, thinking=thinking)
         return create_chat_completion(send, kwargs, base_url=base_url)
+
+    try:
+        return create()
     except Exception as error:
         retry_messages = retry_context(error) if retry_context else None
         if retry_messages is None:
             raise
         kwargs["messages"] = retry_messages
-        return create_chat_completion(send, kwargs, base_url=base_url)
+        return create()
 
 
 def _retry_llm_kwargs_after_error(kwargs: dict, error: BaseException, llm=None) -> dict | None:
@@ -1003,6 +1015,7 @@ class ChatboxAgent:
             qa_evidence.fit_model_window(hydrated, evidence_registry)
         rendered_messages = _sanitize_tool_messages(project_qa_tool_messages(hydrated, evidence_registry))
         if evidence_registry is not None:
+            from src.chatbox.citations import evidence_catalog_entry
             from src.reports.store import for_sessions as report_store
             try:
                 current_reports = reports if reports is not None else report_store(self._store)
@@ -1013,7 +1026,7 @@ class ChatboxAgent:
             except ValueError:
                 # Legacy conversation IDs may predate report path restrictions.
                 catalog = []
-            evidence = [{**e, 'quote': e['quote'][:160]} for e in evidence_registry.records()[-32:]]
+            evidence = [evidence_catalog_entry(e, 160) for e in evidence_registry.records()[-32:]]
             if catalog or evidence:
                 rendered_messages.insert(1, {'role': 'system', 'content': json.dumps({'conversation_reports': catalog, 'evidence': evidence}, ensure_ascii=False)})
             evidence_registry.sources.require_current()
@@ -1069,6 +1082,7 @@ class ChatboxAgent:
         _touch_group_session(session_id)
 
         extra_messages: list[dict] = []
+        responses = OpenAIResponsesChat.for_provider(self._llm)
         final_answer = ""
         all_sources: list[dict] = []
         note_changes: list[dict] = []
@@ -1110,8 +1124,6 @@ class ChatboxAgent:
                         sum(1 for p in ct if p.get("type") == "image_url"),
                     )
 
-            # Call LLM with tools — use underlying OpenAI client directly
-            # (avoids modifying the LLMProvider ABC)
             round_tools = _drop_lookup_tool(_tools) if tx_lookup_dry else _tools
             round_tools = qa_turn.available_tools(round_tools)
             response = self._call_llm_with_tools(
@@ -1119,6 +1131,7 @@ class ChatboxAgent:
                 tools=round_tools,
                 tool_choice="auto",
                 retry_context=retry_context,
+                responses=responses,
             )
 
             if response.get("tool_calls"):
@@ -1426,6 +1439,7 @@ class ChatboxAgent:
             _persist_extra_messages(self._store, session_id, extra_messages)
             final_answer = _force_generate_answer(
                 self._llm, build_turn_messages(),
+                **({"responses": responses} if responses is not None else {}),
                 **({"retry_context": retry_context} if qa_evidence.posts else {}),
             )
 
@@ -1436,7 +1450,7 @@ class ChatboxAgent:
             self._store.add_message(
                 session_id, "assistant", final_answer,
                 sources=all_sources if all_sources else None,
-                metadata={"tool_calls": total_tool_calls, "note_changes": note_changes, "citations": evidence.used(final_answer), "report_changes": report_changes, **evidence.sources.metadata(), **qa_evidence.metadata()},
+                metadata={"tool_calls": total_tool_calls, "note_changes": note_changes, "citations": evidence.used(final_answer), "report_changes": report_changes, **evidence.sources.metadata(), **qa_turn.search_metadata(), **qa_evidence.metadata()},
             )
 
         return ChatResponse(
@@ -1445,6 +1459,7 @@ class ChatboxAgent:
             tool_calls=total_tool_calls,
             note_changes=note_changes,
             citations=evidence.used(final_answer), report_changes=report_changes,
+            **qa_turn.search_metadata(),
         )
 
     # ── streaming chat ───────────────────────────────────────────────
@@ -1623,6 +1638,7 @@ class ChatboxAgent:
         _touch_group_session(session_id)
 
         extra_messages: list[dict] = []
+        responses = OpenAIResponsesChat.for_provider(self._llm)
         _extra_saved = 0
         all_sources: list[dict] = []
         note_changes: list[dict] = []
@@ -1822,12 +1838,13 @@ class ChatboxAgent:
 
                 try:
                     stream = _send_chat_completion(
-                        self._llm, client.chat.completions.create, stream_kwargs, retry_stream_context
+                        self._llm, client.chat.completions.create, stream_kwargs, retry_stream_context,
+                        responses=responses, thinking=think_round,
                     )
                 except Exception as e:
                     logger.warning("LLM streaming call failed: %s", e)
-                    retry_kwargs = _retry_llm_kwargs_after_error(
-                        stream_kwargs, e, llm=getattr(self, "_llm", None),
+                    retry_kwargs = None if responses is not None else _retry_llm_kwargs_after_error(
+                        stream_kwargs, e, llm=self._llm,
                     )
                     if retry_kwargs is not None:
                         try:
@@ -3288,6 +3305,8 @@ class ChatboxAgent:
                         "source_type": _ui_source_type,
                         "tool_call_id": tc.get("id", ""),
                     }
+                    if qa_result is not None:
+                        _tr.update(qa_turn.search_metadata())
                     if written_reports:
                         _tr["report_changes"] = written_reports
                     if written_notes:
@@ -3375,7 +3394,7 @@ class ChatboxAgent:
 
                 all_sources += qa_evidence.sources(evidence)
                 # Save assistant message
-                meta: dict = {"tool_calls": total_tool_calls, "citations": evidence.used(final_content), "report_changes": report_changes, **evidence.sources.metadata(), **qa_evidence.metadata()}
+                meta: dict = {"tool_calls": total_tool_calls, "citations": evidence.used(final_content), "report_changes": report_changes, **evidence.sources.metadata(), **qa_turn.search_metadata(), **qa_evidence.metadata()}
                 if execution:
                     meta['report_review_status'] = execution
                 if note_changes:
@@ -3422,7 +3441,7 @@ class ChatboxAgent:
                     "type": "done",
                     "sources": all_sources,
                     "note_changes": note_changes,
-                    "citations": evidence.used(final_content), "report_changes": report_changes,
+                    "citations": evidence.used(final_content), "report_changes": report_changes, **qa_turn.search_metadata(),
                     "message_count": _done_count,
                     "context_warning": _quick_warn,
                 }
@@ -3442,6 +3461,7 @@ class ChatboxAgent:
         execution = review_execution(review_store, session_id, review_batches) if review_batches else None
         final_content = completion_text(execution, review_batches, user_message) if execution else _force_generate_answer(
             self._llm, build_turn_messages(include_review=False),
+            **({"responses": responses} if responses is not None else {}),
             **({"retry_context": retry_final_context} if qa_evidence.posts else {}),
         )
         all_sources += qa_evidence.sources(evidence)
@@ -3452,7 +3472,7 @@ class ChatboxAgent:
             # then persist and emit done.
             for i in range(0, len(final_content), 4):
                 yield {"type": "token", "content": final_content[i:i + 4]}
-            meta_final: dict = {"tool_calls": total_tool_calls, "citations": evidence.used(final_content), "report_changes": report_changes, **evidence.sources.metadata(), **qa_evidence.metadata()}
+            meta_final: dict = {"tool_calls": total_tool_calls, "citations": evidence.used(final_content), "report_changes": report_changes, **evidence.sources.metadata(), **qa_turn.search_metadata(), **qa_evidence.metadata()}
             if execution:
                 meta_final['report_review_status'] = execution
             if note_changes:
@@ -3482,7 +3502,7 @@ class ChatboxAgent:
             "type": "done",
             "sources": all_sources,
             "note_changes": note_changes,
-            "citations": evidence.used(final_content), "report_changes": report_changes,
+            "citations": evidence.used(final_content), "report_changes": report_changes, **qa_turn.search_metadata(),
             "message_count": _done_count,
             "context_warning": _quick_warn,
         }
@@ -3490,11 +3510,11 @@ class ChatboxAgent:
 
     # ── LLM call with tools ──────────────────────────────────────────
 
-    def _call_llm_with_tools(self, messages: list[dict], tools=None, tool_choice="auto", retry_context=None) -> dict:
+    def _call_llm_with_tools(
+        self, messages: list[dict], tools=None, tool_choice="auto", retry_context=None, *,
+        responses: OpenAIResponsesChat | None = None,
+    ) -> dict:
         """Call the Chat LLM with tools enabled.
-
-        Uses the underlying OpenAI-compatible client directly for function
-        calling support (not available through the LLMProvider ABC).
 
         Returns:
             {"content": str} — text response
@@ -3530,10 +3550,13 @@ class ChatboxAgent:
         except (TypeError, AttributeError):
             pass
 
+        responses = responses or OpenAIResponsesChat.for_provider(self._llm)
         try:
-            resp = _send_chat_completion(self._llm, client.chat.completions.create, kwargs, retry_context)
+            resp = _send_chat_completion(
+                self._llm, client.chat.completions.create, kwargs, retry_context, responses=responses,
+            )
         except Exception as e:
-            retry_kwargs = _retry_llm_kwargs_after_error(kwargs, e, llm=self._llm)
+            retry_kwargs = None if responses is not None else _retry_llm_kwargs_after_error(kwargs, e, llm=self._llm)
             if retry_kwargs is not None:
                 try:
                     resp = _send_chat_completion(self._llm, client.chat.completions.create, retry_kwargs)
@@ -3593,6 +3616,7 @@ class ChatboxAgent:
         qa_projects: list[str] | None = None,
         source_collections: list[str] | None = None,
         source_domains: list[str] | None = None,
+        embedding_searches: list[dict] | None = None, skipped_collections: list[str] | None = None,
     ) -> None:
         """Persist a partially generated answer after a mid-stream disconnect.
 
@@ -3631,6 +3655,8 @@ class ChatboxAgent:
                     **({"source_collections": source_collections} if source_collections else {}),
                     **({"source_domains": source_domains} if source_domains else {}),
                     **({"qa_projects": qa_projects} if qa_projects else {}),
+                    **({"embedding_searches": embedding_searches} if embedding_searches else {}),
+                    **({"skipped_collections": skipped_collections} if skipped_collections else {}),
                     **({"report_changes": report_changes} if report_changes else {}),
                 },
             )
@@ -3666,7 +3692,9 @@ def _preview_tool_content(content, *, max_chars: int = 4000) -> str:
     return s
 
 
-def _force_generate_answer(llm, messages: list[dict], retry_context=None) -> str:
+def _force_generate_answer(
+    llm, messages: list[dict], retry_context=None, *, responses: OpenAIResponsesChat | None = None,
+) -> str:
     """Generate a final answer without tools (strips thinking tags).
 
     Appends a synthesis instruction so the LLM knows to produce an answer
@@ -3702,11 +3730,15 @@ def _force_generate_answer(llm, messages: list[dict], retry_context=None) -> str
                     llm._apply_thinking_kwargs(kwargs, False)
                 else:
                     kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-            resp = _send_chat_completion(llm, client.chat.completions.create, kwargs, retry if retry_context else None)
+            responses = responses or OpenAIResponsesChat.for_provider(llm)
+            resp = _send_chat_completion(
+                llm, client.chat.completions.create, kwargs, retry if retry_context else None,
+                responses=responses,
+            )
             from src.providers.llm.openai_compat import _strip_think
 
             content = _strip_think(resp.choices[0].message.content or "")
-            if not content:
+            if not content and responses is None:
                 # Some models (observed on qwen via DashScope) answer 200 with
                 # empty content when thinking is force-disabled on a long tool
                 # trajectory. One retry with the model's default thinking
@@ -3978,13 +4010,13 @@ def _hydrate_history_images(
 
 
 def _sanitize_tool_messages(messages: list[dict]) -> list[dict]:
-    """Repair dangling assistant tool_calls in an outgoing message list.
+    """Keep exactly one result for each assistant tool call in the outgoing history.
 
     Strict OpenAI-compatible providers (DeepSeek) return 400 when an
     assistant message carrying tool_calls is not followed by one tool
     message per tool_call_id. Histories written before multimodal tool
     results were persistable contain exactly that damage. Stub a tool
-    response for every unanswered id instead of failing the whole turn.
+    response for every unanswered id and skip unpaired or repeated results.
     """
     out: list[dict] = []
     pending: list[str] = []
@@ -4022,8 +4054,9 @@ def _sanitize_tool_messages(messages: list[dict]) -> list[dict]:
             ]
         elif role == "tool":
             tid = str(m.get("tool_call_id") or "")
-            if tid in pending:
-                pending.remove(tid)
+            if tid not in pending:
+                continue
+            pending.remove(tid)
             out.append(_project(m))
         else:
             _flush_stubs()

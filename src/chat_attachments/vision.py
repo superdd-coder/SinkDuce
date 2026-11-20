@@ -45,7 +45,7 @@ def _ask(llm, image: str) -> str:
     try:
         return probe.generate(content, thinking=thinking, temperature=1, max_tokens=256)
     except Exception as exc:
-        if "max_tokens" not in str(exc) or "max_completion_tokens" not in str(exc):
+        if probe._api_mode == "responses" or "max_tokens" not in str(exc) or "max_completion_tokens" not in str(exc):
             raise
         response = probe._client.chat.completions.create(
             model=probe._model, messages=[{"role": "user", "content": content}], max_completion_tokens=512,
@@ -65,7 +65,7 @@ def ensure_chat_vision(llm) -> bool:
     from src.providers.llm.openai_compat import OpenAICompatLLM
     if not isinstance(llm, OpenAICompatLLM):
         return False
-    identity = json.dumps([llm._base_url.rstrip("/"), llm._model, llm._client.api_key])
+    identity = json.dumps([llm._base_url.rstrip("/"), llm._model, llm._client.api_key, llm._api_mode])
     key = hashlib.sha256(identity.encode()).hexdigest()
     path = cache_root() / f"{key}.json"
     with _lock:

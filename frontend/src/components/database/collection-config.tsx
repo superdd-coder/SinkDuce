@@ -1,3 +1,4 @@
+import { CollectionEmbeddingSettings } from "./collection-embedding-settings"
 import { HelpHint } from "@/components/shared/help-hint"
 /**
  * Collection Settings — Premium surface (nested white cards on float stage).
@@ -21,8 +22,6 @@ import {
   updateCollectionConfig,
   triggerSparseRecalc,
   getConfig,
-  getEmbeddingProviders,
-  type EmbeddingProvider,
 } from "@/api/client"
 import { useAppStore } from "@/stores/app-store"
 import { useShallow } from "zustand/react/shallow"
@@ -34,6 +33,7 @@ import { CollectionAccessCard } from "#edition/collection-access-card"
 
 interface CollectionConfigProps {
   collection: string
+  onOpenIngestHistory: () => void
 }
 
 /** Field label + optional info tooltip — type role = label (Geist). */
@@ -96,7 +96,7 @@ function ConfigSwitch({
   )
 }
 
-export function CollectionConfig({ collection }: CollectionConfigProps) {
+export function CollectionConfig({ collection, onOpenIngestHistory }: CollectionConfigProps) {
   const t = useT()
   const { providers } = useAppStore(useShallow((s) => ({ providers: s.providers })))
   const [chunkMode, setChunkMode] = useState("normal")
@@ -111,12 +111,6 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
   const [contextualEnabled, setContextualEnabled] = useState(true)
   const [contextualWindow, setContextualWindow] = useState("1")
   const [embeddingDimensions, setEmbeddingDimensions] = useState("")
-  const [embeddingModel, setEmbeddingModel] = useState("")
-  const [globalEmbModel, setGlobalEmbModel] = useState("")
-  const [embeddingProviderId, setEmbeddingProviderId] = useState("")
-  const [embeddingProviders, setEmbeddingProviders] = useState<
-    EmbeddingProvider[]
-  >([])
   const [allowedTypes, setAllowedTypes] = useState<string[]>([])
   /** Skip autosave until first load for this collection finishes. */
   const [hydrated, setHydrated] = useState(false)
@@ -191,17 +185,8 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
 
         try {
           const globalCfg = await getConfig()
-          const emb = globalCfg.embedding as Record<string, unknown> | undefined
-          if (emb?.model) setGlobalEmbModel(String(emb.model))
           const mineru = globalCfg.mineru as Record<string, unknown> | undefined
           setMineruGloballyEnabled(!!mineru?.enabled)
-        } catch {
-          /* ignore */
-        }
-
-        try {
-          const list = await getEmbeddingProviders()
-          if (!cancelled) setEmbeddingProviders(list)
         } catch {
           /* ignore */
         }
@@ -221,8 +206,6 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
 
         setContextualEnabled(Boolean(cfg.contextual_enabled ?? true))
         setContextualWindow(String(cfg.contextual_window ?? 1))
-        setEmbeddingModel(String(cfg.embedding_model ?? ""))
-        setEmbeddingProviderId(String(cfg.embedding_provider_id ?? ""))
 
         const aft = cfg.allowed_file_types
         setAllowedTypes(Array.isArray(aft) ? aft.map(String) : [])
@@ -296,8 +279,6 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
       config.contextual_enabled = contextualEnabled
       if (contextualWindow)
         config.contextual_window = parseInt(contextualWindow, 10)
-      if (embeddingModel) config.embedding_model = embeddingModel
-      config.embedding_provider_id = embeddingProviderId || null
       config.allowed_file_types = allowedTypes
       config.enriching_llm_provider = enrichingLlmProvider || null
       config.enriching_llm_model = enrichingLlmModel || null
@@ -342,8 +323,6 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
     childChunkOverlap,
     contextualEnabled,
     contextualWindow,
-    embeddingModel,
-    embeddingProviderId,
     allowedTypes,
     enrichingLlmProvider,
     enrichingLlmModel,
@@ -579,44 +558,8 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
           )}
         </section>
 
-        {/* ── Embedding Model ── */}
-        <section className="pm-config-card">
-          <header className="pm-config-card-head">
-            <span className="pm-config-card-kicker">{t("library.embeddingModel")}</span>
-          </header>
-          <div className="pm-config-field">
-            <ConfigLabel tooltip={t("library.providerTooltip")}>
-              {t("library.provider")}
-            </ConfigLabel>
-            <DropdownSelect
-              size="sm"
-              value={embeddingProviderId}
-              onChange={setEmbeddingProviderId}
-              placeholder={`${t("library.globalDefault")}${globalEmbModel ? ` (${globalEmbModel})` : ""}`}
-              options={[
-                {
-                  value: "",
-                  label: `${t("library.globalDefault")}${globalEmbModel ? ` (${globalEmbModel})` : ""}`,
-                },
-                ...embeddingProviders.map((p) => ({
-                  value: p.id,
-                  label: p.name || p.model || p.id,
-                })),
-              ]}
-            />
-          </div>
-          {embeddingModel ? (
-            <div className="pm-config-field">
-              <ConfigLabel tooltip={t("library.modelLegacyTooltip")}>{t("library.modelLegacy")}</ConfigLabel>
-              <Input
-                value={embeddingModel}
-                onChange={(e) => setEmbeddingModel(e.target.value)}
-                placeholder="text-embedding-3-small"
-                className="pm-config-input"
-              />
-            </div>
-          ) : null}
-        </section>
+        <CollectionEmbeddingSettings key={collection} collection={collection} canEdit={canWriteConfig}
+          onDimensions={setEmbeddingDimensions} onOpenIngestHistory={onOpenIngestHistory} />
 
         {/* ── Allowed File Types ── */}
         <section className="pm-config-card">

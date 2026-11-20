@@ -46,7 +46,7 @@ interface DropdownSelectProps {
   searchable?: boolean
 }
 
-/** Shared soft-glass listbox; keyboard focus and the selected value are distinct. */
+/** Keyboard focus can move independently of the selected value. */
 export function DropdownSelect({ id, "aria-label": ariaLabel, "aria-labelledby": ariaLabelledBy,
   value, onChange, options, placeholder, disabled, className, size = "default", menuZIndex, chevron, leading,
   valueContent, menuClassName, searchable,

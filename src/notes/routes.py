@@ -136,6 +136,13 @@ def _resolve_note_file_id(collection: str, note_id: str) -> str | None:
 
 
 def _do_ingest_note(collection: str, note_id: str, note_title: str, content: str):
+    from src.db.index_routing import collection_work
+
+    with collection_work(collection).writer():
+        return _do_ingest_note_with_model(collection, note_id, note_title, content)
+
+
+def _do_ingest_note_with_model(collection: str, note_id: str, note_title: str, content: str):
     """Run full ingest pipeline: chunk → enrich → embed → store.
 
     Runs in a background thread via BackgroundTasks. Reuses the
@@ -155,6 +162,9 @@ def _do_ingest_note(collection: str, note_id: str, note_title: str, content: str
         services.db.create_collection(collection, vector_size=vector_size)
 
     config = services.db.get_collection_config(collection)
+    embedding = get_collection_embedding(config, collection)
+    if embedding is None:
+        raise ValueError("The collection's embedding model is disconnected.")
 
     # ── Stage 1: Chunking ──
     source = f"__note__:{note_id}"
@@ -372,9 +382,10 @@ def _do_ingest_note(collection: str, note_id: str, note_title: str, content: str
 
     # ── Stage 3: Embedding ──
     t_emb = time.time()
-    embedding = get_collection_embedding(config, collection)
     texts = [_build_enriched_text(c) for c in chunks]
     embeddings = embedding.embed_texts(texts)
+    from src.rag.embedding_validation import validate_vectors
+    validate_vectors(embeddings, len(texts), embedding.dimensions)
     logger.info("[INGEST] Note %s: embedding done (%.1fs)",
                 note_id, time.time() - t_emb)
 
@@ -405,10 +416,13 @@ def _do_ingest_note(collection: str, note_id: str, note_title: str, content: str
         payloads.append(payload)
 
     t_store = time.time()
-    services.db.upsert_points(
-        collection=collection, ids=ids, vectors=embeddings,
-        payloads=payloads,
-    )
+    from src.db.index_routing import collection_work
+    with collection_work(collection).commit:
+        services.db.upsert_points(
+            collection=collection, ids=ids, vectors=embeddings, payloads=payloads,
+            expected_binding=getattr(embedding, "index_binding", None),
+        )
+        services.db.delete_by_filter(collection, key="source", value=source, keep_ids=ids)
 
     # ── Sparse encoding ──
     try:
@@ -868,13 +882,6 @@ async def ingest_note(collection: str, note_id: str, background_tasks: Backgroun
     existing_fid = _resolve_note_file_id(collection, note_id)
     if existing_fid:
         return await reingest_note(collection, note_id)
-
-    source = f"__note__:{note_id}"
-    try:
-        if services.db and services.db.collection_exists(collection):
-            services.db.delete_by_filter(collection, key="source", value=source)
-    except Exception:
-        pass
 
     def run_ingestion():
         logger.info("[INGEST] Starting ingestion for note %s in collection '%s'", note_id, collection)

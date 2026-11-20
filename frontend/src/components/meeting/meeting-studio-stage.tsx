@@ -503,29 +503,15 @@ function MeetingStudioContent(p: MeetingStudioStageProps) {
                   aria-hidden={!sideRailOpen}
                 >
                     <div className="pm-meeting-stage-right-card">
-                      {/* Head: sliding pill tabs / Chat label + collapse. Diamond parks absolutely. */}
-                      <div
-                        className={cn(
-                          "pm-meeting-side-head",
-                          sideSurfaceDisplay === "chat" && "is-chat-mode",
-                        )}
-                      >
-                        <div
-                          className={cn(
-                            "pm-meeting-side-head-main",
-                            sideSurfaceExiting && "is-exiting",
-                            !sideSurfaceExiting && "is-entering",
-                          )}
-                          key={sideSurfaceDisplay === "chat" ? "chat-head" : "tabs-head"}
-                        >
-                          {sideSurfaceDisplay === "chat" ? (
-                            <div className="pm-meeting-side-chat-label">
-                              <span className="pm-meeting-side-chat-title">{t("common.chat")}</span>
-                              <span className="pm-meeting-side-chat-sub truncate" title={meeting.title ?? ""}>
-                                {meeting.title || t("nav.meeting")}
-                              </span>
-                            </div>
-                          ) : (
+                      {sideSurfaceDisplay !== "chat" && (
+                        <div className="pm-meeting-side-head">
+                          <div
+                            className={cn(
+                              "pm-meeting-side-head-main",
+                              sideSurfaceExiting && "is-exiting",
+                              !sideSurfaceExiting && "is-entering",
+                            )}
+                          >
                             <Tabs
                               value={sideTab}
                               onValueChange={(v) => {
@@ -548,11 +534,8 @@ function MeetingStudioContent(p: MeetingStudioStageProps) {
                                 </TabsTrigger>
                               </TabsList>
                             </Tabs>
-                          )}
-                        </div>
-                        {/* Spacer so diamond parks over this gap when top; collapse only in tools mode */}
-                        <span className="pm-meeting-side-fab-slot" aria-hidden />
-                        {sideSurfaceDisplay !== "chat" && (
+                          </div>
+                          <span className="pm-meeting-side-fab-slot" aria-hidden />
                           <button
                             type="button"
                             className="pm-meeting-side-collapse"
@@ -562,8 +545,8 @@ function MeetingStudioContent(p: MeetingStudioStageProps) {
                           >
                             <PanelRightClose className="size-3.5" />
                           </button>
-                        )}
-                      </div>
+                        </div>
+                      )}
 
                       <div
                         className={cn(

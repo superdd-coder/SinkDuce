@@ -49,7 +49,7 @@ function _cacheAddLastNoteChanges(sid: string, changes: unknown) {
   }
 }
 function _applyArtifacts(sid: string, active: boolean, data: Record<string, unknown>) {
-  if (!Array.isArray(data.citations) && !Array.isArray(data.report_changes)) return
+  if (![data.citations, data.report_changes, data.skipped_collections, data.embedding_searches].some(Array.isArray)) return
   if (active) useAppStore.getState().addLastMessageArtifacts(data)
   else {
     const messages = [...(_getCachedMessages(sid) ?? [])]

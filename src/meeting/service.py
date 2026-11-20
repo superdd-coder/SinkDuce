@@ -198,6 +198,8 @@ async def transcribe_handler(task: Task, meeting_id: str, **kwargs) -> dict:
         status=MeetingStatus.transcribing,
         transcription_error=None,
         transcript_index_status="",
+        transcript_index_collection="",
+        transcript_retry_after=0,
         transcript_index_error="",
         processing_state=ProcessingState.idle.value,
         summary_gen_state=GenerationState.idle.value,

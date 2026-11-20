@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
+import time
 import uuid
 from typing import Any
 
@@ -13,6 +15,10 @@ from src.rag.chunker import _estimate_tokens
 
 TRANSCRIPT_COLLECTION = "__sinkduce_meeting_transcripts__"
 INTERNAL_QDRANT_COLLECTIONS = frozenset({"__summaries__", TRANSCRIPT_COLLECTION})
+
+
+def is_internal_collection(name: str) -> bool:
+    return name in INTERNAL_QDRANT_COLLECTIONS or name.startswith((TRANSCRIPT_COLLECTION, "__sinkduce_embedding_"))
 
 _REF_RE = re.compile(r"\[ref:\s*[^\]]*\]", re.I)
 _SPK_RE = re.compile(r"\[spk:[^\]]*\]", re.I)
@@ -420,16 +426,18 @@ def group_cites_from_hits(
                 continue
             seen.add(key)
             meta_row = meeting_meta.get(mid) or {}
-            out.append(
-                {
-                    "n": n,
-                    "meeting_id": mid,
-                    "ref_n": ref_n,
-                    "sentence_id": sid,
-                    "title": str(meta_row.get("title") or ""),
-                    "date": str(meta_row.get("date") or ""),
-                }
-            )
+            cite = {
+                "n": n,
+                "meeting_id": mid,
+                "ref_n": ref_n,
+                "sentence_id": sid,
+                "title": str(meta_row.get("title") or ""),
+                "date": str(meta_row.get("date") or ""),
+            }
+            start_time = raw.get("start_time")
+            if isinstance(start_time, (int, float)) and math.isfinite(start_time) and start_time >= 0:
+                cite["start_time"] = start_time
+            out.append(cite)
     return out
 
 
@@ -642,21 +650,22 @@ def purge_meeting_transcripts(meeting_id: str) -> None:
     try:
         from src.services import services
 
-        if not services.db or not services.db.collection_exists(TRANSCRIPT_COLLECTION):
-            return
-        services.db.delete_by_filter(TRANSCRIPT_COLLECTION, "meeting_id", meeting_id)
+        if services.db:
+            for name in services.db.list_collections():
+                if name.startswith(TRANSCRIPT_COLLECTION):
+                    services.db.delete_by_filter(name, "meeting_id", meeting_id)
     except Exception:
         logger.warning("purge transcript packs failed meeting=%s", meeting_id, exc_info=True)
 
 
-def ensure_transcript_collection(db, vector_size: int) -> None:
+def ensure_transcript_collection(db, vector_size: int, collection: str = TRANSCRIPT_COLLECTION) -> None:
     """Create the hidden transcript collection + payload indexes if needed."""
-    if not db.collection_exists(TRANSCRIPT_COLLECTION):
-        db.create_collection(TRANSCRIPT_COLLECTION, vector_size=vector_size)
-    _ensure_payload_indexes(db)
+    if not db.collection_exists(collection):
+        db.create_collection(collection, vector_size=vector_size)
+    _ensure_payload_indexes(db, collection)
 
 
-def _ensure_payload_indexes(db) -> None:
+def _ensure_payload_indexes(db, collection=TRANSCRIPT_COLLECTION) -> None:
     from qdrant_client.http.models import PayloadSchemaType
 
     client = getattr(db, "client", None)
@@ -672,7 +681,7 @@ def _ensure_payload_indexes(db) -> None:
     for field, schema in specs:
         try:
             client.create_payload_index(
-                collection_name=TRANSCRIPT_COLLECTION,
+                collection_name=collection,
                 field_name=field,
                 field_schema=schema,
             )
@@ -788,17 +797,12 @@ def index_meeting_transcripts(
     embedding,
     llm=None,
     sparse_encoder=None,
+    collection: str = TRANSCRIPT_COLLECTION,
 ) -> int:
     """Replace this meeting's packs in Qdrant. Returns pack count."""
     dim = int(getattr(embedding, "dimensions", 0) or 0)
     if dim <= 0:
         raise ValueError("Embedding dimensions unknown")
-    ensure_transcript_collection(db, dim)
-    try:
-        db.delete_by_filter(TRANSCRIPT_COLLECTION, "meeting_id", meeting_id)
-    except Exception:
-        logger.warning("delete old transcript packs failed meeting=%s", meeting_id, exc_info=True)
-
     packs = pack_sentences(sentences, meeting_id=meeting_id)
     n_sent = len(sentences)
     if not packs:
@@ -855,6 +859,9 @@ def index_meeting_transcripts(
         for p in packs
     ]
     vectors = embedding.embed_texts(texts)
+    from src.rag.embedding_validation import validate_vectors
+    validate_vectors(vectors, len(packs), dim)
+    ensure_transcript_collection(db, dim, collection)
     ids = [_point_id(meeting_id, p["pack_index"]) for p in packs]
     payloads = []
     for p, text in zip(packs, texts):
@@ -865,17 +872,24 @@ def index_meeting_transcripts(
         pl["is_current"] = True
         payloads.append(pl)
     db.upsert_points(
-        collection=TRANSCRIPT_COLLECTION,
+        collection=collection,
         ids=ids,
         vectors=vectors,
         payloads=payloads,
     )
+    # Deterministic point IDs replace existing packs. Only remove the old tail
+    # after the new batch is safely stored.
+    from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
+    db.client.delete(collection_name=collection, points_selector=Filter(must=[
+        FieldCondition(key="meeting_id", match=MatchValue(value=meeting_id)),
+        FieldCondition(key="pack_index", range=Range(gte=len(ids))),
+    ]))
     if sparse_encoder is not None:
         try:
-            sparse_encoder.load(db, TRANSCRIPT_COLLECTION)
+            sparse_encoder.load(db, collection)
             sv = sparse_encoder.encode(texts)
-            db.upsert_sparse_vectors(TRANSCRIPT_COLLECTION, ids, sv)
-            sparse_encoder.save(db, TRANSCRIPT_COLLECTION)
+            db.upsert_sparse_vectors(collection, ids, sv)
+            sparse_encoder.save(db, collection)
         except Exception:
             logger.warning("sparse upsert failed meeting=%s", meeting_id, exc_info=True)
         else:
@@ -884,7 +898,7 @@ def index_meeting_transcripts(
         "[TX_INDEX] upserted %d packs meeting=%s collection=%s dim=%d",
         len(packs),
         meeting_id,
-        TRANSCRIPT_COLLECTION,
+        collection,
         dim,
     )
     return len(packs)
@@ -933,9 +947,15 @@ def search_transcript_packs(
     use_rerank = reranker is not None and not skip_rerank
     search_k = 20 if use_rerank else max(top_k, 10)
     filt = meeting_search_filter(meeting_id, speaker_ids)
+    from src.meeting.embedding_index import lookup_space
+    collection, embedding = lookup_space(meeting_id)
+    if not collection:
+        return []
     chunks = retriever.retrieve(
         query,
-        collection=TRANSCRIPT_COLLECTION,
+        collection=collection,
+        embedding_override=embedding,
+        meeting_ids=(meeting_id,),
         top_k=search_k,
         search_mode="hybrid",
         filter_condition=filt,
@@ -1000,17 +1020,24 @@ def search_group_transcript_packs(
     }
     if exclude_keys:
         search_k = min(50, search_k + len(exclude_keys))
-    filt = group_search_filter(
-        meetings,
-        exclude_point_ids=_point_ids_from_pack_keys(exclude_keys) or None,
-    )
-    chunks = retriever.retrieve(
-        query,
-        collection=TRANSCRIPT_COLLECTION,
-        top_k=search_k,
-        search_mode="hybrid",
-        filter_condition=filt,
-    ) or []
+    from itertools import zip_longest
+    from src.meeting.embedding_index import lookup_space
+
+    groups = {}
+    for clause in meetings:
+        collection, embedding = lookup_space(clause["meeting_id"])
+        if collection:
+            groups.setdefault(collection, (embedding, []))[1].append(clause)
+    ranked = []
+    for collection, (embedding, clauses) in groups.items():
+        filt = group_search_filter(clauses, exclude_point_ids=_point_ids_from_pack_keys(exclude_keys) or None)
+        try:
+            ranked.append(retriever.retrieve(query, collection=collection, embedding_override=embedding,
+                                             top_k=search_k, search_mode="hybrid", filter_condition=filt,
+                                             meeting_ids=tuple(c["meeting_id"] for c in clauses)) or [])
+        except Exception:
+            logger.warning("Meeting search failed for one embedding model", exc_info=True)
+    chunks = [hit for row in zip_longest(*ranked) for hit in row if hit is not None]
     for c in chunks:
         filled = _spoken_text_from_chunk(c)
         if filled:
@@ -1112,14 +1139,26 @@ def index_from_store(meeting_id: str) -> int:
     from src.rag.sparse_encoder import SparseEncoder
     from src.services import services
 
-    store.update_meeting(
-        meeting_id, transcript_index_status="building", transcript_index_error=""
-    )
-    logger.info("[TX_INDEX] index_from_store start meeting=%s", meeting_id)
+    from src.config import EmbeddingBinding
+    from src.meeting.embedding_index import previous_index, space_collection
+    from src.providers.embedding import create_embedding_provider
+
+    meeting = store.get_meeting(meeting_id)
+    if meeting is None:
+        raise FileNotFoundError(meeting_id)
+    settings = services.config.embedding
+    old, old_collection = previous_index(meeting, settings, services.db)
+    provider = (old.resolve(settings.providers) if old else None) or settings.default
+    if not provider:
+        store.update_meeting(meeting_id, transcript_index_status="waiting_model",
+                             transcript_index_error="No embedding model configured.")
+        return 0
+    store.update_meeting(meeting_id, transcript_index_status="building", transcript_index_error="")
     try:
-        meeting = store.get_meeting(meeting_id)
-        if meeting is None:
-            raise FileNotFoundError(meeting_id)
+        embedding = create_embedding_provider(provider)
+        binding = EmbeddingBinding.from_provider(provider, embedding.dimensions)
+        collection = old_collection if old and old.resolve([provider]) and old.dimensions == binding.dimensions else space_collection(binding)
+        collection = collection or space_collection(binding)
         sentences = load_sentences_for_meeting(meeting_id)
         llm = None
         try:
@@ -1132,15 +1171,41 @@ def index_from_store(meeting_id: str) -> int:
             title=(meeting.title or "") if meeting else "",
             transcript=format_transcript_for_locator(meeting_id),
             db=services.db,
-            embedding=services.embedding,
+            embedding=embedding,
+            collection=collection,
             llm=llm,
             sparse_encoder=SparseEncoder(),
         )
+        latest = store.get_meeting(meeting_id)
+        if not latest or latest.archived or latest.transcript_index_status != "building" or sentences != load_sentences_for_meeting(meeting_id):
+            if n:
+                services.db.delete_by_filter(collection, "meeting_id", meeting_id)
+            if latest and latest.transcript_index_status == "building":
+                store.update_meeting(meeting_id, transcript_index_status="", transcript_index_collection="")
+            return 0
+        live = services.config.embedding.providers
+        if old_collection and old_collection != collection and old and old.resolve(live):
+            services.db.delete_by_filter(collection, "meeting_id", meeting_id)
+            store.update_meeting(meeting_id, transcript_index_status="ready", transcript_index_error="",
+                                 transcript_retry_after=0)
+            return n
+        if not binding.resolve(live):
+            if collection != old_collection:
+                services.db.delete_by_filter(collection, "meeting_id", meeting_id)
+            raise RuntimeError("The embedding model changed while indexing the meeting.")
         store.update_meeting(
             meeting_id,
+            transcript_embedding=binding,
+            transcript_index_collection=collection,
+            transcript_retry_after=0,
             transcript_index_status="ready" if n else "failed",
             transcript_index_error="" if n else "no packs",
         )
+        if n and old_collection and old_collection != collection:
+            try:
+                services.db.delete_by_filter(old_collection, "meeting_id", meeting_id)
+            except Exception:
+                logger.warning("Retired transcript index cleanup failed for %s", meeting_id, exc_info=True)
         logger.info(
             "[TX_INDEX] index_from_store done meeting=%s status=%s packs=%d title=%r",
             meeting_id,
@@ -1154,8 +1219,9 @@ def index_from_store(meeting_id: str) -> int:
         try:
             store.update_meeting(
                 meeting_id,
-                transcript_index_status="failed",
+                transcript_index_status="waiting_model" if old_collection and old and not old.resolve([provider]) else "failed",
                 transcript_index_error=str(exc)[:500],
+                transcript_retry_after=time.time() + 300,
             )
         except Exception:
             pass
@@ -1271,6 +1337,10 @@ def lookup_json_and_keys(
 
     from src.meeting import store
     from src.services import services
+
+    from src.identity import get_actor, visibility
+    if not visibility.is_meeting_visible(get_actor(), meeting_id):
+        return json.dumps({"context": "", "hit_count": 0}), set(), []
 
     meeting = store.get_meeting(meeting_id)
     # `is True` (not truthiness): meetings can be test mocks whose attributes
@@ -1456,9 +1526,10 @@ def execute_meetings_lookup_json_and_keys(
     seen = {str(k).strip() for k in (seen_pack_keys or []) if str(k).strip()}
     seen |= {transcript_pack_key(h) for h in prior}
 
-    for mid in target:
+    from src.identity import get_actor, visibility
+    for mid in visibility.filter_meeting_ids(get_actor(), target):
         meeting = store.get_meeting(mid)
-        if meeting is None:
+        if meeting is None or getattr(meeting, "archived", False) is True:
             continue
         title = meeting.title or mid
         if (meeting.transcript_index_status or "") != "ready":

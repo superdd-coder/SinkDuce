@@ -105,7 +105,7 @@ export function planActions(
 
     case "config":
       // Provider/model defaults changed on another device.
-      return [{ kind: "refreshConfig" }]
+      return [{ kind: "refreshConfig" }, { kind: "refreshCollections" }]
 
     default:
       return []

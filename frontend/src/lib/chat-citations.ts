@@ -7,7 +7,8 @@ export interface Evidence {
   location: Record<string, unknown>
 }
 
-const markers = /```[\s\S]*?(?:```|$)|`[^`\n]*`|\[cite:([^\]\r\n]{0,200})\]/g
+// Match the backend parser even when the model prepends the ID field's name.
+const markers = /```[\s\S]*?(?:```|$)|`[^`\n]*`|\[cite:(?:evidence_id_(?=e_[0-9a-f]{20}\]))?([^\]\r\n]{0,200})\]/g
 
 /** Backend offsets count Unicode code points; browser ranges count UTF-16 units. */
 export function citationTextRange(text: string, quote: string, pythonOffset?: unknown): { offset: number; length: number } | undefined {

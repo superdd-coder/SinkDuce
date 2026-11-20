@@ -318,7 +318,7 @@ export function AppLayout() {
       {minimized && !downloadDialogOpen && (
         <button
           onClick={() => { setDownloadDialogOpen(true); setMinimized(false) }}
-          className="fixed top-14 right-4 z-50 flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-card shadow-lg hover:bg-accent transition-colors"
+          className="fixed top-14 right-4 z-50 flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-popover shadow-lg hover:bg-[var(--sd-selected)] transition-colors"
         >
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
           <span className="text-sm">{t("shell.downloadingModels")}</span>

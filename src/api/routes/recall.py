@@ -25,6 +25,7 @@ from src.api.schemas import (
     RecallSearchResponse,
 )
 from src.rag.collection_utils import (
+    embedding_status,
     get_embedding_overrides,
 )
 # retrieve_standard / retrieve_parent_child_multi migrated to DirectQueryModule
@@ -783,7 +784,7 @@ def run_eval(collection: str, req: EvalRequest):
         "chunk_mode": col_config.get("chunk_mode", "normal"),
         "search_mode": req.search_mode,
         "dimensions": col_config.get("dimensions"),
-        "embedding_model": col_config.get("embedding_model") or (services.config.embedding.default.model if services.config.embedding.default else ""),
+        "embedding_model": embedding_status(col_config, collection)["embedding_model"],
         "use_reranker": req.use_reranker,
         "rerank_top_k": req.rerank_top_k,
         "top_k": req.top_k,

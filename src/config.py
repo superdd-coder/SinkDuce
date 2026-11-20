@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import uuid
@@ -7,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -185,12 +186,16 @@ CONFIG_PATH = DATA_DIR / "config.yaml"
 TEMPLATE_PATH = Path("config.yaml.template")
 
 
+LLMApiMode = Literal["responses", "chat_completions"]
+
+
 class LLMProviderConfig(BaseModel):
     id: str = ""
     name: str = ""
     provider: str = "openai_compatible"
     model: str = "deepseek-chat"
     base_url: str = ""
+    api_mode: LLMApiMode | None = None  # None follows the Base URL default.
     api_key: str = ""
     is_default: bool = False
     selected_models: list[str] = []
@@ -211,7 +216,7 @@ class LLMConfig(BaseModel):
 class EmbeddingProviderConfig(BaseModel):
     id: str = ""
     name: str = ""
-    provider: str = "openai_compatible"  # local, openai_compatible (alias: remote)
+    provider: str = "openai_compatible"  # openai, openai_compatible (alias: remote)
     model: str = ""
     base_url: str = ""
     api_key: str = ""
@@ -220,12 +225,79 @@ class EmbeddingProviderConfig(BaseModel):
     is_default: bool = False
 
 
+class EmbeddingBinding(BaseModel):
+    """The identity of an index, independent of credentials and config record IDs."""
+    model: str
+    source: str
+    dimensions: int
+    provider_id: str = ""
+
+    @classmethod
+    def from_provider(cls, provider: EmbeddingProviderConfig, dimensions: int | None = None):
+        from src.providers.openai_endpoint import OPENAI_API_BASE_URL, is_openai_endpoint
+
+        endpoint = provider.base_url.strip().rstrip("/")
+        kind = provider.provider
+        if kind == "remote":
+            kind = "openai_compatible"
+        if kind == "openai" or is_openai_endpoint(endpoint):
+            kind = "openai"
+            if not endpoint or endpoint == "https://api.openai.com":
+                endpoint = OPENAI_API_BASE_URL
+        source = hashlib.sha256(f"{kind}\n{endpoint}".encode()).hexdigest()
+        return cls(model=provider.model.strip(), source=source, provider_id=provider.id,
+                   dimensions=provider.dimensions if dimensions is None else dimensions)
+
+    def resolve(self, providers: list[EmbeddingProviderConfig]) -> EmbeddingProviderConfig | None:
+        # A re-created connection can have a new UUID or API key. An existing
+        # UUID can also have been edited to point at a different model.
+        for provider in sorted(providers, key=lambda p: p.id != self.provider_id):
+            if provider.model.strip() == self.model and self.from_provider(provider).source == self.source:
+                return provider.model_copy(update={"dimensions": self.dimensions})
+        return None
+
+
 class EmbeddingConfig(BaseModel):
     providers: list[EmbeddingProviderConfig] = []
+    legacy_default: EmbeddingBinding | None = None
+    legacy_providers: list[EmbeddingBinding] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_single_provider(cls, raw):
+        """Accept the original flat configuration when loading from disk or constructing settings."""
+        if not isinstance(raw, dict) or "providers" in raw or not ("provider" in raw or "model" in raw):
+            return raw
+        provider = EmbeddingProviderConfig(
+            name=raw.get("model", "Default"),
+            provider=raw.get("provider", "openai_compatible"),
+            model=raw.get("model", ""),
+            base_url=raw.get("base_url", ""),
+            api_key=raw.get("api_key", ""),
+            dimensions=raw.get("dimensions", 512),
+            batch_size=raw.get("batch_size", 10),
+            is_default=True,
+        )
+        return {"providers": [provider]}
+
+    @model_validator(mode="after")
+    def normalize_default(self):
+        if self.providers:
+            selected = next((p for p in self.providers if p.is_default), self.providers[0])
+            for index, p in enumerate(self.providers):
+                if not p.id:
+                    original = EmbeddingBinding.from_provider(p)
+                    p.id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"embedding:{original.source}:{p.model}:{index}"))
+                p.is_default = p is selected
+        if self.legacy_providers is None:
+            self.legacy_providers = [EmbeddingBinding.from_provider(p) for p in self.providers]
+            if self.legacy_default is None and self.default:
+                self.legacy_default = EmbeddingBinding.from_provider(self.default)
+        return self
 
     @property
     def default(self) -> EmbeddingProviderConfig | None:
-        return next((p for p in self.providers if p.is_default), None)
+        return next((p for p in self.providers if p.is_default), self.providers[0] if self.providers else None)
 
 
 class RerankProviderConfig(BaseModel):
@@ -449,26 +521,6 @@ def _resolve_config_path(path: str | Path | None = None) -> Path:
     return Path("config.yaml")
 
 
-def _migrate_embedding(raw: dict) -> dict:
-    """Migrate old single-embedding format to providers list."""
-    if "providers" in raw:
-        return raw
-    if "provider" not in raw and "model" not in raw:
-        return raw
-    provider = EmbeddingProviderConfig(
-        id=str(uuid.uuid4()),
-        name=raw.get("model", "Default"),
-        provider=raw.get("provider", "openai_compatible"),
-        model=raw.get("model", ""),
-        base_url=raw.get("base_url", ""),
-        api_key=raw.get("api_key", ""),
-        dimensions=raw.get("dimensions", 512),
-        batch_size=raw.get("batch_size", 10),
-        is_default=True,
-    )
-    return {"providers": [provider.model_dump()]}
-
-
 def _migrate_rerank(raw: dict) -> dict:
     """Migrate old single-rerank format to providers list."""
     if "providers" in raw:
@@ -535,11 +587,6 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         )
         raw["llm"] = {"providers": [provider.model_dump()]}
 
-    # Backward compat: convert old single-embedding format to providers list
-    emb_raw = raw.get("embedding", {})
-    if emb_raw:
-        raw["embedding"] = _migrate_embedding(emb_raw)
-
     # Backward compat: convert old single-rerank format to providers list
     rerank_raw = raw.get("rerank", {})
     if rerank_raw:
@@ -561,6 +608,7 @@ def save_config(config: AppConfig, path: str | Path | None = None) -> None:
     from src.atomic_io import write_text_atomic
 
     save_path = Path(path) if path else CONFIG_PATH
+    config.embedding.normalize_default()
     data = config.model_dump(exclude_none=True)
     text = yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
     write_text_atomic(save_path, text)

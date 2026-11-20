@@ -1,9 +1,9 @@
-import { useId, useState } from "react"
+import { useEffect, useId, useState } from "react"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogKicker, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { DropdownSelect } from "@/components/ui/dropdown-select"
-import { createCollection } from "@/api/client"
+import { createCollection, getCollectionEmbeddingOptions, type CollectionEmbeddingOption } from "@/api/client"
 import { toast } from "sonner"
 import { ChevronDown } from "lucide-react"
 import { useT } from "@/i18n/use-t"
@@ -29,7 +29,23 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
   const t = useT()
   const id = useId()
   const [name, setName] = useState("")
-  const [dimensions, setDimensions] = useState("1536")
+  const [dimensions, setDimensions] = useState("")
+  const [models, setModels] = useState<CollectionEmbeddingOption[]>([])
+  const [modelId, setModelId] = useState("")
+  useEffect(() => {
+    if (!open) return
+    let active = true
+    setModels([])
+    setModelId("")
+    void getCollectionEmbeddingOptions().then(list => {
+      if (!active) return
+      const initial = list.find(model => model.is_default) || list[0]
+      setModels(list)
+      setModelId(initial?.id || "")
+      setDimensions(initial?.dimensions ? String(initial.dimensions) : "")
+    }).catch(error => { if (active) toast.error(formatApiError(error, t)) })
+    return () => { active = false }
+  }, [open, t])
   const [chunkMode, setChunkMode] = useState("normal")
   const [parentStrategy, setParentStrategy] = useState("paragraph")
   const [chunkSize, setChunkSize] = useState("512")
@@ -43,10 +59,10 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
   const [advancedOpen, setAdvancedOpen] = useState(false)
 
   const handleCreate = async () => {
-    if (!name.trim()) return
+    if (!name.trim() || !modelId) return
     setSaving(true)
     try {
-      const chunkConfig: Record<string, unknown> = {}
+      const chunkConfig: Record<string, unknown> = {embedding_provider_id: modelId}
       if (chunkMode === "parent_child") {
         chunkConfig.chunk_mode = "parent_child"
         chunkConfig.parent_strategy = parentStrategy
@@ -59,7 +75,7 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
         chunkConfig.chunk_overlap = parseInt(chunkOverlap) || 64
       }
       if (allowedTypes.length > 0) chunkConfig.allowed_file_types = allowedTypes
-      const res = await createCollection(name.trim(), parseInt(dimensions), chunkConfig)
+      const res = await createCollection(name.trim(), parseInt(dimensions) || undefined, chunkConfig)
       if (res.error) toast.error(res.error)
       else {
         toast.success(res.message || t("library.collectionCreated"))
@@ -92,6 +108,18 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
               placeholder={t("library.namePh")}
               className="h-8"
             />
+          </div>
+
+          <div>
+            <label className="pm-field-label" htmlFor={`${id}-embedding`}>{t("library.embeddingModel")}</label>
+            <DropdownSelect id={`${id}-embedding`} value={modelId} size="sm" disabled={!models.length}
+              placeholder={t("library.noEmbedding")}
+              options={models.map(model => ({value: model.id, label: model.name || model.model}))}
+              onChange={value => {
+                setModelId(value)
+                const model = models.find(p => p.id === value)
+                setDimensions(model?.dimensions ? String(model.dimensions) : "")
+              }} />
           </div>
 
           <Button
@@ -158,7 +186,8 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
                       size="sm"
                       value={dimensions}
                       onChange={setDimensions}
-                      options={[64, 128, 256, 512, 768, 1024, 1536, 2048, 3072].map(
+                      placeholder={t("library.modelDimensions")}
+                      options={Array.from(new Set([64, 128, 256, 512, 768, 1024, 1536, 2048, 3072, ...models.map(p => p.dimensions).filter(d => d > 0)])).sort((a, b) => a - b).map(
                         (d) => ({ value: String(d), label: String(d) })
                       )}
                     />
@@ -269,7 +298,7 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
           </Button>
           <Button
             onClick={handleCreate}
-            disabled={saving || !name.trim()}
+            disabled={saving || !name.trim() || !modelId}
           >
             {saving ? t("common.loading") : t("common.create")}
           </Button>

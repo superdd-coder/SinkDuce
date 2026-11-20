@@ -24,7 +24,6 @@
   background: var(--sd-surface-overlay);
   color: var(--sd-muted);
   box-shadow: var(--sd-shadow-control);
-  backdrop-filter: blur(18px) saturate(1.1);
   opacity: 1;
 }
 :is(.chat-answer-markdown, .pm-chat-prose.chat-answer-markdown, .pm-report-paper, .pm-editor-svg) .chat-md-visual-toolbar button,

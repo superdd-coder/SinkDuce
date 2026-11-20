@@ -2,6 +2,7 @@
 .sd-project-workspace .pm-shell-stage-slot { container-type: inline-size; container-name: project-stage; }
 .sd-project-workspace .pm-collection-header { gap: 16px; padding-top: 22px; padding-bottom: 4px; }
 .sd-project-workspace .pm-collection-name { font: 550 22px/1.4 var(--type-font-ui); letter-spacing: -.55px; }
+.sd-project-workspace .pm-collection-tabs-actions[inert] { display: none; }
 .sd-project-workspace .sd-project-header-action { width: 34px; height: 34px; min-width: 34px; padding: 0 !important; border-radius: 50%; background: var(--sd-field); position: relative; }
 .sd-project-header-action .pm-ingest-badge { position: absolute; right: -4px; top: -3px; font-size: 9px; padding: 2px 4px; }
 .sd-project-rail .pm-shell-collections-head { padding: 19px 16px 12px; }
@@ -26,7 +27,6 @@
 .sd-project-more:hover { background: var(--sd-hover); }
 .sd-project-empty { padding: 18px 10px; font-size: 12px; line-height: 1.8; color: var(--sd-muted); }
 .sd-project-menu { min-width: 170px; padding: 6px; border-radius: 18px; background: var(--sd-surface-overlay); box-shadow: var(--sd-shadow-float); outline: none; }
-.sd-project-menu, .sd-folder-popover { backdrop-filter: blur(20px) saturate(1.05); -webkit-backdrop-filter: blur(20px) saturate(1.05); }
 .sd-project-menu .pm-shell-col-action { display: flex; width: 100%; height: 36px; gap: 10px; justify-content: flex-start; border-radius: 12px; padding: 0 12px; font-size: 12px; color: var(--sd-text); }
 .sd-project-menu .pm-shell-col-action:is(:hover, [data-highlighted]) { background: var(--sd-hover); color: var(--sd-ink); outline: none; }
 .sd-project-menu .pm-shell-col-action--danger { color: var(--pm-danger); }
@@ -108,13 +108,6 @@
 .sd-folder-branch:hover, .sd-folder-root:hover { background: var(--sd-hover); }
 .sd-folder-branch[data-active]:hover, .sd-folder-root[aria-current]:hover { background: var(--sd-selected-hover); }
 .sd-folder-popover button:focus-visible, .sd-project-menu button:focus-visible { outline: 2px solid var(--sd-focus); outline-offset: -2px; }
-@container project-stage (max-width: 1150px) {
-  .sd-files .pm-qc-panel { --pm-qc-header-solid: 88px; }
-  .sd-files .pm-qc-header { flex-direction: column; gap: 8px; }
-  .sd-files .pm-qc-header>div:first-child { width: 100%; }
-  .sd-files .pm-qc-header>div:last-child { align-self: flex-end; }
-  .sd-files .pm-qc-header-title { white-space: nowrap; }
-}
 @container file-browser (max-width: 620px) {
   .sd-files .pm-files-row-meta { display: none; }
   .sd-files-list-heading { grid-template-columns: minmax(0,1fr) 64px 52px; }
@@ -124,6 +117,8 @@
   .sd-project-workspace .pm-collection-header { align-items: flex-start; flex-direction: column; gap: 12px; }
   .sd-project-workspace .pm-collection-name { flex: none; width: 100%; }
   .sd-project-workspace .pm-collection-header-tools { width: 100%; justify-content: flex-end; }
+  /* The tab rail fills this row. Keep the file tools' space when another view is open. */
+  .sd-project-workspace .pm-collection-tabs-actions[inert] { display: flex; visibility: hidden; }
   .sd-project-workspace .pm-collection-header-rail { flex: 1; justify-content: flex-end; }
 }
 @container project-stage (max-width: 660px) {

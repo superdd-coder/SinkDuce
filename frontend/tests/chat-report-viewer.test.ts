@@ -30,8 +30,12 @@ async function harness(file: string, name: string, api: Record<string, any>) {
     "react/jsx-runtime": import.meta.resolve("react/jsx-runtime"),
     "react-dom":data(`export const createPortal=(...args)=>globalThis[${JSON.stringify(key)}].createPortal(...args)`),
     "lucide-react": import.meta.resolve("lucide-react"),
+    "sonner": data(`export const toast={error:(...args)=>globalThis[${JSON.stringify(key)}].toastError?.(...args)}`),
     "@/api/client": data([...new Set([...Object.keys(api), "getChatReports", "getChatReportVersions", "getChatAttachments", "getChatAttachmentPreview", "getChatAttachmentSource", "getChatAttachmentText", "getFileDetail", "getFilePreviewUrl", "getExtractedText", "getMeetingTranscript", "addReportComment", "editReportComment", "deleteReportComment", "getChatReport", "createChatReportExport", "downloadChatReport", "restoreChatReport", "decideReportSuggestion", "getReportFollowUpContext", "followUpReportSuggestion"])].map((n) => `export const ${n}=(...a)=>globalThis[${JSON.stringify(key)}].${n}(...a);`).join("\n")),
-    "@/i18n/use-t": data("const t=key=>key; export const useT=()=>t"),
+    "@/api/meeting": data(["getMeeting", "getMeetingGroup", "getMeetingTranscript", "updateMeetingGroup"]
+      .map((n) => `export const ${n}=(...a)=>globalThis[${JSON.stringify(key)}].${n}(...a);`).join("\n")),
+    "@/api/origin": data("export const apiUrl=url=>url; export const withTokenQuery=url=>url;"),
+    "@/i18n/use-t": data("const t=(key,vars)=>vars?.n===undefined?key:key+' '+vars.n; export const useT=()=>t"),
     "@/components/ui/dialog": stub(["Dialog", "DialogContent", "DialogTitle", "DialogDescription", "DialogClose"]),
     "@/components/shared/chunk-md": stub(["ChunkMd"]),
     "@/components/ui/button": stub(["Button"]),
@@ -68,6 +72,13 @@ async function harness(file: string, name: string, api: Record<string, any>) {
     "@/lib/download": new URL("../src/lib/download.ts", import.meta.url).href,
     "@/lib/chat-reports": new URL("../src/lib/chat-reports.ts", import.meta.url).href,
     "@/lib/chat-citations": new URL("../src/lib/chat-citations.ts", import.meta.url).href,
+    "@/lib/group-cites": new URL("../src/lib/group-cites.ts", import.meta.url).href,
+    "@/lib/transcript-playback": new URL("../src/lib/transcript-playback.ts", import.meta.url).href,
+    "@/lib/meeting-perms": data("export const canOperateMeetingGroup=()=>false; export const canCreateMeeting=()=>false;"),
+    "@/lib/utils": data("export const cn=(...values)=>values.filter(Boolean).join(' ');"),
+    "./meeting-quick-chat": stub(["MeetingQuickChat"]),
+    "./transcript-panel": stub(["TranscriptTab"]),
+    "./media-bar": stub(["MediaBar"]),
     "@/lib/conversation-assets": new URL("../src/lib/conversation-assets.ts", import.meta.url).href,
     "@/lib/chat-attachments": data("export const chatAttachmentLabel=()=> 'PDF'; export const isChatAttachmentImage=()=>false"),
   }
@@ -94,6 +105,84 @@ test('the answer source list uses the evidence dialog rather than a preview side
     assert.equal(opened?.location.page_number,6)
     assert.equal(opened?.source.file_id,'f')
   } finally {h.dispose()}
+})
+
+test("the source disclosure counts each meeting once and opens its precise excerpt alongside file sources", async () => {
+  const opened: unknown[] = []
+  const h = await harness("sources-card", "SourcesCard", { state: { collections: [] }, openCitation: (e: unknown) => opened.push(e) })
+  try {
+    const first = { id: "e_a", kind: "meeting", title: "Rehearsal", quote: "Pick up the keys.",
+      source: { meeting_id: "m" }, location: { sentence_id: "stt_0002", start_time: 22 } }
+    const second = { ...first, id: "e_b", quote: "Switch on the lights.", location: { sentence_id: "stt_0007", start_time: 82 } }
+    const props = { sources: [{ text: "Packed equipment", score: 1, metadata: { id: "p1", filename: "Checklist.pdf" } }],
+      meetingSources: [{ id: "m", title: "Rehearsal", excerpts: [first, second] }] }
+    const tree = h.render(props)
+    assert.ok(tree.some(e => e.props.children === "chat.sourcesCount 2"))
+    assert.equal(tree.filter(e => e.props.children === "Rehearsal").length, 1)
+    assert.ok(tree.some(e => e.props.children === "1:22"))
+    assert.ok(tree.some(e => e.props.children === second.quote))
+    tree.filter(e => e.props.className === "pm-chat-meeting-passage")[1].props.onClick()
+    tree.find(e => e.props.title === "Checklist.pdf").props.onClick()
+    assert.equal(opened[0], second)
+    assert.equal((opened[1] as { quote?: string })?.quote, "Packed equipment")
+  } finally { h.dispose() }
+})
+
+test("a host that handles a meeting citation bypasses the generic file dialog", async () => {
+  const oldDocument = Object.getOwnPropertyDescriptor(globalThis, "document")
+  Object.defineProperty(globalThis, "document", { configurable: true, value: { activeElement: null } })
+  const oldButton = Object.getOwnPropertyDescriptor(globalThis, "HTMLButtonElement")
+  Object.defineProperty(globalThis, "HTMLButtonElement", { configurable: true, value: class {} })
+  const h = await harness("citation-scope", "CitationScope", {})
+  try {
+    const evidence = { id: "e", kind: "meeting", title: "Rehearsal", quote: "Pick up the keys.",
+      source: { meeting_id: "m" }, location: { sentence_id: "stt_0002", start_time: 22 } }
+    let opened: unknown
+    const props = { sessionId: "group_example", citations: [evidence], children: null, onOpenMeeting: (record: unknown) => {
+      opened = record
+      return true
+    } }
+    h.render(props).find(e => e.props.value?.open).props.value.open(evidence)
+    assert.equal(opened, evidence)
+    assert.ok(!h.render(props).some(e => e.props.open === true))
+  } finally {
+    h.dispose()
+    if (oldDocument) Object.defineProperty(globalThis, "document", oldDocument)
+    else Reflect.deleteProperty(globalThis, "document")
+    if (oldButton) Object.defineProperty(globalThis, "HTMLButtonElement", oldButton)
+    else Reflect.deleteProperty(globalThis, "HTMLButtonElement")
+  }
+})
+
+test("selecting excerpts in a group focuses the saved meeting and the latest selected transcript row", async () => {
+  const group = { id: "g", title: "Rehearsal planning", members: [{ n: 1, meeting_id: "a" }, { n: 2, meeting_id: "b" }] }
+  const meetings = [{ id: "a", title: "Stage setup" }, { id: "b", title: "Lighting review" }]
+  const segments = [
+    { sentence_id: "stt_0001", start: 0, end: 11, text: "Check the doors." },
+    { sentence_id: "stt_0002", start: 18, end: 25, text: "Turn on the aisle lights." },
+  ]
+  let finishFirst: ((value: { segments: typeof segments }) => void) | undefined
+  const h = await harness("../meeting/meeting-group-stage", "MeetingGroupStage", {
+    getMeetingGroup: async () => group,
+    getMeetingTranscript: (id: string) => id === "a"
+      ? new Promise(resolve => { finishFirst = resolve })
+      : Promise.resolve({ segments }),
+  })
+  try {
+    const props = { groupId: group.id, meetings, onGroupChanged() {} }
+    h.render(props)
+    await h.flush()
+    const open = h.render(props).find(e => e.type.name === "MeetingQuickChat").props.onGroupCite
+    open(1, "stt_0001", "a")
+    open(1, undefined, "b", 18)
+    await new Promise(setImmediate)
+    assert.ok(h.render(props).some(e => e.props.className?.includes("pm-meeting-tx-overlay is-open")))
+    finishFirst?.({ segments })
+    await new Promise(setImmediate)
+    const tree = h.render(props)
+    assert.equal(tree.find(e => e.props.className === "pm-meeting-tx-overlay-title")?.props.children, "Lighting review")
+    assert.equal(tree.find(e => e.type.name === "TranscriptTab")?.props.focusRef?.id, "_idx_1")
+  } finally { h.dispose() }
 })
 
 test('evidence dialog opens the existing file details for the cited collection and historical version', async () => {
@@ -208,6 +297,47 @@ test("the same visible Output and Sources control toggles the asset surface thro
       assert.equal(tree.find((e) => e.props.className === "pm-assets-card")?.props.inert, !open)
     }
   } finally { h.dispose() }
+})
+
+test("the meeting asset menu can open immediately beneath its left-aligned control", async () => {
+  const h = await harness("conversation-assets", "ConversationAssets", {
+    getChatReports: async () => [report],
+    getChatAttachments: async () => [],
+  })
+  try {
+    const props = { sessionId: report.session_id, refreshKey: "1", messages: [], placement: "below", onOpenReport() {} }
+    h.render(props)
+    await h.flush()
+    const tree = h.render(props)
+    const positioner = tree.find((element) => element.props.className === "pm-assets-positioner")
+    assert.equal(positioner?.props.align, "start")
+    assert.ok(typeof positioner?.props.sideOffset === "number" && positioner.props.sideOffset > 0)
+    const trigger = tree.find((element) => element.props.className === "pm-assets-trigger")
+    assert.match(trigger?.props["aria-label"], / 1 .* 0$/)
+    assert.equal(elements(trigger).filter((element) => element.props.className === "pm-assets-count-icon").length, 2)
+  } finally { h.dispose() }
+})
+
+test("chat assets, menus and dialogs share an opaque surface in both themes", async () => {
+  const [menus, foundation] = await Promise.all([
+    readFile(new URL("../src/styles/menus.css", import.meta.url), "utf8"),
+    readFile(new URL("../src/styles/foundation.css", import.meta.url), "utf8"),
+  ])
+  for (const theme of [":root", ":root.dark, .dark"]) {
+    const declarations = foundation.split(`${theme} {`)[1]?.split("}")[0] ?? ""
+    assert.match(declarations, /--sd-surface-overlay:\s*#[\da-f]{6};/i, `Solid popup color for ${theme}`)
+  }
+  const menu = menus.match(/:is\(([^{}]*\.pm-assets-card[^{}]*)\)\s*\{([^}]+)\}/)
+  assert.ok(menu)
+  for (const surface of [".pm-menu", ".pm-select-menu", ".pm-date-panel", ".pm-review-popover", ".sd-folder-popover"]) {
+    assert.ok(menu[1].split(",").map(selector => selector.trim()).includes(surface), surface)
+  }
+  const dialog = foundation.match(/\.pm-dialog\.sd-dialog\[data-slot="dialog-content"\]\s*\{([^}]+)\}/)
+  assert.ok(dialog)
+  for (const rule of [menu[2], dialog[1]]) {
+    assert.match(rule, /background:\s*var\(--sd-surface-overlay\)\s*!important;/)
+    assert.doesNotMatch(rule, /backdrop-filter:\s*blur/)
+  }
 })
 
 test("collapsing the asset surface restores keyboard focus without stealing an outside click", async () => {

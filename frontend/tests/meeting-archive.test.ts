@@ -37,11 +37,15 @@ const group: MeetingGroup = {
   id: "sample-group", title: "Sample group", members: [{ meeting_id: meeting.id, n: 1 }],
   created_at: timestamp, updated_at: timestamp, last_chat_at: timestamp,
 }
+const otherMeeting = { ...meeting, id: "second-meeting", title: "Second review" }
+const twoMemberGroup = {
+  ...group, members: [...group.members, { meeting_id: otherMeeting.id, n: 2 }],
+}
 
-function renderList(row: Meeting, groups: MeetingGroup[] = []) {
+function renderList(meetings: Meeting[], groups: MeetingGroup[] = []) {
   const noop = () => {}
   return renderToStaticMarkup(createElement(MeetingList, {
-    meetings: [row], groups, activeMeeting: null,
+    meetings, groups, activeMeeting: null,
     onSelect: noop, onCreated: noop, onDelete: noop,
     onSelectGroup: noop, onDeleteGroup: noop, onToggleArchiveMeeting: noop,
     onCreateGroupFromMeeting: async () => {}, onCreateMeetingInGroup: noop,
@@ -65,25 +69,30 @@ test("the meeting page opts into archived rows while ordinary callers keep the d
 })
 
 test("an already archived meeting creates a collapsed section at the end of the list", () => {
-  const html = renderList({ ...meeting, archived: true })
+  const html = renderList([{ ...meeting, archived: true }])
   assert.match(html, /aria-expanded="false" class="pm-rail-archive-head"/)
   assert.match(html, /class="pm-rail-archive-count">1</)
   assert.doesNotMatch(html, /Sample review/)
 })
 
-test("an archived member moves below its active group and returns to it on restoration", () => {
-  const archived = renderList({ ...meeting, archived: true }, [group])
-  assert.match(archived, /Sample group[\s\S]*pm-rail-archive-head/)
+test("an archived member stays muted in its active group and also has an archive entry", () => {
+  const archived = renderList([{ ...meeting, archived: true }, otherMeeting], [twoMemberGroup])
+  const [active, archive] = archived.split('<div class="pm-rail-archive">')
+  assert.match(active, /Sample group[\s\S]*pm-rail-group-branch-wrap[\s\S]*class="pm-chat-sess-row is-child is-archived"[^>]*>[\s\S]*?Sample review/)
+  assert.match(active, /class="pm-chat-sess-row is-child"[^>]*>[\s\S]*?Second review/)
+  assert.match(archive, /pm-rail-archive-head/)
   assert.match(archived, /class="pm-rail-archive-count">1</)
-  assert.doesNotMatch(archived, /Sample review/)
 
-  const restored = renderList(meeting, [group])
+  const restored = renderList([meeting, otherMeeting], [twoMemberGroup])
   assert.match(restored, /pm-rail-group-branch-wrap[\s\S]*Sample review/)
-  assert.doesNotMatch(restored, /pm-rail-archive-head/)
+  assert.doesNotMatch(restored, /is-archived|pm-rail-archive-head/)
 })
 
-test("an archived group and its archived member share one top-level entry", () => {
-  const html = renderList({ ...meeting, archived: true }, [{ ...group, archived: true }])
+test("an archived group and its archived members share one top-level entry", () => {
+  const html = renderList(
+    [{ ...meeting, archived: true }, { ...otherMeeting, archived: true }],
+    [{ ...twoMemberGroup, archived: true }],
+  )
   assert.match(html, /class="pm-rail-archive-count">1</)
   assert.doesNotMatch(html, /Sample (group|review)/)
 })

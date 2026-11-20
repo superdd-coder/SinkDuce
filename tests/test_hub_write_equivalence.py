@@ -1,6 +1,6 @@
 """批次 2 等价性测试：**写类工具的转发必须与本地调用同形、同语义**。
 
-三个层次（前两层离线可跑，第三层需要 18900 在跑）：
+三个层次（前两层离线可跑，第三层需要专用测试服务）：
 
 1. ``TestWriteForwards``：用 FakeApi 驱动 :mod:`src.hub.write_forwards` 的
    多步转发器 —— 钉住「两步序列 / 先读后写 / 批量聚合」的逻辑本身。
@@ -23,6 +23,13 @@ import urllib.request
 import pytest
 
 from tests.e2e_config import HUB_TEST_URL as BASE, HUB_SELF_URL, hub_test_instance_ready
+
+
+def test_hub_tests_without_a_disposable_url_make_no_requests(monkeypatch):
+    from tests import e2e_config
+    monkeypatch.setattr(e2e_config, "HUB_TEST_URL", "")
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_a, **_kw: pytest.fail("unexpected network request"))
+    assert not hub_test_instance_ready()
 
 
 # ── 1. 纯函数层：多步转发器 ───────────────────────────────────

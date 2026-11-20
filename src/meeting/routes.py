@@ -362,13 +362,15 @@ async def unarchive_meeting_group(group_id: str):
 async def _set_group_archived(group_id: str, archived: bool):
     from src.meeting.group_store import get_group, set_group_archived
 
-    if get_group(group_id) is None:
+    group = get_group(group_id)
+    if group is None:
         raise HTTPException(404, "Group not found")
     _require_group_manage("meeting_group.update")
-    group = set_group_archived(group_id, archived)
-    for member in list(group.members):
-        if store.get_meeting(member.meeting_id) is not None:
+    for member in group.members:
+        meeting = store.get_meeting(member.meeting_id)
+        if meeting is not None and meeting.archived != archived:
             store.update_meeting(member.meeting_id, archived=archived)
+    group = set_group_archived(group_id, archived)
     _emit_meeting_group("meeting_group.updated", group_id)
     return _serialize_group(group)
 
@@ -641,15 +643,6 @@ def _set_meeting_archived(meeting_id: str, archived: bool):
     if store.get_meeting(meeting_id) is None:
         raise HTTPException(404, "Meeting not found")
     meeting = store.update_meeting(meeting_id, archived=archived)
-    if not archived:
-        # Pulling one member out of the archive also un-archives any archived
-        # group that contains it (the group card returns to the list); the
-        # other members keep their own archived state.
-        from src.meeting.group_store import groups_for_meeting, set_group_archived
-
-        for group in groups_for_meeting(meeting_id):
-            if group.archived:
-                set_group_archived(group.id, False)
     _emit_meeting("meeting.archived" if archived else "meeting.unarchived", meeting_id)
     return _serialize_meeting(meeting)
 

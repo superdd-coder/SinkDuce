@@ -8,7 +8,7 @@
 .pm-review-chip-count{font:400 10px/1 var(--type-font-ui);font-variant-numeric:tabular-nums;color:var(--pm-faint)}
 .pm-review-chip>svg:last-child{flex-shrink:0;opacity:.6;transition:transform 240ms var(--pm-ease)}
 .pm-review-chip:focus-visible,.pm-review-nav-row:focus-visible,.pm-review-location:focus-visible,.pm-review-selection:focus-visible,.pm-review-quote:focus-visible{outline:2px solid var(--pm-green);outline-offset:3px}
-.pm-review-popover-positioner{z-index:510}.pm-review-popover{width:min(360px,calc(100vw - 40px));padding:10px;border:1px solid color-mix(in srgb,var(--pm-ink) 7%,transparent);border-radius:var(--pm-r-lg);background:color-mix(in srgb,var(--pm-float) 35%,white);box-shadow:var(--pm-shadow-lg,0 14px 48px #18291f22);transform-origin:var(--transform-origin);transition:opacity 170ms var(--pm-ease),transform 170ms var(--pm-ease)}
+.pm-review-popover-positioner{z-index:510}.pm-review-popover{width:min(360px,calc(100vw - 40px));padding:10px;border:1px solid color-mix(in srgb,var(--pm-ink) 7%,transparent);border-radius:var(--pm-r-lg);box-shadow:var(--pm-shadow-lg,0 14px 48px #18291f22);transform-origin:var(--transform-origin);transition:opacity 170ms var(--pm-ease),transform 170ms var(--pm-ease)}
 .pm-review-popover[data-starting-style],.pm-review-popover[data-ending-style]{opacity:0;transform:translateY(6px) scale(.98)}
 .pm-review-popover-title{padding:8px 10px 12px;font:var(--type-meta);font-weight:550;color:var(--pm-muted)}.pm-review-nav-list{max-height:min(340px,50dvh);overflow:auto;overscroll-behavior:contain;scrollbar-width:thin}
 .pm-review-nav-row{display:flex;align-items:center;gap:11px;width:100%;padding:12px 10px;border:0;border-radius:12px;background:transparent;text-align:left;color:var(--pm-text);cursor:pointer;transition:background 170ms var(--pm-ease)}.pm-review-nav-row:hover{background:color-mix(in srgb,var(--pm-green) 4%,transparent)}
@@ -24,7 +24,7 @@
 .pm-review-comment p{margin:8px 0;font:inherit;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}.pm-review-comment small{font:var(--type-meta);color:var(--pm-muted)}.pm-review-comment textarea{width:100%;min-height:88px;resize:vertical;border:0;border-radius:8px;padding:8px;background:color-mix(in srgb,var(--pm-float) 80%,transparent);outline:1px solid color-mix(in srgb,var(--pm-green) 15%,transparent);font:var(--type-ui);line-height:1.65;color:var(--pm-text)}.pm-review-comment textarea:focus{outline-color:var(--pm-green)}.pm-review-editor-actions{display:flex;justify-content:flex-end;gap:5px;margin-top:10px}
 .pm-review-outcome{margin-top:16px}.pm-review-outcome>span{font:var(--type-meta);color:var(--pm-green-deep)}.pm-review-outcome p{font:var(--type-meta);line-height:1.7}
 .pm-review-selection{position:absolute;z-index:5;display:flex;align-items:center;gap:7px;padding:9px 12px;border:0;border-radius:10px;box-shadow:var(--pm-shadow-sm);background:var(--pm-ink);color:var(--pm-float);font:var(--type-meta);cursor:pointer;animation:pm-review-appear 140ms var(--pm-ease)}
-.pm-review-block-action{position:absolute;z-index:6;right:auto;width:28px;height:28px;display:grid;place-items:center;padding:5px;border:0;border-radius:8px;background:var(--pm-float);box-shadow:0 0 0 1px #1a5e3d14,0 3px 10px #18291f0c;color:var(--pm-green-deep);cursor:pointer}
+.pm-review-block-action{position:absolute;z-index:6;right:auto;width:28px;height:28px;display:grid;place-items:center;padding:5px;border:0;border-radius:8px;background:var(--sd-surface-overlay);box-shadow:0 0 0 1px #1a5e3d14,0 3px 10px #18291f0c;color:var(--pm-green-deep);cursor:pointer}
 .pm-review-block-action:focus-visible{outline:2px solid var(--pm-green);outline-offset:2px}
 [data-review-commented]{position:relative;scroll-margin-block:80px}[data-review-commented]::before{content:'';position:absolute;left:-13px;top:4px;bottom:4px;width:3px;border-radius:4px;background:color-mix(in srgb,var(--pm-green) 24%,transparent)}[data-review-active]::before{background:var(--pm-green)}
 [data-review-changed]{background:color-mix(in srgb,var(--pm-green) 8%,transparent);border-radius:4px;box-shadow:-6px 0 0 color-mix(in srgb,var(--pm-green) 15%,transparent)}
@@ -195,7 +195,6 @@
   opacity: 1;
   transform: none;
   clip-path: inset(0 0 calc(100% - var(--pm-review-origin-h)) calc(100% - var(--pm-review-origin-w)) round 999px);
-  background: color-mix(in srgb, var(--pm-float) 35%, white);
 }
 .pm-review-collapse {
   display: flex;

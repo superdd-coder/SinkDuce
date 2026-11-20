@@ -147,7 +147,8 @@ class TaskManager:
                 pass
         self._processors.clear()
 
-    def create_task(self, filename: str, task_type: str = "upload", collection: str = "default", **kwargs) -> Task:
+    def create_task(self, filename: str, task_type: str = "upload", collection: str = "default",
+                    *, task_id: str | None = None, **kwargs) -> Task:
         """Create and enqueue a new task.  Thread-safe: can be called from any thread.
 
         Prefer :meth:`create_task_async` from async request handlers so the
@@ -155,7 +156,7 @@ class TaskManager:
         the handler later blocks the loop).
         """
         loop = self._loop if self._loop and self._loop.is_running() else asyncio.get_running_loop()
-        task = self._make_task(filename, collection)
+        task = self._make_task(filename, collection, task_id)
         self._task_args[task.id] = (task_type, kwargs)
         if loop is self._loop:
             asyncio.run_coroutine_threadsafe(
@@ -178,8 +179,8 @@ class TaskManager:
         await self._enqueue_task(task.id, task_type, kwargs)
         return task
 
-    def _make_task(self, filename: str, collection: str) -> Task:
-        task_id = str(uuid.uuid4())
+    def _make_task(self, filename: str, collection: str, task_id: str | None = None) -> Task:
+        task_id = task_id or str(uuid.uuid4())
         task = Task(
             id=task_id,
             filename=filename,
@@ -200,6 +201,14 @@ class TaskManager:
             return False
         if task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
             return False
+        ttype, kwargs = self._task_args.get(task_id, ("", {}))
+        if ttype == "embedding_rebuild":
+            from src.identity import authorize
+            from src.rag.embedding_rebuild import fail_rebuild
+
+            authorize(get_actor(), "collection.update", {"collection_id": task.collection})
+            if not fail_rebuild(task.collection, kwargs.get("stage_id"), "Rebuild cancelled."):
+                return False
         # Signal cooperative cancellation
         ev = _cancel_events.get(task_id)
         if ev:
@@ -215,7 +224,6 @@ class TaskManager:
         self._task_epoch[task_id] = self._task_epoch.get(task_id, 0) + 1
         # A queued (not yet dequeued) upload never reaches the executor's
         # finally — clear its ledger row here so recovery won't resurrect it.
-        ttype, _ = self._task_args.get(task_id, ("", {}))
         if ttype in self._UPLOAD_TYPES:
             self._finish_upload_task_ledger(task_id)
             self._record_upload_terminal(ttype, task, failed=True)
@@ -299,6 +307,12 @@ class TaskManager:
         if not args:
             return None
         task_type, kwargs = args
+        if task_type == "embedding_rebuild":
+            from src.identity import authorize
+            from src.rag.embedding_rebuild import retry_failed_rebuild
+
+            authorize(get_actor(), "collection.update", {"collection_id": task.collection})
+            return retry_failed_rebuild(task.collection, kwargs.get("stage_id"))
         task.status = TaskStatus.PENDING
         task.progress = 0.0
         task.requester = get_actor()
@@ -496,12 +510,8 @@ class TaskManager:
                 continue
             payload = dict(row["payload"])
             filename = payload.pop("filename", "recovered-upload")
-            saved_actor = payload.pop("_requested_by", None)
-            requester = Actor(id="unattributed", kind="anonymous", role_id="")
-            if isinstance(saved_actor, dict) and all(isinstance(saved_actor.get(k), str) and saved_actor[k] for k in ("id", "kind", "role_id")):
-                kind = saved_actor["kind"]
-                if kind == "key" or (kind in {"system", "local"} and saved_actor["id"] == kind and saved_actor["role_id"] == "owner"):
-                    requester = Actor(id=saved_actor["id"], kind=kind, role_id=saved_actor["role_id"])
+            from src.tasks.access import restore_task_requester
+            requester = restore_task_requester(payload.pop("_requested_by", None))
             if task_id not in self.tasks:
                 self.tasks[task_id] = Task(
                     id=task_id,
@@ -557,7 +567,7 @@ class TaskManager:
     async def _execute_task(self, task_id: str, task_type: str, kwargs: dict):
         """Execute a single task with timeout."""
         task = self.tasks.get(task_id)
-        if not task:
+        if not task or task.status == TaskStatus.FAILED:
             return
 
         task.status = TaskStatus.PROCESSING
@@ -614,6 +624,9 @@ class TaskManager:
 
         except asyncio.TimeoutError:
             cancel_event.set()
+            if task_type == "embedding_rebuild":
+                from src.rag.embedding_rebuild import fail_rebuild
+                fail_rebuild(task.collection, kwargs.get("stage_id"), "The rebuild timed out.")
             if self._task_epoch.get(task_id, 0) == epoch:
                 task.status = TaskStatus.FAILED
                 task.error = f"Task timed out after {self.timeout}s"
@@ -623,6 +636,10 @@ class TaskManager:
             self._record_upload_terminal(ttype, task, failed=True)
 
         except Exception as e:
+            if task_type == "embedding_rebuild":
+                from src.rag.embedding_rebuild import fail_rebuild
+                # Authorization can expire before the rebuild handler starts.
+                fail_rebuild(task.collection, kwargs.get("stage_id"), "The rebuild could not complete. Check access and retry.")
             if self._task_epoch.get(task_id, 0) == epoch:
                 task.status = TaskStatus.FAILED
                 task.error = str(e)

@@ -43,6 +43,7 @@ class ChatStreamHandler:
         note_changes: list[dict] = []
         report_changes: list[dict] = []
         citations: list[dict] = []
+        search_metadata = {}
         qa_projects: set[str] = set()
         from src.chatbox.history_access import ChatSources
         from src.identity import get_actor
@@ -72,6 +73,9 @@ class ChatStreamHandler:
                     saw_done = True
                 if event.get("note_changes"):
                     merge_note_changes(note_changes, event["note_changes"])
+                if "embedding_searches" in event or "skipped_collections" in event:
+                    # Search events carry the cumulative snapshot for the turn.
+                    search_metadata = {k: event[k] for k in ("embedding_searches", "skipped_collections") if k in event}
                 if event.get("report_changes"):
                     from src.reports.tools import merge_report_changes
                     merge_report_changes(report_changes, event["report_changes"])
@@ -121,6 +125,7 @@ class ChatStreamHandler:
                         **({"citations": citations} if citations else {}),
                         **({"report_changes": report_changes} if report_changes else {}),
                         **sources.metadata(),
+                        **search_metadata,
                         **({"qa_projects": sorted(qa_projects)} if qa_projects else {}),
                     )
                 except Exception:

@@ -25,7 +25,7 @@
   overflow: hidden;
   border: 0;
   border-radius: var(--sd-radius-panel);
-  background: var(--sd-surface-raised);
+  background: var(--sd-surface-overlay);
   box-shadow: var(--sd-shadow-panel);
 }
 .pm-chat-report-layout:has(> .pm-report-embedded) .pm-chat-sessions {

@@ -14,7 +14,13 @@ from src.chatbox.history_access import ChatSources
 
 MAX_EVIDENCE = 2048  # Conversation cache; an individual report remains capped at 256.
 MAX_QUOTE = 4000
-_MARKERS = re.compile(r"```.*?(?:```|\Z)|`[^`\n]*`|\[cite:([^\]\r\n]{0,200})\]", re.S)
+_ISSUED_ID = r"e_[0-9a-f]{20}"
+# Some answers include the field name before an otherwise exact evidence ID.
+_MARKERS = re.compile(
+    r"```.*?(?:```|\Z)|`[^`\n]*`|"
+    rf"\[cite:(?:evidence_id_(?={_ISSUED_ID}\]))?"
+    r"([^\]\r\n]{0,200})\]", re.S,
+)
 _SOURCE_KEYS = ("collection", "collection_name", "file_id", "version_id", "source",
                 "chunk_id", "meeting_id", "attachment_id", "url", "content_hash",
                 "qa_snapshot_id", "qa_list_id", "qa_question_id", "qa_column_id",
@@ -42,6 +48,43 @@ def _excerpts(text, boundaries=()):
 
 def citation_ids(markdown: str) -> list[str]:
     return list(dict.fromkeys(m.group(1) for m in _MARKERS.finditer(markdown or "") if m.group(1) is not None))
+
+
+def evidence_catalog_entry(record, quote_limit):
+    return {**record, "quote": record["quote"][:quote_limit], "citation": f"[cite:{record['id']}]"}
+
+
+def _located_excerpts(text, meta, positions=()):
+    base = meta.get("char_offset")
+    points = []
+    if isinstance(base, int):
+        points = sorted(
+            (p for p in positions if isinstance(p, dict) and isinstance(p.get("char_offset"), int)),
+            key=lambda p: p["char_offset"],
+        )
+    boundaries = [p["char_offset"] - base for p in points]
+    for offset, excerpt in _excerpts(text, boundaries):
+        position = dict(meta)
+        if isinstance(base, int):
+            position["char_offset"] += offset
+        if isinstance(meta.get("line"), int):
+            position["line"] += str(text)[:offset].count("\n")
+        if offset:
+            position.pop("page_number", None)  # Only the chunk's starting page is known.
+            position.pop("paragraph_index", None)
+        if points:
+            located = next((p for p in reversed(points) if p["char_offset"] <= base + offset), {})
+            position.update({k: located[k] for k in ("page_number", "slide_number", "paragraph_index", "sheet_name") if k in located})
+        yield excerpt, position
+
+
+def _retrieved_excerpts(sources):
+    for row in sources or ():
+        if not isinstance(row, dict):
+            continue
+        meta = row.get("metadata") or {}
+        if isinstance(meta, dict):
+            yield from _located_excerpts(row.get("text", ""), meta)
 
 
 def _meeting_records(payload):
@@ -184,27 +227,11 @@ class EvidenceRegistry:
                 selected.append(e)
 
         def snippets(text, meta, kind=None, positions=()):
-            base = meta.get("char_offset")
-            points = sorted((p for p in positions if isinstance(p, dict) and
-                             isinstance(p.get("char_offset"), int)), key=lambda p: p["char_offset"]) if isinstance(base, int) else []
-            boundaries = [p["char_offset"] - base for p in points]
-            for offset, excerpt in _excerpts(text, boundaries):
-                position = dict(meta)
-                if isinstance(meta.get("char_offset"), int):
-                    position["char_offset"] += offset
-                if isinstance(meta.get("line"), int):
-                    position["line"] += str(text)[:offset].count("\n")
-                if offset:
-                    position.pop("page_number", None)  # Only the chunk's starting page is known.
-                    position.pop("paragraph_index", None)
-                if points:
-                    located = next((p for p in reversed(points) if p["char_offset"] <= base + offset), {})
-                    position.update({k: located[k] for k in ("page_number", "slide_number", "paragraph_index", "sheet_name") if k in located})
+            for excerpt, position in _located_excerpts(text, meta, positions):
                 add(excerpt, position, kind)
 
-        for source in sources or ():
-            if isinstance(source, dict):
-                snippets(source.get("text", ""), source.get("metadata") or {})
+        for excerpt, position in _retrieved_excerpts(sources):
+            add(excerpt, position)
         texts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"] if isinstance(content, list) else [content]
         for text in texts:
             if not isinstance(text, str):
@@ -241,7 +268,7 @@ class EvidenceRegistry:
                     snippets(chunk.get("text", ""), {**meta, **(chunk.get("metadata") or {})})
         if not selected:
             return content
-        catalog = json.dumps({"evidence": [{**e, "quote": e["quote"][:500]} for e in selected]}, ensure_ascii=False)
+        catalog = json.dumps({"evidence": [evidence_catalog_entry(e, 500) for e in selected]}, ensure_ascii=False)
         def annotate(text):
             try:
                 payload = json.loads(text)
@@ -263,13 +290,45 @@ class EvidenceRegistry:
         return annotate(content)
 
 
+def message_citation_metadata(session_id: str, message):
+    """Recover missing issued citations only from this answer's saved retrieval snapshots."""
+    metadata = getattr(message, "metadata", None)
+    sources = getattr(message, "sources", None)
+    if getattr(message, "role", None) != "assistant" or not sources or "[cite:" not in (message.content or ""):
+        return metadata
+    saved = (metadata or {}).get("citations")
+    saved = saved if isinstance(saved, list) else []
+    known = {e["id"] for e in saved if isinstance(e, dict) and isinstance(e.get("id"), str)}
+    missing = [eid for eid in citation_ids(message.content) if eid not in known and re.fullmatch(_ISSUED_ID, eid)]
+    if not missing:
+        return metadata
+
+    registry = EvidenceRegistry(session_id)
+    wanted = set(missing)
+    recovered = {}
+    for text, position in _retrieved_excerpts(sources):
+        record = registry.register(text, position)
+        if record and record["id"] in wanted:
+            recovered[record["id"]] = record
+            wanted.remove(record["id"])
+            if not wanted:
+                break
+    if not recovered:
+        return metadata
+    additions = [recovered[eid] for eid in missing if eid in recovered]
+    return {**(metadata or {}), "citations": saved + additions}
+
+
 def registry_from_history(store, session_id: str) -> EvidenceRegistry:
     from src.chatbox.qa_evidence import history_permitted
 
     records = []
     for message in store.get_messages(session_id):
-        metadata = getattr(message, "metadata", None) or {}
-        if isinstance(metadata.get("citations"), list) and history_permitted(metadata):
+        saved = getattr(message, "metadata", None) or {}
+        if not (saved.get("citations") or getattr(message, "sources", None)) or not history_permitted(saved):
+            continue
+        metadata = message_citation_metadata(session_id, message) or {}
+        if isinstance(metadata.get("citations"), list):
             records.extend(
                 record for record in metadata["citations"]
                 if isinstance(record, dict) and isinstance(record.get("source"), dict)

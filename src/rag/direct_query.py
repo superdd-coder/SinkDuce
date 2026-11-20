@@ -1,7 +1,8 @@
 """DirectQueryModule — atomic retrieval across one or more collections.
 
 Routes each collection by its `chunk_mode` config (normal / parent_child),
-merges results by score, optionally reranks.  Does NOT perform text dedup.
+merges by score within a vector space and interleaves ranks across spaces.
+An optional reranker scores the combined candidates.
 """
 
 from __future__ import annotations
@@ -146,6 +147,11 @@ class DirectQueryModule:
                 logger.warning("[Direct] cannot read config for col=%r, defaulting to normal", col)
                 col_config = {"chunk_mode": "normal"}
 
+            from src.rag.collection_utils import UNAVAILABLE_EMBEDDING
+            if overrides.get(col) is UNAVAILABLE_EMBEDDING:
+                with _lock:
+                    errors.append({"stage": "retrieve", "collection": col, "error": "EmbeddingDisconnected"})
+                return [], {}
             chunk_mode = col_config.get("chunk_mode", "normal")
             emb_override = overrides.get(col)
             logger.debug("[Direct] col=%s | mode=%s top_k=%d", col, chunk_mode, top_k)
@@ -211,12 +217,24 @@ class DirectQueryModule:
 
             for collection in collections:
                 try:
-                    all_chunks.extend(retrieve_qa(collection, query, top_k))
+                    all_chunks.extend(retrieve_qa(collection, query, top_k,
+                                                  embedding_override=overrides.get(collection), on_trace=_record_trace))
                 except Exception as exc:
                     errors.append({"stage": "qa_retrieve", "error": type(exc).__name__})
         has_qa = any(is_qa_chat_chunk(c) for c in all_chunks)
 
+        from src.config import EmbeddingBinding
+        spaces = { (b.source, b.model, b.dimensions) for provider in overrides.values()
+                   if isinstance(b := getattr(provider, "index_binding", None), EmbeddingBinding) }
+        # A rebuild may switch an index after the overrides were prepared.
+        used_spaces = {(event["provider_id"], event["model"], event["dimensions"])
+                       for event in trace if event.get("model") and "provider_id" in event and "dimensions" in event}
         all_chunks.sort(key=lambda c: c.score, reverse=True)
+        if len(spaces) > 1 or len(used_spaces) > 1:
+            from itertools import zip_longest
+            # Raw similarities from different models have different scales.
+            ranked = [[c for c in all_chunks if c.metadata.get("collection") == col] for col in collections]
+            all_chunks = [hit for row in zip_longest(*ranked) for hit in row if hit is not None]
         candidate_chunks = [RetrievedChunk(c.text, c.score, dict(c.metadata)) for c in all_chunks]
 
         # ── Optional rerank ────────────────────────────────────────────
@@ -353,99 +371,50 @@ class DirectQueryModule:
 
         llm = llm_for_sparse if sparse_llm_tokenize else None
 
-        # Carry the archive/unassigned exclusion into parent-child retrieval
-        child_filter = Filter(
-            must=[
-                FieldCondition(key="chunk_type", match=MatchValue(value="child")),
-                self.retriever.exclusion_filter(),
-            ]
-        )
+        from contextlib import nullcontext
+        from src.db.index_routing import IndexRoutingClient
+
+        child_filter = Filter(must=[FieldCondition(key="chunk_type", match=MatchValue(value="child"))])
         top_k = int(top_k) if top_k else 10
-        child_search_limit = max(top_k * 10, 50)
-
-        if search_mode == "hybrid":
-            child_chunks = self.retriever.retrieve(
-                query, collection=collection, top_k=child_search_limit,
-                embedding_override=embedding,
-                search_mode="hybrid", min_score=min_score,
-                filter_condition=child_filter, llm=llm,
-                on_trace=on_trace,
+        client = getattr(self.db, "client", None)
+        snapshot = client.snapshot(collection) if isinstance(client, IndexRoutingClient) else nullcontext()
+        with snapshot:
+            children = self.retriever.retrieve(
+                query, collection=collection, top_k=max(top_k * 10, 50),
+                embedding_override=embedding, search_mode=search_mode, min_score=min_score,
+                filter_condition=child_filter, llm=llm, on_trace=on_trace,
             )
-            child_results = [
-                {"id": c.metadata.get("id", ""), "score": c.score,
-                 "payload": {**c.metadata, "text": c.text}}
-                for c in child_chunks
-            ]
-        else:
-            emb = embedding
-            if emb is None:
-                # Fall back to retriever's default embedding
-                query_vector = self.retriever.embedding.embed_query(query)
-            else:
-                query_vector = emb.embed_query(query)
-            child_results = self.db.search(
-                collection=collection,
-                query_vector=query_vector,
-                top_k=child_search_limit,
-                filter_condition=child_filter,
-            )
-            if on_trace:
-                on_trace({"kind": "retrieval", "collection": collection, "mode": "dense"})
+            parent_ids = {child.metadata["parent_id"] for child in children if child.metadata.get("parent_id")}
+            if not parent_ids:
+                return children, {}
+            parent_points = self.db.get_points_by_ids(collection, list(parent_ids))
 
-        if min_score > 0 and search_mode != "hybrid":
-            child_results = [r for r in child_results if r["score"] >= min_score]
-
-        if not child_results:
-            return [], {}
-
-        # Collect unique parent IDs
-        parent_ids = list({
-            r["payload"]["parent_id"]
-            for r in child_results
-            if r["payload"].get("parent_id")
-        })
-
-        if not parent_ids:
-            chunks = [RetrievedChunk(
-                text=r["payload"].get("text", ""),
-                score=r["score"],
-                metadata={k: v for k, v in r["payload"].items() if k != "text"},
-            ) for r in child_results]
-            return chunks, {}
-
-        # Retrieve parent chunks
-        parent_points = self.db.get_points_by_ids(collection, parent_ids)
         parent_map = {p["id"]: p["payload"] for p in parent_points}
-
         child_groups: dict[str, list[dict]] = {}
         seen_parents: dict[str, RetrievedChunk] = {}
 
-        for r in child_results:
-            pid = r["payload"].get("parent_id")
+        for child in children:
+            meta = child.metadata
+            pid = meta.get("parent_id")
             if not pid:
                 continue
-
-            if pid not in child_groups:
-                child_groups[pid] = []
-            child_groups[pid].append({
-                "id": str(r["id"]),
-                "text": r["payload"].get("text", ""),
-                "score": r["score"],
-                "source": r["payload"].get("source", ""),
-                "source_label": r["payload"].get("source_label"),
+            child_groups.setdefault(pid, []).append({
+                "id": str(meta.get("id", "")),
+                "text": child.text,
+                "score": child.score,
+                "source": meta.get("source", ""),
+                "source_label": meta.get("source_label"),
                 "collection": collection,
-                "chunk_index": r["payload"].get("chunk_index", 0),
+                "chunk_index": meta.get("chunk_index", 0),
                 "chunk_type": "child",
-                "context": r["payload"].get("context"),
                 "parent_id": pid,
             })
-
-            if pid not in seen_parents or r["score"] > seen_parents[pid].score:
-                parent_payload = parent_map.get(pid, r["payload"])
+            if pid not in seen_parents or child.score > seen_parents[pid].score:
+                parent = parent_map.get(pid, meta)
                 seen_parents[pid] = RetrievedChunk(
-                    text=parent_payload.get("text", ""),
-                    score=r["score"],
-                    metadata={k: v for k, v in parent_payload.items() if k != "text"} | {"id": pid},
+                    text=parent.get("text", child.text),
+                    score=child.score,
+                    metadata={k: v for k, v in parent.items() if k != "text"} | {"id": pid},
                 )
 
         results = sorted(seen_parents.values(), key=lambda c: c.score, reverse=True)

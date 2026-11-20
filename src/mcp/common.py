@@ -160,7 +160,8 @@ def require_collection(collection: str) -> dict[str, Any] | None:
     # Lazy import to avoid loading services at MCP-module import time
     from src.services import services
 
-    if not services.db.collection_exists(collection):
+    from src.meeting.transcript_index import is_internal_collection
+    if is_internal_collection(collection) or not services.db.collection_exists(collection):
         return err(f"Collection '{collection}' does not exist")
 
     # RBAC（2026-09-16）：存在性 ≠ 可见性。**这里是 MCP 全部库类工具的公共准入点**
@@ -376,6 +377,7 @@ def decode_base64_content(content_b64: str) -> bytes:
 DESTRUCTIVE_COLLECTION_FIELDS: frozenset[str] = frozenset({
     "chunk_mode",
     "embedding_provider",
+    "embedding_provider_id",
     "embedding_model",
     "embedding_dimensions",
     "embedding_base_url",

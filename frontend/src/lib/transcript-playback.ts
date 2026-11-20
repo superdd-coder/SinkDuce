@@ -1,3 +1,9 @@
+export function formatTranscriptTime(seconds: number): string {
+  const minutes = Math.floor(seconds / 60)
+  const remainder = Math.floor(seconds % 60)
+  return `${minutes}:${String(remainder).padStart(2, "0")}`
+}
+
 /** Pick the transcript row that should stay focused at `time` seconds. */
 
 export function findPlayingSegmentIndex(

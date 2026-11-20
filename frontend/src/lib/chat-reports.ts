@@ -1,4 +1,5 @@
 import { normalizeEvidence, type Evidence } from "./chat-citations.ts"
+import { embeddingSearches, type EmbeddingSearch } from "./embedding-searches.ts"
 
 export interface ReportReference {
   id: string
@@ -37,8 +38,10 @@ export function mergeReportChanges(existing: ReportReference[] = [], incoming: u
   return [...merged.values()]
 }
 
-export function applyChatArtifacts<T extends { citations?: Evidence[]; reportChanges?: ReportReference[]; reportReviews?: import("./report-review").ReviewBatch[] }>(message: T, data: Record<string, unknown>): T {
+export function applyChatArtifacts<T extends { citations?: Evidence[]; embeddingSearches?: EmbeddingSearch[]; skippedCollections?: string[]; reportChanges?: ReportReference[]; reportReviews?: import("./report-review").ReviewBatch[] }>(message: T, data: Record<string, unknown>): T {
   return { ...message,
+    ...(Array.isArray(data.skipped_collections) ? { skippedCollections: data.skipped_collections.filter((id): id is string => typeof id === "string") } : {}),
+    ...(Array.isArray(data.embedding_searches) ? { embeddingSearches: embeddingSearches(data.embedding_searches) } : {}),
     ...(Array.isArray(data.report_reviews) ? {reportReviews: data.report_reviews as import("./report-review").ReviewBatch[]} : {}),
     ...(Array.isArray(data.citations) ? { citations: normalizeEvidence(data.citations) } : {}),
     ...(Array.isArray(data.report_changes) ? { reportChanges: mergeReportChanges(message.reportChanges, data.report_changes) } : {}),

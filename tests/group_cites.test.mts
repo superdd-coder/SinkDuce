@@ -8,6 +8,8 @@ import {
   GROUP_CITE_HOVER_DELAY_MS,
   GROUP_CITE_RE_SOURCE,
   groupCitesFromToolTrace,
+  groupMeetingSources,
+  findGroupTranscriptIndex,
   mergeGroupCites,
   nextGroupCiteOccurrence,
   parseCitesFromToolBody,
@@ -113,7 +115,7 @@ test("displayed group cites number chips 1,2,3 in appearance order, not roster n
 
 test("displayed group cites skip tokens without a live sentence", () => {
   const cites = [{ n: 2, meeting_id: "m2", sentence_id: "stt_0006", ref_n: 6 }]
-  const shown = displayedGroupCites("Ghost [9] then real [2:6].", cites)
+  const shown = displayedGroupCites("Ghost [9] or [9:6] then real [2:6].", cites)
   assert.equal(shown.length, 1)
   assert.equal(shown[0]?.displayIndex, 1)
   assert.equal(shown[0]?.sentence_id, "stt_0006")
@@ -162,4 +164,49 @@ test("range token becomes one chip anchored at the range start sentence", () => 
   assert.equal(shown.length, 1)
   assert.equal(shown[0]?.sentence_id, "stt_0041")
   assert.equal(shown[0]?.tokenRefN, 41)
+})
+
+test("group answer sources collect distinct passages under each meeting", () => {
+  const cites = groupCitesFromToolTrace({ tool_trace: [{ cites: [
+    { n: 1, meeting_id: "m_a", sentence_id: "stt_0002", ref_n: 2, start_time: 0 },
+    { n: 1, meeting_id: "m_a", sentence_id: "stt_0007", ref_n: 7, start_time: 82 },
+    { n: 2, meeting_id: "m_b", sentence_id: "stt_0002", ref_n: 2 },
+    { n: 2, meeting_id: "m_b", sentence_id: "stt_0042", ref_n: 42 },
+  ] }] })
+  const roster = [
+    { id: "m_a", title: "Rehearsal review", created_at: "2024-03-01" },
+    { id: "m_b", title: "Rehearsal review", created_at: "2024-03-02" },
+  ]
+  const rows = groupMeetingSources("Compare [1:2], [1:2], [1:7], [2:2] and [8:2].", cites, [], roster)
+  assert.deepEqual(rows.map((row) => [row.id, row.title, row.date]), [
+    ["m_a", "Rehearsal review", "2024-03-01"],
+    ["m_b", "Rehearsal review", "2024-03-02"],
+  ])
+  assert.deepEqual(rows[0]?.excerpts.map((evidence) => evidence.location.start_time), [0, 82])
+  assert.deepEqual(rows[1]?.excerpts.map((evidence) => evidence.location.sentence_id), ["stt_0002"])
+  assert.equal(groupMeetingSources("See [ref:2].", cites, [], roster).length, 0)
+})
+
+test("saved evidence supplies the quote for the same legacy passage and can anchor by time", () => {
+  const saved = { id: "e_a", kind: "meeting", title: "Rehearsal review", quote: "Pick up the blue keys.",
+    source: { meeting_id: "m_a" }, location: { sentence_id: "m_a_stt_0002", start_time: 14 } }
+  const timed = { ...saved, id: "e_b", quote: "Switch on the lights.", location: { start_time: 35 } }
+  const unused = { ...saved, id: "e_c", location: { start_time: 49 } }
+  const rows = groupMeetingSources("See [1:2], [cite:e_a] and [cite:e_b].",
+    [{ n: 1, meeting_id: "m_a", sentence_id: "stt_0002", ref_n: 2 }], [saved, timed, unused])
+  assert.deepEqual(rows[0]?.excerpts, [saved, timed])
+})
+
+test("group transcript jumps to the saved sentence, with time and unnumbered transcript fallbacks", () => {
+  const rows = [
+    { sentence_id: "m_a_stt_0006", start: 0, end: 10 },
+    { sentence_id: "m_a_stt_0016", start: 10, end: 19 },
+    { sentence_id: "s-last", start: 25, end: 31 },
+  ]
+  assert.equal(findGroupTranscriptIndex(rows, "16", 0), 1)
+  assert.equal(findGroupTranscriptIndex(rows, "s-old", 10), 1)
+  assert.equal(findGroupTranscriptIndex(rows, undefined, 27), 2)
+  assert.equal(findGroupTranscriptIndex(rows, undefined, 22), -1)
+  assert.equal(findGroupTranscriptIndex(rows, "stt_0002"), -1)
+  assert.equal(findGroupTranscriptIndex(rows.map(row => ({ ...row, sentence_id: "" })), "stt_0002"), 1)
 })

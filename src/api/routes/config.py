@@ -17,9 +17,11 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from src.api.errors import ApiError
 
 from src.api.schemas import ConfigUpdateRequest
-from src.config import get_config, save_config, reload_config, LLMProviderConfig, EmbeddingProviderConfig, RerankProviderConfig, TranscriptionProviderConfig, LIVE_TRANSLATE_ADAPTER
+from src.config import get_config, save_config, reload_config, LLMProviderConfig, EmbeddingBinding, EmbeddingConfig, EmbeddingProviderConfig, RerankProviderConfig, TranscriptionProviderConfig, LIVE_TRANSLATE_ADAPTER
 from src.services import async_refresh_llm_runtime, async_reload_services
 from src.providers.cache import get_or_create as cached_provider, invalidate as invalidate_provider
+from src.providers.embedding.openai import resolve_embedding_base_url
+from src.providers.openai_endpoint import is_openai_endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,18 @@ def _config_write_gate(request: Request) -> None:
 
 
 router = APIRouter(dependencies=[Depends(_config_write_gate)])
+
+
+def _require_embedding_admin() -> None:
+    """Background transcript indexing uses these connections across all meetings."""
+    from src.identity import get_actor, may_see_everything
+
+    if not may_see_everything(get_actor()):
+        raise ApiError(
+            403, "embedding_admin_required",
+            "Only the owner or an administrator can change global embedding connections.",
+        )
+
 
 # Config-mutating endpoints each do read-modify-write of the whole
 # config.yaml. They must not interleave: the oneshot dialog fires six
@@ -379,7 +393,7 @@ def get_current_config():
     from src.secrets import redact_mapping
 
     config = reload_config()
-    data = config.model_dump(exclude_none=True)
+    data = config.model_dump(exclude_none=True, exclude={"embedding": {"legacy_default", "legacy_providers"}})
     return redact_mapping(data)
 
 
@@ -454,6 +468,8 @@ def _slot_ref_valid(ref: str | None, providers: list, kind: str) -> bool:
 @router.put("/config")
 @_serialize_writes
 async def update_config(req: ConfigUpdateRequest):
+    if req.section == "embedding":
+        _require_embedding_admin()
     reload_config()
     config = get_config()
 
@@ -493,7 +509,7 @@ async def update_config(req: ConfigUpdateRequest):
     # Handle top-level AppConfig fields
     if req.section in _TOP_LEVEL_FIELDS:
         for key, value in req.data.items():
-            if hasattr(config, key):
+            if key in _TOP_LEVEL_FIELDS:
                 setattr(config, key, value)
         save_config(config)
         reload_config()
@@ -505,6 +521,30 @@ async def update_config(req: ConfigUpdateRequest):
         services.config = get_config()
         return {"message": f"Config '{req.section}' updated"}
 
+    if req.section == "embedding":
+        from pydantic import ValidationError
+        from src.secrets import skip_secret_write
+
+        if "providers" in req.data:
+            try:
+                updated = EmbeddingConfig.model_validate(
+                    {**config.embedding.model_dump(), "providers": req.data["providers"]}
+                )
+            except ValidationError as exc:
+                raise HTTPException(400, "Invalid embedding connections.") from exc
+            if len({p.id for p in updated.providers}) != len(updated.providers):
+                raise HTTPException(400, "Duplicate embedding connection IDs.")
+            previous = {p.id: p for p in config.embedding.providers}
+            for p in updated.providers:
+                old = previous.get(p.id)
+                if skip_secret_write("api_key", p.api_key):
+                    same_source = old and EmbeddingBinding.from_provider(old).source == EmbeddingBinding.from_provider(p).source
+                    p.api_key = old.api_key if same_source else ""
+            config.embedding = updated
+            save_config(config)
+            reload_config()
+            await _refresh_embedding()
+        return {"message": "Embedding settings updated"}
     section_data = getattr(config, req.section, None)
     if section_data is None:
         raise HTTPException(400, f"Unknown config section: {req.section}")
@@ -632,17 +672,21 @@ async def get_available_models(section: str, data: dict | None = Body(default=No
             providers = config.embedding.providers
             if providers:
                 provider_cfg = next((p for p in providers if p.is_default), providers[0])
-                base_url = provider_cfg.base_url
+                base_url = resolve_embedding_base_url(provider_cfg.base_url, provider_cfg.provider)
                 api_key = provider_cfg.api_key
             else:
                 base_url = ""
                 api_key = ""
             if data:
-                if "base_url" in data and data["base_url"]:
-                    base_url = data["base_url"]
-                api_key = _request_api_key(
-                    data, api_key, providers=providers, base_url=base_url
+                provider_name = data.get("provider") or ""
+                if data.get("base_url") or provider_name == "openai":
+                    base_url = resolve_embedding_base_url(data.get("base_url") or "", provider_name)
+                stored_key = next(
+                    (p.api_key for p in providers if p.api_key
+                     and resolve_embedding_base_url(p.base_url, p.provider) == base_url),
+                    "",
                 )
+                api_key = _request_api_key(data, stored_key)
         elif section == "rerank":
             providers = config.rerank.providers
             if providers:
@@ -700,9 +744,9 @@ async def get_available_models(section: str, data: dict | None = Body(default=No
                 from openai import OpenAI
                 client = OpenAI(base_url=base_url, api_key=api_key or "dummy")
                 models = client.models.list()
-                # 返回所有模型，让用户通过搜索过滤
                 model_names = [m.id for m in models.data]
-
+                if is_openai_endpoint(base_url):
+                    model_names = [name for name in model_names if name.startswith("text-embedding-")]
                 return {"models": sorted(model_names)}
 
             elif section == "rerank":
@@ -782,6 +826,8 @@ async def add_llm_provider(provider: LLMProviderConfig):
 @router.put("/llm/providers/{provider_id}")
 @_serialize_writes
 async def update_llm_provider(provider_id: str, update: dict = Body()):
+    if update.get("api_mode") not in (None, "responses", "chat_completions"):
+        raise HTTPException(422, "API mode must be 'responses' or 'chat_completions'")
     config = get_config()
     found = _apply_provider_update(
         config.llm.providers,
@@ -800,7 +846,7 @@ async def update_llm_provider(provider_id: str, update: dict = Body()):
     # Endpoint/model/key changed → re-classify the thinking posture, unless
     # the caller pinned thinking_mode explicitly in the same update.
     endpoint_changed = bool(
-        {"model", "base_url", "api_key", "default_model"} & set(update)
+        {"model", "base_url", "api_mode", "api_key", "default_model"} & set(update)
     )
     if endpoint_changed and "thinking_mode" not in update:
         loop = asyncio.get_running_loop()
@@ -830,6 +876,11 @@ def _probe_provider_thinking(provider) -> str:
     runtime calls will actually use. Returns "" (keep previous value) when
     inconclusive.
     """
+    from src.providers.llm.parameters import resolve_llm_api_mode
+
+    if resolve_llm_api_mode(provider.base_url, provider.api_mode) == "responses":
+        return "none"
+
     model = (provider.default_model or provider.model or "").strip()
     if not (
         (provider.base_url or "").strip()
@@ -928,21 +979,58 @@ def list_embedding_providers():
     return result
 
 
+@router.get("/embedding/providers/{provider_id}/impact")
+def embedding_provider_impact(provider_id: str):
+    from src.services import services
+    from src.collections.store import collection_display_name
+    from src.identity import get_actor, visibility
+    from src.meeting.transcript_index import is_internal_collection
+    from src.rag.collection_utils import collection_binding
+
+    settings = get_config().embedding
+    if not any(p.id == provider_id for p in settings.providers):
+        raise HTTPException(404, "Embedding provider not found")
+    remaining = [p for p in settings.providers if p.id != provider_id]
+    ids = [cid for cid in services.db.list_collections() if not is_internal_collection(cid)]
+    affected = []
+    for cid in visibility.filter_collection_ids(get_actor(), ids):
+        config = services.db.get_collection_config(cid)
+        binding = collection_binding(config, settings)
+        if binding and binding.resolve(settings.providers) and not binding.resolve(remaining):
+            affected.append({"id": cid, "name": collection_display_name(cid)})
+    return {"collections": sorted(affected, key=lambda row: row["name"].casefold()),
+            "last_model": not remaining}
+
+
+async def _refresh_embedding():
+    from src.meeting.embedding_index import connections_changed
+
+    await async_reload_services(preload_transcription=False)
+    connections_changed()
+
+
 @router.post("/embedding/providers")
 @_serialize_writes
 async def add_embedding_provider(provider: EmbeddingProviderConfig):
+    _require_embedding_admin()
     config = get_config()
+    if provider.provider == "openai":
+        provider.base_url = resolve_embedding_base_url(provider.base_url, provider.provider)
+    if provider.id and any(p.id == provider.id for p in config.embedding.providers):
+        raise HTTPException(409, "An embedding connection with this ID already exists.")
     added = _add_to_provider_list(config.embedding.providers, provider)
     save_config(config)
     reload_config()
-    await async_reload_services(preload_transcription=False)
+    await _refresh_embedding()
     return _public_dump(added)
 
 
 @router.put("/embedding/providers/{provider_id}")
 @_serialize_writes
 async def update_embedding_provider(provider_id: str, update: dict = Body()):
+    _require_embedding_admin()
     config = get_config()
+    previous = next((p.model_copy() for p in config.embedding.providers if p.id == provider_id), None)
     found = _apply_provider_update(
         config.embedding.providers,
         provider_id,
@@ -952,15 +1040,22 @@ async def update_embedding_provider(provider_id: str, update: dict = Body()):
     )
     if not found:
         raise HTTPException(404, f"Provider '{provider_id}' not found")
+    if found.provider == "openai":
+        found.base_url = resolve_embedding_base_url(found.base_url, found.provider)
+    from src.secrets import skip_secret_write
+    if previous and EmbeddingBinding.from_provider(previous).source != EmbeddingBinding.from_provider(found).source:
+        if skip_secret_write("api_key", update.get("api_key")):
+            found.api_key = ""
     save_config(config)
     reload_config()
-    await async_reload_services(preload_transcription=False)
+    await _refresh_embedding()
     return _public_dump(found)
 
 
 @router.delete("/embedding/providers/{provider_id}")
 @_serialize_writes
 async def delete_embedding_provider(provider_id: str):
+    _require_embedding_admin()
     config = get_config()
     target, rest = _remove_provider(
         config.embedding.providers, provider_id, promote=True
@@ -971,6 +1066,7 @@ async def delete_embedding_provider(provider_id: str):
     config.embedding.providers = rest
     save_config(config)
     reload_config()
+    await _refresh_embedding()
     return {"message": f"Provider '{label}' deleted"}
 
 
@@ -1002,7 +1098,7 @@ async def test_embedding_provider(provider_id: str):
 @router.post("/embedding/providers/{provider_id}/set-default")
 @_serialize_writes
 async def set_default_embedding_provider(provider_id: str):
-    import logging
+    _require_embedding_admin()
     _log = logging.getLogger("api.embedding")
     _log.info("Set default embedding: %s", provider_id)
     config = get_config()
@@ -1013,7 +1109,7 @@ async def set_default_embedding_provider(provider_id: str):
     display_name = _provider_display_name(found, provider_id)
     save_config(config)
     reload_config()
-    await async_reload_services(preload_transcription=False)
+    await _refresh_embedding()
     return {"message": f"Provider '{display_name}' set as default"}
 
 

@@ -14,13 +14,15 @@ from collections import defaultdict
 from contextlib import closing
 
 from src.collections.store import get_collection_meta
+from src.config import EmbeddingBinding
 from src.file_mgmt import store as files
 from src.identity import can, get_actor
 from src.identity.policy import may_see_everything
 from src.identity.roles import get_role
 from src.rag import collection_utils
 from src.rag.chunker import ParagraphChunker, estimate_chunking_tokens
-from src.rag.retriever import RetrievedChunk
+from src.rag.embedding_validation import validate_vectors
+from src.rag.retriever import RetrievedChunk, trace_vector_search
 
 from . import store
 
@@ -102,11 +104,15 @@ def _embedding_config(db, collection):
     )
     if not config or config.provider in ("", "none") or config.dimensions <= 0:
         return None, ""
+    return config, model_key_for(config)
+
+
+def model_key_for(config):
     identity = [
         config.provider, config.model.strip(), config.base_url.strip().rstrip("/"),
         config.dimensions, "qa-body-v1",
     ]
-    return config, _digest(json.dumps(identity))
+    return _digest(json.dumps(identity))
 
 
 def _digest(text):
@@ -294,6 +300,13 @@ def _project_jobs(conn, model_key):
 
 
 def sync_project(collection, task=None):
+    from src.db.index_routing import collection_work
+
+    with collection_work(collection).writer():
+        return sync_project_with_model(collection, task)
+
+
+def sync_project_with_model(collection, task=None):
     from src.services import services
     from src.tasks.task_manager import check_cancelled
 
@@ -344,7 +357,18 @@ def _current_rows(conn, ids):
     return rows
 
 
-def retrieve(collection, query, top_k):
+def retrieve(collection, query, top_k, *, embedding_override=None, on_trace=None):
+    from src.db.index_routing import IndexRoutingClient
+    from src.services import services
+
+    client = getattr(services.db, "client", None)
+    if isinstance(client, IndexRoutingClient):
+        with client.snapshot(collection):
+            return _retrieve_current(collection, query, top_k, embedding_override, on_trace)
+    return _retrieve_current(collection, query, top_k, embedding_override, on_trace)
+
+
+def _retrieve_current(collection, query, top_k, embedding_override, on_trace):
     from src.services import services
 
     db = services.db
@@ -363,10 +387,17 @@ def retrieve(collection, query, top_k):
         ]
         if not ids:
             return []
-        embedding = collection_utils.create_embedding_provider(config)
-        points = db.search_qa(collection, embedding.embed_query(query), ids, top_k)
+        binding = EmbeddingBinding.from_provider(config)
+        embedding = embedding_override
+        if getattr(embedding, "index_binding", None) != binding:
+            embedding = collection_utils.create_embedding_provider(config)
+        vector = embedding.embed_query(query)
+        validate_vectors([vector], 1, config.dimensions)
+        points = db.search_qa(collection, vector, ids, top_k)
         if not can_read(collection):
             return []
+        trace_vector_search(on_trace, {"kind": "retrieval", "collection": collection, "mode": "dense"},
+                            binding, config.name, len(vector))
         rows = _current_rows(conn, [point["id"] for point in points])
         chunks = []
         for point in points:
