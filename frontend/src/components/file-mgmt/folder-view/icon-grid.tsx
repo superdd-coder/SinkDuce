@@ -11,7 +11,7 @@ import {
 import { FolderIconView } from "@/components/file-mgmt/timeline-view/group-icons"
 import {
   DEFAULT_ICON_COLOR,
-  ZE_GREEN,
+  ICON_COLORS,
   GroupIconView,
   IconPickerPanel,
   buildIconPayload,
@@ -136,7 +136,7 @@ export function IconGrid({
       setEditIconKey(folder.kind === "plain" ? "folder" : "git-branch")
       setEditIconColor(
         folder.icon_color ||
-          (folder.kind === "branch" ? ZE_GREEN : DEFAULT_ICON_COLOR)
+          (folder.kind === "branch" ? ICON_COLORS[0] : DEFAULT_ICON_COLOR)
       )
     } else if (folder.icon_type === "emoji" && folder.icon_value) {
       setEditIconMode("emoji")

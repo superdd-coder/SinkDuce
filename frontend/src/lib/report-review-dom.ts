@@ -32,10 +32,14 @@ export function installHighlights(name:string,ranges:Range[],kind:'comment'|'add
   if(!api||!HighlightClass)return ()=>{}
   api.set(name,new HighlightClass(...ranges))
   const style=document.createElement('style')
-  const paint=kind==='focus'?'background:#1a5e3d36;color:inherit':kind==='removed'?'background:#a0685b18;text-decoration:line-through;text-decoration-color:#a0685b':
-    kind==='added'?'background:#1a5e3d20;text-decoration:underline;text-decoration-color:#1a5e3d70':
-      'background:#1a5e3d18;text-decoration:underline;text-decoration-color:#1a5e3d55'
-  style.textContent=`::highlight(${name}){${paint}}`
+  const tint = (percent: number) => `color-mix(in srgb, var(--sd-accent-emphasis) ${percent}%, transparent)`
+  const paints = {
+    focus: `background:${tint(21)};color:inherit`,
+    removed: 'background:#a0685b18;text-decoration:line-through;text-decoration-color:#a0685b',
+    added: `background:${tint(13)};text-decoration:underline;text-decoration-color:${tint(44)}`,
+    comment: `background:${tint(9)};text-decoration:underline;text-decoration-color:${tint(33)}`,
+  }
+  style.textContent = `::highlight(${name}){${paints[kind]}}`
   document.head.append(style)
   return ()=>{api.delete(name);style.remove()}
 }

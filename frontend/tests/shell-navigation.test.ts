@@ -69,7 +69,8 @@ test("the floating navigation obscures the workspace in both themes", async () =
   const navigation = css.match(/^\.sd-navigation\s*\{([^}]+)\}/m)?.[1] ?? ""
   assert.match(navigation, /background-color:\s*var\(--sd-canvas\)/, "The navigation needs a solid base beneath its gradient")
   const canvasColors = [...css.matchAll(/--sd-canvas:\s*([^;]+);/g)].map(match => match[1].trim())
-  assert.equal(canvasColors.length, 2)
+  assert.match(css, /^:root\s*\{[^{}]*--sd-canvas:/m)
+  assert.match(css, /^:root\.dark, \.dark\s*\{[^{}]*--sd-canvas:/m)
   for (const color of canvasColors) assert.match(color, /^#[0-9a-f]{6}$/i)
 })
 

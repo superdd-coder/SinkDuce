@@ -49,6 +49,7 @@ import { LocalModelCard } from "./local-model-card"
 import { ConnectionInfoCard } from "./connection-info-card"
 import { PairingCard } from "./pairing-card"
 import { SettingsSwitch } from "./settings-switch"
+import { AccentThemeCard } from "./accent-theme-card"
 import type { LoadDetail, LoadState } from "./local-model-card"
 import { ModelDownloadDialog } from "@/components/model-download-dialog"
 import { HotWordsManager } from "./hot-words-manager"
@@ -669,7 +670,7 @@ export function LLMProviderView() {
   // - 配置类（模型/embedding/rerank/转写/翻译/Web/解析/高级）← 能力 `config.write`
   // - 热词 / 人物 ← 各自的**域 read 档**（三域没有 modules 开关）
   // - 权限管理 ← `acl.manage`
-  // 拿不到画像时（首帧 / 拉取失败）**按最保守处理**：只显示语言项。
+  // 拿不到画像时（首帧 / 拉取失败），只显示个人界面偏好。
   // 真正的墙是服务端（/api/config 的路由器级闸门等）；这里只是别让用户
   // 点进一个必然 403 的地方。
   const canWriteConfig = identity?.capabilities?.["config.write"] === true
@@ -947,17 +948,11 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
     try {
       const list = await getLLMProviders()
       setProviders(list.map((p) => ({ ...p, status: "unknown" as const })))
-      // Sync default_chat_model: if no fc-capable default exists, clear it
-      const fcDefaults = list.filter(p => p.is_default && (p.function_call_model_ids ?? []).length > 0)
-      if (fcDefaults.length === 0) {
-        setChatModelId("")
-        updateConfig("default_chat_model", { default_chat_model: null }).catch(() => {})
-      } else {
-        // Re-fetch config to refresh chatModelId in case backend auto-set it
-        getConfig().then(c => {
-          if (c.default_chat_model && typeof c.default_chat_model === "string") setChatModelId(c.default_chat_model)
-        }).catch(() => {})
-      }
+      // Provider mutations reconcile the saved slot on the server. Merely
+      // opening Settings (including for personal colors) only reads it.
+      getConfig().then(c => {
+        setChatModelId(typeof c.default_chat_model === "string" ? c.default_chat_model : "")
+      }).catch(() => {})
     } catch { toast.error(t("settings.failedToLoadProviders")) }
   }
 
@@ -2192,6 +2187,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         )}
 
         <InterfaceLanguageCard />
+        <AccentThemeCard />
 
         <PermissionEntry allowed={identity?.capabilities?.["acl.manage"] === true}
           onOpen={() => setPermissionManagerOpen(true)} />

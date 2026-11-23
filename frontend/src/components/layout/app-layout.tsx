@@ -36,7 +36,7 @@ const MemoMeetingView = memo(function MemoMeetingView({ active }: ViewProps) {
 const MemoLLMProviderView = memo(function MemoLLMProviderView(_props: ViewProps) {
   // 远程模式按角色分流：有 config.write（owner/admin，判定来自**当前所连
   // 盒子**的身份画像，与正常模式连远端同一闸门）→ 完整配置面（读写都走
-  // 那台盒子，语言卡经 store 分支写壳）；其余角色 → 三件壳设置。
+  // 那台盒子，个人界面偏好留在本机）；其余角色 → 精简壳设置。
   const remoteShellMode = useAppStore((s) => s.remoteShellMode)
   const canWriteConfig = useAppStore(
     (s) => s.identity?.capabilities?.["config.write"] === true,

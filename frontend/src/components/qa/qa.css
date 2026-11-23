@@ -542,13 +542,13 @@
 .qa-import-grid-scroll { overflow: auto; max-height: 48dvh; scrollbar-width: thin; }
 .qa-import-grid { border-collapse: separate; border-spacing: 0; min-width: 100%; table-layout: fixed; font: var(--type-ui); }
 .qa-import-grid th, .qa-import-grid td { min-width: 230px; max-width: 360px; padding: 16px 18px; text-align: left; vertical-align: top; border-bottom: 1px solid color-mix(in srgb, var(--pm-ink) 6%, transparent); }
-.qa-import-grid thead th { position: sticky; top: 0; z-index: 2; background: #f4f7f4; vertical-align: bottom; }
+.qa-import-grid thead th { position: sticky; top: 0; z-index: 2; background: color-mix(in srgb, var(--sd-selected) 45%, var(--sd-surface-overlay)); vertical-align: bottom; }
 .qa-source-heading { display: block; margin-bottom: 12px; font: var(--type-label); color: var(--pm-text); white-space: pre-wrap; }
-.qa-import-grid .qa-source-row { position: sticky; left: 0; z-index: 1; min-width: 160px; width: 160px; max-width: 160px; background: #fafbf9; color: var(--pm-faint); font: var(--type-meta); }
-.qa-import-grid thead .qa-source-row { z-index: 3; background: #f4f7f4; }
+.qa-import-grid .qa-source-row { position: sticky; left: 0; z-index: 1; min-width: 160px; width: 160px; max-width: 160px; background: var(--sd-surface-overlay); color: var(--pm-faint); font: var(--type-meta); }
+.qa-import-grid thead .qa-source-row { z-index: 3; background: color-mix(in srgb, var(--sd-selected) 45%, var(--sd-surface-overlay)); }
 .qa-source-row > span { display: block; margin-bottom: 10px; font-variant-numeric: tabular-nums; }
 .qa-import-grid td { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
-.qa-import-grid tr[data-row-kind="section"] td, .qa-import-grid tr[data-row-kind="header"] td { background: #f8f9f6; color: var(--pm-muted); font-weight: 500; }
+.qa-import-grid tr[data-row-kind="section"] td, .qa-import-grid tr[data-row-kind="header"] td { background: color-mix(in srgb, var(--sd-selected) 22%, var(--sd-surface-overlay)); color: var(--pm-muted); font-weight: 500; }
 .qa-import-grid tr[data-row-kind="note"] td, .qa-import-grid tr[data-row-kind="exclude"] td { color: var(--pm-faint); background: #fbfbfa; }
 .qa-import-grid tr[data-row-kind="review"] .qa-source-row { box-shadow: inset 3px 0 #b58c42; background: #fbf8ef; }
 .qa-empty-cell { color: color-mix(in srgb, var(--pm-faint) 40%, transparent); }

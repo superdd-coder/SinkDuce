@@ -1,0 +1,65 @@
+.sd-theme-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 204px), 1fr));
+  gap: 8px;
+}
+.sd-theme-option {
+  position: relative;
+  display: grid;
+  grid-template-columns: 25px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 6px 12px;
+  border-radius: var(--sd-radius-field);
+  background: var(--sd-field);
+  color: var(--sd-text);
+  font: var(--type-label);
+  cursor: pointer;
+}
+.sd-theme-option:hover { background: var(--sd-hover); }
+.sd-theme-option[data-custom] { grid-column: 1 / -1; }
+.sd-theme-option:has(input:checked) {
+  background: var(--sd-selected);
+  color: var(--sd-selected-ink);
+  box-shadow: inset 0 0 0 1px var(--sd-focus);
+}
+.sd-theme-option:has(input:focus-visible) { outline: 2px solid var(--sd-focus); outline-offset: 2px; }
+.sd-theme-sample {
+  width: 25px;
+  height: 25px;
+  border-radius: 50%;
+  background: linear-gradient(135deg,
+    var(--sd-selected) 34%, var(--sd-focus) 34% 66%, var(--sd-brand) 66%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sd-brand) 10%, transparent);
+}
+.sd-theme-hue {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 4ch;
+  align-items: center;
+  gap: 14px;
+  padding-inline: 12px;
+  color: var(--sd-text);
+  font: var(--type-label);
+}
+.sd-theme-hue input {
+  --hue-track: linear-gradient(to right, oklch(72% .075 0), oklch(72% .075 60), oklch(72% .075 120),
+    oklch(72% .075 180), oklch(72% .075 240), oklch(72% .075 300), oklch(72% .075 360));
+  appearance: none;
+  width: 100%;
+  height: 28px;
+  background: transparent;
+  cursor: pointer;
+}
+.sd-theme-hue input:focus-visible { outline: 2px solid var(--sd-focus); outline-offset: 2px; border-radius: var(--sd-radius-pill); }
+.sd-theme-hue input::-webkit-slider-runnable-track { height: 8px; border-radius: 8px; background: var(--hue-track); }
+.sd-theme-hue input::-moz-range-track { height: 8px; border-radius: 8px; background: var(--hue-track); }
+.sd-theme-hue input::-webkit-slider-thumb {
+  appearance: none; width: 18px; height: 18px; margin-top: -5px; border-radius: 50%;
+  border: 2px solid var(--sd-surface-overlay); background: var(--sd-brand); box-shadow: 0 0 0 1px var(--sd-focus);
+}
+.sd-theme-hue input::-moz-range-thumb {
+  box-sizing: border-box; width: 18px; height: 18px; border-radius: 50%;
+  border: 2px solid var(--sd-surface-overlay); background: var(--sd-brand); box-shadow: 0 0 0 1px var(--sd-focus);
+}
+.sd-theme-hue output { text-align: end; font-variant-numeric: tabular-nums; }

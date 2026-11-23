@@ -27,6 +27,7 @@ import { mergeNoteChanges, type NoteChange } from "@/lib/note-changes"
 import type { ChatAttachment } from "@/api/client"
 import type { ChatAttachmentDraft } from "@/lib/chat-attachments"
 import type { ChatQueue } from "@/lib/chat-queue"
+import { ACCENT_THEME_STORAGE_KEY, normalizeAccentHue, readAccentPreference, type AccentPreference, type AccentTheme } from "@/lib/accent-theme"
 import type { WorkspaceSearchHit } from "@/api/workspace-search"
 
 function loadPersisted<T>(key: string, fallback: T): T {
@@ -302,6 +303,8 @@ interface AppState {
   locale: Locale
   setLocale: (locale: Locale) => void
   hydrateLocale: (raw: unknown) => void
+  accentPreference: AccentPreference
+  setAccentTheme: (theme: AccentTheme, customHue?: number) => void
 
   pendingMeetingCitation?: { meetingId: string; sentenceId?: string; startTime?: number }
   activeMeeting: string | null
@@ -894,6 +897,16 @@ export const useAppStore = create<AppState>((set) => ({
   developerMode: loadPersisted<boolean>("developerMode", false),
   toggleDeveloperMode: () => set((s) => ({ developerMode: !s.developerMode })),
 
+  accentPreference: readAccentPreference(),
+  setAccentTheme: (theme, hue) => {
+    const customHue = normalizeAccentHue(hue ?? useAppStore.getState().accentPreference.customHue)
+    const preference = { theme, customHue }
+    try {
+      localStorage.setItem(ACCENT_THEME_STORAGE_KEY, JSON.stringify(preference))
+    } catch { /* The choice still applies to this window. */ }
+    set({ accentPreference: preference })
+  },
+
   locale: (() => {
     const locale = normalizeLocale(loadPersisted<unknown>("locale", "en"))
     applyDocumentLang(locale)
@@ -1200,15 +1213,47 @@ export function getCollectionByName(name: string): CollectionItem | undefined {
 
 // Persist selected chat params to localStorage (debounced to avoid writing on every streaming token)
 let _persistTimer: ReturnType<typeof setTimeout> | null = null
-useAppStore.subscribe((state) => {
+useAppStore.subscribe((state, previous) => {
+  if (
+    state.activeProvider === previous.activeProvider &&
+    state.activeModel === previous.activeModel &&
+    state.selectedCollections === previous.selectedCollections &&
+    state.sessionId === previous.sessionId &&
+    state.developerMode === previous.developerMode
+  ) return
   if (_persistTimer) clearTimeout(_persistTimer)
   _persistTimer = setTimeout(() => {
     writeSourceScoped("rag_activeProvider", state.activeProvider)
     writeSourceScoped("rag_activeModel", state.activeModel)
     writeSourceScoped("rag_selectedCollections", state.selectedCollections)
     writeSourceScoped("rag_sessionId", state.sessionId)
-    localStorage.setItem("rag_developerMode", JSON.stringify(state.developerMode))
+    try {
+      localStorage.setItem("rag_developerMode", JSON.stringify(state.developerMode))
+    } catch { /* Browser storage can be unavailable. */ }
   }, 500)
 })
 
 bindLocaleGetter(() => useAppStore.getState().locale)
+
+/** Root-level colors reach React portals as well as the shell. */
+export function bindAccentTheme() {
+  const root = document.documentElement
+  const paint = ({ theme, customHue }: AccentPreference) => {
+    root.style.setProperty("--sd-custom-hue", String(customHue))
+    root.dataset.accentTheme = theme
+  }
+  paint(useAppStore.getState().accentPreference)
+  const unsubscribe = useAppStore.subscribe((state, previous) => {
+    if (state.accentPreference !== previous.accentPreference) paint(state.accentPreference)
+  })
+  const restore = (event: StorageEvent) => {
+    if ((event.key === ACCENT_THEME_STORAGE_KEY || event.key === null) && event.storageArea === window.localStorage) {
+      useAppStore.setState({ accentPreference: readAccentPreference() })
+    }
+  }
+  window.addEventListener("storage", restore)
+  return () => {
+    unsubscribe()
+    window.removeEventListener("storage", restore)
+  }
+}

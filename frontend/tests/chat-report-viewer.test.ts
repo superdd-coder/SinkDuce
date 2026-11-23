@@ -325,7 +325,8 @@ test("chat assets, menus and dialogs share an opaque surface in both themes", as
   ])
   for (const theme of [":root", ":root.dark, .dark"]) {
     const declarations = foundation.split(`${theme} {`)[1]?.split("}")[0] ?? ""
-    assert.match(declarations, /--sd-surface-overlay:\s*#[\da-f]{6};/i, `Solid popup color for ${theme}`)
+    const overlay = declarations.match(/--sd-surface-overlay:\s*([^;]+);/)?.[1] ?? ""
+    assert.match(overlay, /^(?:#[\da-f]{6}|oklch\([\d.]+%\s+[^/]+\))$/i, `Opaque popup color for ${theme}`)
   }
   const menu = menus.match(/:is\(([^{}]*\.pm-assets-card[^{}]*)\)\s*\{([^}]+)\}/)
   assert.ok(menu)

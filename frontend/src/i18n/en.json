@@ -219,6 +219,18 @@
     "meetingEmbeddingImpact": "Affected meetings will use the current default model and rebuild automatically.",
     "libraryEmbeddingImpact": "These collections will wait for their original model connection to be restored.",
     "interfaceLanguage": "Interface language",
+    "colorTheme": "Accent color",
+    "colorThemeScope": "Applies only to this browser or desktop app.",
+    "themeHue": "Hue",
+    "colorThemes": {
+      "pine": "Pine green",
+      "black": "Black",
+      "mist": "Mist blue",
+      "lilac": "Dusty lilac",
+      "rose": "Dusty rose",
+      "clay": "Terracotta",
+      "custom": "Custom hue"
+    },
     "interfaceLanguageHelp": "Labels and error toasts. Does not change MinerU OCR or transcription language.",
     "langEn": "English",
     "langZhCN": "简体中文",
