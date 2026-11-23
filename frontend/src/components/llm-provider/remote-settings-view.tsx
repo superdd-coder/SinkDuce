@@ -10,11 +10,10 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { DropdownSelect } from "@/components/ui/dropdown-select"
 import { SettingsSwitch } from "./settings-switch"
+import { AccentThemeCard } from "./accent-theme-card"
 
 /**
- * 远程模式的极简设置页：只有界面语言、远程模式开关、开发者模式三项。
- *
- * 用户故事原话「Settings 只剩语言选择、远程模式的开关、开发者模式的开关」。
+ * 远程模式的精简设置页，包含个人界面偏好和本机运行模式。
  * 这里没有 provider/嵌入/重排等任何配置卡——那些属于重后端，远程模式下
  * 它们配置在远端盒子上，不由入口壳管理。
  *
@@ -71,6 +70,8 @@ export function RemoteSettingsView() {
             </div>
           </div>
         </section>
+
+        <AccentThemeCard />
 
         {/* 远程模式 */}
         <section className="pm-settings-section">

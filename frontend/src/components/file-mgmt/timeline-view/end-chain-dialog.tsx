@@ -578,7 +578,7 @@ export function EndChainDialog({
                             title={t("fileMgmt.toggleAllFiles")}
                           >
                             {nwf.files.every((f) => selectedFileIds.has(f.file_id)) ? (
-                              <CheckSquare className="h-3.5 w-3.5 text-emerald-700" />
+                              <CheckSquare className="h-3.5 w-3.5 text-primary" />
                             ) : (
                               <Square className="h-3.5 w-3.5 text-muted-foreground" />
                             )}
@@ -596,7 +596,7 @@ export function EndChainDialog({
                                   onClick={() => toggleFile(f.file_id)}
                                 >
                                   {on ? (
-                                    <CheckSquare className="h-3 w-3 text-emerald-700 shrink-0" />
+                                    <CheckSquare className="h-3 w-3 text-primary shrink-0" />
                                   ) : (
                                     <Square className="h-3 w-3 text-muted-foreground shrink-0" />
                                   )}

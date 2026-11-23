@@ -120,7 +120,8 @@ export function MainLaneFlow({ left, width }: { left: number; width: number }) {
               pathRefs.current[i] = el
             }}
             d={ds[i]}
-            style={{ fill: `rgba(26, 94, 61, ${w.a})` }}
+            fill="var(--sd-accent-emphasis)"
+            fillOpacity={w.a}
           />
         ))}
       </svg>

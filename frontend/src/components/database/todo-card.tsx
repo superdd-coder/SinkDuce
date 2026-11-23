@@ -402,7 +402,7 @@ export function TodoCard({
                 "inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0 rounded-sm",
                 item.is_main_chain
                   ? "bg-muted text-muted-foreground"
-                  : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                  : "bg-[var(--sd-selected)] text-[var(--sd-selected-ink)]"
               )}
             >
               <GitBranch className="size-2.5" />

@@ -219,6 +219,18 @@
     "meetingEmbeddingImpact": "受影响的会议将自动改用当前默认模型并重建。",
     "libraryEmbeddingImpact": "以下知识库将暂停语义搜索，恢复原模型配置后可继续使用。",
     "interfaceLanguage": "界面语言",
+    "colorTheme": "界面配色",
+    "colorThemeScope": "仅对当前浏览器或桌面客户端生效。",
+    "themeHue": "色调",
+    "colorThemes": {
+      "pine": "松柏绿",
+      "black": "黑色",
+      "mist": "雾蓝色",
+      "lilac": "灰紫色",
+      "rose": "烟粉色",
+      "clay": "陶土色",
+      "custom": "自定义色调"
+    },
     "interfaceLanguageHelp": "界面文案和错误提示。不会改变 MinerU OCR 或转写语言。",
     "langEn": "English",
     "langZhCN": "简体中文",

@@ -35,7 +35,7 @@
 :is(.pm-settings, .pm-settings-dlg) .pm-select-trigger:focus-visible,
 .pm-date-picker .pm-date-trigger:focus-visible { outline: 2px solid var(--sd-focus); outline-offset: 2px; box-shadow: none; }
 :is(.pm-settings-subcard, .pm-settings-provider-card, .pm-settings-fold-card) { background: var(--sd-surface-raised); border-radius: var(--sd-radius-card); box-shadow: var(--sd-shadow-control); }
-.pm-settings-card { background-image: var(--sd-grain), var(--sd-stage-fill); background-color: transparent; background-size: 128px 128px, 100% 100%; border-radius: var(--sd-radius-panel); box-shadow: var(--sd-shadow-panel); }
+.pm-settings-card { background-image: var(--sd-grain), var(--sd-stage-fill); background-color: var(--sd-stage-base, transparent); background-size: 128px 128px, 100% 100%; border-radius: var(--sd-radius-panel); box-shadow: var(--sd-shadow-panel); }
 .pm-settings-provider-card:hover { background: var(--sd-surface-raised); box-shadow: var(--sd-shadow-control); }
 .pm-settings-provider-actions .sd-button[data-variant="ghost"] { background: var(--sd-field) !important; }
 .pm-settings-provider-actions .sd-button[data-variant="ghost"]:hover:not(:disabled) { background: var(--sd-hover) !important; }
@@ -155,7 +155,7 @@
 .pm-report-history-entry-title small { background: var(--sd-field); color: var(--sd-muted); border-radius: var(--sd-radius-pill); }
 .pm-report-history-entry time, .pm-report-history-summary { color: var(--sd-muted); }
 .pm-report-history-entry.is-selected .pm-report-history-dot { background: var(--sd-brand); box-shadow: none; }
-.pm-report-history-check { width: 21px; height: 21px; padding: 4px; border-radius: 50%; background: var(--sd-menu-mark); color: var(--sd-brand); }
+.pm-report-history-check { width: 21px; height: 21px; padding: 4px; border-radius: 50%; background: var(--sd-menu-mark); color: var(--sd-menu-check); }
 .pm-review-block-action { border-radius: 50%; box-shadow: var(--sd-shadow-control); }
 .pm-review-followup textarea { border-radius: var(--sd-radius-field); background: var(--sd-field); color: var(--sd-text); }
 .pm-review-followup textarea:focus-visible { outline: 2px solid var(--sd-focus); outline-offset: 2px; }

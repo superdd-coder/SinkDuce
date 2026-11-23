@@ -1,21 +1,39 @@
-/* Shared porcelain / emerald foundation. Business layouts keep their own rules.
- * Legacy pm/ze aliases let each workspace migrate without changing its logic. */
+/* A swatch resolves its own palette, even inside the monochrome theme. */
+[data-accent-theme] {
+  --sd-accent-chroma: initial;
+  --sd-mark-filter: hue-rotate(calc((var(--sd-accent-hue) - 155) * 1deg));
+}
+[data-accent-theme="pine"] { --sd-accent-hue: initial; --sd-mark-filter: initial; }
+[data-accent-theme="mist"] { --sd-accent-hue: 245; }
+[data-accent-theme="lilac"] { --sd-accent-hue: 300; }
+[data-accent-theme="rose"] { --sd-accent-hue: 355; }
+[data-accent-theme="clay"] { --sd-accent-hue: 43; }
+[data-accent-theme="custom"] { --sd-accent-hue: var(--sd-custom-hue); }
+
+:root, .sd-theme-sample {
+  --sd-brand: oklch(37.56% var(--sd-accent-chroma, 0.0649) var(--sd-accent-hue, 165.8));
+  --sd-focus: oklch(58.24% var(--sd-accent-chroma, 0.0821) var(--sd-accent-hue, 158.8));
+  --sd-selected: oklch(94.67% var(--sd-accent-chroma, 0.0075) var(--sd-accent-hue, 164.9));
+}
+/* Shared porcelain surfaces and legacy pm/ze aliases. */
 :root {
   --sd-canvas: #e9e9e9;
   --sd-canvas-image: radial-gradient(ellipse 60% 45% at 20% 0%, #ffffff38, transparent 75%), linear-gradient(120deg, #e6e6e6, #ededed 52%, #e5e5e5);
   --sd-ink: #202020;
   --sd-text: #343434;
   --sd-muted: #6e6e6e;
-  --sd-brand: #174c39;
-  --sd-brand-hover: #28634b;
+  --sd-brand-hover: oklch(45.33% var(--sd-accent-chroma, 0.0737) var(--sd-accent-hue, 163.9));
+  --sd-accent-channels: 0.38 var(--sd-accent-chroma, 0.08) var(--sd-accent-hue, 160);
+  --sd-accent-emphasis: oklch(43.05% var(--sd-accent-chroma, 0.0871) var(--sd-accent-hue, 157.9));
+  --sd-accent-glow: oklch(52.92% var(--sd-accent-chroma, 0.0836) var(--sd-accent-hue, 156.0));
+  --sd-editor-outline: oklch(50.81% var(--sd-accent-chroma, 0.1049) var(--sd-accent-hue, 165.6));
   --sd-surface: #ffffff80;
   --sd-surface-raised: #ffffffe6;
   --sd-surface-overlay: #fafafa;
   --sd-field: #22222206;
-  /* Interaction colors: neutral hover, emerald selection, solid primary. */
+  /* Interaction colors: neutral hover, tinted selection, solid primary. */
   --sd-hover: #2222220b;
-  --sd-selected: #e9efec;
-  --sd-selected-hover: #dfe9e4;
+  --sd-selected-hover: oklch(92.51% var(--sd-accent-chroma, 0.0126) var(--sd-accent-hue, 164.8));
   --sd-selected-ink: var(--sd-brand);
   --sd-nav-fill: linear-gradient(145deg, #ffffffd9, #ffffffa6 60%, #ffffffb8);
   --sd-rail-fill: linear-gradient(145deg, #ffffff8f, #ffffff66 65%, #ffffff80);
@@ -27,8 +45,7 @@
   --sd-radius-card: 20px;
   --sd-radius-field: 14px;
   --sd-radius-pill: 999px;
-  --sd-focus: #4d8a69;
-  --sd-focus-wash: #174c3920;
+  --sd-focus-wash: color-mix(in srgb, var(--sd-brand) 12.5%, transparent);
   --sd-grain: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22128%22%20height%3D%22128%22%20viewBox%3D%220%200%20128%20128%22%3E%3Cfilter%20id%3D%22grain%22%3E%3CfeTurbulence%20type%3D%22fractalNoise%22%20baseFrequency%3D%22.85%22%20numOctaves%3D%223%22%20seed%3D%228%22%20stitchTiles%3D%22stitch%22%2F%3E%3CfeColorMatrix%20type%3D%22saturate%22%20values%3D%220%22%2F%3E%3CfeComponentTransfer%3E%3CfeFuncA%20type%3D%22linear%22%20slope%3D%22.035%22%2F%3E%3C%2FfeComponentTransfer%3E%3C%2Ffilter%3E%3Crect%20width%3D%22128%22%20height%3D%22128%22%20filter%3D%22url%28%23grain%29%22%2F%3E%3C%2Fsvg%3E");
 
   --pm-canvas: var(--sd-canvas);
@@ -41,9 +58,9 @@
   --pm-muted: var(--sd-muted);
   --pm-faint: #797979;
   --pm-green: var(--sd-brand);
-  --pm-green-deep: #123e2e;
+  --pm-green-deep: oklch(32.84% var(--sd-accent-chroma, 0.0562) var(--sd-accent-hue, 165.6));
   --pm-green-soft: var(--sd-selected);
-  --pm-green-wash: #174c390a;
+  --pm-green-wash: color-mix(in srgb, var(--sd-brand) 4%, transparent);
   --pm-on: #ffffff;
   --pm-shadow-sm: var(--sd-shadow-control);
   --pm-shadow: var(--sd-shadow-panel);
@@ -86,38 +103,58 @@
   --sidebar-border: transparent;
   --sidebar-ring: var(--sd-focus);
 }
+[data-accent-theme="black"] {
+  --sd-accent-chroma: 0;
+  --sd-brand: #191919;
+  --sd-brand-hover: #343434;
+  --sd-focus: #595959;
+  --sd-selected: #f4f4f4;
+  --pm-green-deep: #151515;
+  --sd-mark-filter: grayscale(1) contrast(1.18);
+}
+:root.dark, .dark, .dark .sd-theme-sample {
+  --sd-brand: oklch(70.55% var(--sd-accent-chroma, 0.0894) var(--sd-accent-hue, 164.8));
+  --sd-focus: oklch(77.82% var(--sd-accent-chroma, 0.0778) var(--sd-accent-hue, 164.5));
+  --sd-selected: oklch(36.02% var(--sd-accent-chroma, 0.0402) var(--sd-accent-hue, 165.3));
+}
 :root.dark, .dark {
   color-scheme: dark;
   --sd-canvas: #171a19;
-  --sd-canvas-image: linear-gradient(125deg, #1f2321, #171a19 65%, #202522);
-  --sd-ink: #edf0ee;
-  --sd-text: #d8ddda;
-  --sd-muted: #a3aca6;
-  --sd-brand: #67b292;
-  --sd-brand-hover: #7bc5a5;
-  --sd-surface: #30383399;
-  --sd-surface-raised: #303833;
-  --sd-surface-overlay: #2a312e;
+  --sd-canvas-image: linear-gradient(125deg, oklch(25.13% var(--sd-accent-chroma, 0.0069) var(--sd-accent-hue, 164.4)), var(--sd-canvas) 65%, oklch(25.83% var(--sd-accent-chroma, 0.0091) var(--sd-accent-hue, 159.4)));
+  --sd-ink: oklch(95.23% var(--sd-accent-chroma, 0.0041) var(--sd-accent-hue, 157.2));
+  --sd-text: oklch(89.28% var(--sd-accent-chroma, 0.0067) var(--sd-accent-hue, 160.1));
+  --sd-muted: oklch(73.55% var(--sd-accent-chroma, 0.0132) var(--sd-accent-hue, 156.9));
+  --sd-brand-hover: oklch(76.58% var(--sd-accent-chroma, 0.0879) var(--sd-accent-hue, 165.0));
+  --sd-accent-emphasis: var(--sd-brand);
+  --sd-accent-glow: var(--sd-focus);
+  --sd-editor-outline: var(--sd-focus);
+  --sd-selected-ink: var(--sd-focus);
+  --sd-surface: oklch(33.14% var(--sd-accent-chroma, 0.0139) var(--sd-accent-hue, 158.1) / 60%);
+  --sd-surface-raised: oklch(33.14% var(--sd-accent-chroma, 0.0139) var(--sd-accent-hue, 158.1));
+  --sd-surface-overlay: oklch(30.53% var(--sd-accent-chroma, 0.0111) var(--sd-accent-hue, 167.9));
   --sd-field: #ffffff08;
   --sd-hover: #ffffff0c;
-  --sd-selected: #284438;
-  --sd-selected-hover: #304e40;
-  --sd-nav-fill: linear-gradient(145deg, #363e38e8, #282e2ad9);
-  --sd-rail-fill: linear-gradient(145deg, #303832b3, #242b268f);
-  --sd-stage-fill: linear-gradient(145deg, #323a34e8, #242c27cc);
+  --sd-selected-hover: oklch(39.56% var(--sd-accent-chroma, 0.0433) var(--sd-accent-hue, 163.4));
+  --sd-nav-fill: linear-gradient(145deg, oklch(35.43% var(--sd-accent-chroma, 0.0148) var(--sd-accent-hue, 153.1) / 91%), oklch(29.39% var(--sd-accent-chroma, 0.0110) var(--sd-accent-hue, 156.5) / 85.1%));
+  --sd-rail-fill: linear-gradient(145deg, oklch(33.11% var(--sd-accent-chroma, 0.0150) var(--sd-accent-hue, 153.1) / 70.2%), oklch(28.04% var(--sd-accent-chroma, 0.0134) var(--sd-accent-hue, 154.4) / 56.1%));
+  --sd-stage-fill: linear-gradient(145deg, oklch(33.89% var(--sd-accent-chroma, 0.0150) var(--sd-accent-hue, 153.1) / 91%), oklch(28.36% var(--sd-accent-chroma, 0.0144) var(--sd-accent-hue, 157.9) / 80%));
   --sd-shadow-panel: 0 14px 36px -18px #00000060, 0 3px 10px -5px #00000030;
   --sd-shadow-float: 0 18px 48px -16px #00000088;
-  --sd-focus: #87c7aa;
-  --sd-focus-wash: #87c7aa30;
-  --pm-faint: #98a39b;
-  --pm-green-deep: #83c7aa;
+  --sd-focus-wash: color-mix(in srgb, var(--sd-focus) 18.8%, transparent);
+  --pm-faint: oklch(70.43% var(--sd-accent-chroma, 0.0170) var(--sd-accent-hue, 154.3));
+  --pm-green-deep: oklch(77.60% var(--sd-accent-chroma, 0.0809) var(--sd-accent-hue, 165.7));
   --pm-green-soft: var(--sd-selected);
-  --pm-green-wash: #67b29212;
-  --pm-on: #10261b;
-  --primary-foreground: #10261b;
+  --pm-green-wash: color-mix(in srgb, var(--sd-brand) 7%, transparent);
+  --pm-on: oklch(24.64% var(--sd-accent-chroma, 0.0355) var(--sd-accent-hue, 160.5));
+  --primary-foreground: var(--pm-on);
   --border: #ffffff18;
   --input: #ffffff1c;
   --muted: #ffffff0a;
+}
+:root.dark[data-accent-theme="black"], :root[data-accent-theme="black"] .dark, .dark .sd-theme-sample[data-accent-theme="black"] {
+  --sd-brand: #f1f1f1;
+  --sd-focus: #c4c4c4;
+  --sd-selected: #303030;
 }
 
 /* A fixed icon rail beside the full-height keep-alive view host. */
@@ -131,6 +168,7 @@
   height: 100dvh;
   min-height: 520px;
   background: linear-gradient(var(--sd-canvas), transparent 64px), var(--sd-canvas-image);
+  background-color: var(--sd-canvas);
   isolation: isolate;
 }
 .sd-shell .pm-shell-body { display: contents; }
@@ -175,7 +213,7 @@
     box-shadow 220ms ease var(--sd-nav-close-delay);
 }
 .sd-nav-brand { display: flex; align-items: center; gap: 9px; padding: 0 8px; height: 36px; min-height: 36px; margin-bottom: 35px; overflow: hidden; white-space: nowrap; }
-.sd-nav-brand>img { width: 32px; height: 32px; flex: 0 0 32px; object-fit: contain; }
+.sd-nav-brand>img { width: 32px; height: 32px; flex: 0 0 32px; object-fit: contain; filter: var(--sd-mark-filter, none); }
 .sd-nav-wordmark { display: flex; align-items: center; width: 102px; }
 .sd-nav-wordmark img { display: block; width: 102px; height: auto; }
 .dark .sd-nav-wordmark img { filter: brightness(0) invert(1); opacity: .9; }
@@ -220,7 +258,7 @@ button.sd-nav-version:hover { background: var(--sd-surface-raised); }
  * a live backdrop filter. The floating navigation has a solid base so it
  * can cover workspace content cleanly when expanded. */
 .sd-shell :is(.pm-float-surface, .pm-stage, .pm-chat-stage-surface, .pm-meeting-stage-surface, .pm-meeting-group-stage, .pm-shell-view-skeleton) {
-  background-color: transparent !important;
+  background-color: var(--sd-stage-base, transparent) !important;
   background-image: var(--sd-grain), var(--sd-stage-fill) !important;
   background-size: 128px 128px, 100% 100%;
   border-radius: var(--sd-radius-panel);
@@ -229,7 +267,7 @@ button.sd-nav-version:hover { background: var(--sd-surface-raised); }
   -webkit-backdrop-filter: none;
 }
 .sd-shell :is(.pm-shell-collections-surface, .pm-chat-sessions-surface, .pm-meeting-rail-surface) {
-  background-color: transparent !important;
+  background-color: var(--sd-rail-base, transparent) !important;
   background-image: var(--sd-grain), var(--sd-rail-fill) !important;
   background-size: 128px 128px, 100% 100%;
   border-radius: var(--sd-radius-panel);

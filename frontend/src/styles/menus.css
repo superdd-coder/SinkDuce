@@ -1,28 +1,30 @@
 /* Form selects and workspace menus share an opaque surface in both themes.
    Selection and hover colors are painted over that surface. */
 :root {
-  --sd-menu-rail: #c8d1ca1a;
-  --sd-menu-ink: #34473b;
-  --sd-menu-muted: #78877e;
-  --sd-menu-hover: #e1eae3b8;
-  --sd-menu-selected: linear-gradient(115deg, #dce9e0ee, #eaf2ecd9);
-  --sd-menu-selected-hover: linear-gradient(115deg, #d5e4dadf, #e2eee6eb);
-  --sd-menu-parent: #e1e7e3b3;
+  --sd-menu-rail: oklch(85.17% var(--sd-accent-chroma, 0.0137) var(--sd-accent-hue, 152.6) / 10.2%);
+  --sd-menu-ink: oklch(37.77% var(--sd-accent-chroma, 0.0316) var(--sd-accent-hue, 156.8));
+  --sd-menu-muted: oklch(60.84% var(--sd-accent-chroma, 0.0221) var(--sd-accent-hue, 159.4));
+  --sd-menu-hover: oklch(92.83% var(--sd-accent-chroma, 0.0134) var(--sd-accent-hue, 152.6) / 72.2%);
+  --sd-menu-selected: linear-gradient(115deg, oklch(92.17% var(--sd-accent-chroma, 0.0183) var(--sd-accent-hue, 155.8) / 93.3%), oklch(95.34% var(--sd-accent-chroma, 0.0116) var(--sd-accent-hue, 153.7) / 85.1%));
+  --sd-menu-selected-hover: linear-gradient(115deg, oklch(90.48% var(--sd-accent-chroma, 0.0209) var(--sd-accent-hue, 156.8) / 87.5%), oklch(93.79% var(--sd-accent-chroma, 0.0166) var(--sd-accent-hue, 156.9) / 92.2%));
+  --sd-menu-parent: oklch(92.23% var(--sd-accent-chroma, 0.0084) var(--sd-accent-hue, 157.1) / 70.2%);
   --sd-menu-mark: #ffffffdf;
-  --sd-menu-shadow: 0 24px 44px -24px #213d2b38, 0 6px 15px -9px #20392a24;
+  --sd-menu-shadow: 0 24px 44px -24px oklch(33.18% var(--sd-accent-chroma, 0.0469) var(--sd-accent-hue, 154.8) / 22%), 0 6px 15px -9px oklch(31.91% var(--sd-accent-chroma, 0.0413) var(--sd-accent-hue, 156.8) / 14.1%);
+  --sd-menu-check: oklch(45.38% var(--sd-accent-chroma, 0.0808) var(--sd-accent-hue, 160.5));
+  --sd-menu-icon: oklch(59.26% var(--sd-accent-chroma, 0.0313) var(--sd-accent-hue, 158.1));
   --sd-menu-ms: 220ms;
   --sd-menu-ease: cubic-bezier(.2, .8, .2, 1);
   --pm-menu-ease: var(--sd-menu-ease);
 }
 .dark {
-  --sd-menu-rail: #131e1740;
-  --sd-menu-ink: #e1eae4;
-  --sd-menu-muted: #a1b3a7;
-  --sd-menu-hover: #a3c6af24;
-  --sd-menu-selected: linear-gradient(115deg, #365946eb, #2e4a3dd9);
-  --sd-menu-selected-hover: linear-gradient(115deg, #406750eb, #375846e8);
+  --sd-menu-rail: oklch(22.18% var(--sd-accent-chroma, 0.0208) var(--sd-accent-hue, 156.4) / 25.1%);
+  --sd-menu-ink: oklch(92.86% var(--sd-accent-chroma, 0.0125) var(--sd-accent-hue, 157.0));
+  --sd-menu-muted: oklch(74.93% var(--sd-accent-chroma, 0.0262) var(--sd-accent-hue, 156.5));
+  --sd-menu-hover: oklch(79.44% var(--sd-accent-chroma, 0.0495) var(--sd-accent-hue, 156.3) / 14.1%);
+  --sd-menu-selected: linear-gradient(115deg, oklch(43.12% var(--sd-accent-chroma, 0.0517) var(--sd-accent-hue, 159.5) / 92.2%), oklch(38.24% var(--sd-accent-chroma, 0.0407) var(--sd-accent-hue, 163.7) / 85.1%));
+  --sd-menu-selected-hover: linear-gradient(115deg, oklch(47.75% var(--sd-accent-chroma, 0.0581) var(--sd-accent-hue, 157.4) / 92.2%), oklch(42.91% var(--sd-accent-chroma, 0.0491) var(--sd-accent-hue, 159.6) / 91%));
   --sd-menu-parent: #ffffff0e;
-  --sd-menu-mark: #dcece5;
+  --sd-menu-mark: oklch(92.92% var(--sd-accent-chroma, 0.0194) var(--sd-accent-hue, 167.9));
   --sd-menu-shadow: 0 24px 44px -20px #0008, 0 5px 15px #0003;
 }
 :is(.pm-menu, .pm-select-menu, .pm-date-panel, .pm-timeline-menu, .pm-ws-menu,
@@ -84,19 +86,19 @@
 :is(.sd-menu-icon, .pm-menu-item > svg:first-child:not(.lucide-check):not(.lucide-chevron-right):not(.lucide-loader-circle),
     .pm-slash-menu__icon, .pm-settings-hw-import-icon) {
   flex: 0 0 auto; width: 28px; height: 28px; padding: 5px; border-radius: 50%;
-  color: #6f8477; background: var(--sd-menu-mark); opacity: 1;
+  color: var(--sd-menu-icon); background: var(--sd-menu-mark); opacity: 1;
 }
 .sd-menu-check, .pm-select-check, .pm-lt-check, .qa-filter-check {
   display: inline-flex; align-items: center; justify-content: center; flex: 0 0 21px;
   width: 21px; height: 21px; min-width: 21px; padding: 0; margin-left: auto;
-  border-radius: 50%; color: #256447 !important;
+  border-radius: 50%; color: var(--sd-menu-check) !important;
 }
 .sd-menu-check[data-checked], .pm-select-check.is-on, .pm-lt-check, .qa-filter-check {
-  background: var(--sd-menu-mark); box-shadow: 0 2px 4px #21432e0b;
+  background: var(--sd-menu-mark); box-shadow: 0 2px 4px oklch(35.02% var(--sd-accent-chroma, 0.0546) var(--sd-accent-hue, 155.2) / 4.3%);
 }
 .sd-menu-check > svg, .qa-filter-check > svg { width: 13px !important; height: 13px !important; opacity: 1 !important; color: inherit !important; }
 .pm-select-check, .pm-lt-check { padding: 4px; }
-.pm-menu-item > .lucide-check { width: 21px; height: 21px; padding: 4px; border-radius: 50%; color: #256447; background: var(--sd-menu-mark); opacity: 1; }
+.pm-menu-item > .lucide-check { width: 21px; height: 21px; padding: 4px; border-radius: 50%; color: var(--sd-menu-check); background: var(--sd-menu-mark); opacity: 1; }
 :is(.pm-menu, .pm-timeline-menu, .pm-files-menu, .sd-menu-surface) [role="separator"] {
   height: 0 !important; border: 0 !important; background: none !important; margin: 5px 0 !important;
 }
@@ -129,7 +131,7 @@
 /* Compact multi-select: search + one selected filter + tucked-away bulk tools. */
 .pm-menu.sd-multi-menu { width: 330px; display: flex; flex-direction: column; overflow: hidden; }
 .sd-multi-toolbar { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; position: relative; margin: 2px 2px 9px; }
-.sd-menu-search { display: flex; flex: 1; align-items: center; gap: 7px; min-width: 0; height: 37px; padding: 0 11px; border-radius: 99px; background: #b7c1b816; color: var(--sd-menu-muted); }
+.sd-menu-search { display: flex; flex: 1; align-items: center; gap: 7px; min-width: 0; height: 37px; padding: 0 11px; border-radius: 99px; background: oklch(80.05% var(--sd-accent-chroma, 0.0166) var(--sd-accent-hue, 148.4) / 8.6%); color: var(--sd-menu-muted); }
 .sd-menu-search input { width: 100%; min-width: 0; outline: 0; border: 0; background: transparent; color: var(--sd-menu-ink); font-size: 12px; }
 .sd-menu-search:focus-within { box-shadow: 0 0 0 2px color-mix(in srgb, var(--sd-focus) 24%, transparent); }
 .sd-multi-selected { display: inline-flex; align-items: center; gap: 4px; height: 32px; flex-shrink: 0; padding: 0 10px; border: 0; border-radius: 99px; background: var(--sd-field); color: var(--sd-menu-muted); font-size: 11px; white-space: nowrap; }

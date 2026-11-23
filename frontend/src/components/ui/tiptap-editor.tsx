@@ -531,10 +531,10 @@ function createResizableImageExtension() {
         padding: 8px 12px;
         border-radius: 6px;
         background: transparent;
-        border: 1px solid rgba(4, 120, 87, 0.45);
+        border: 1px solid color-mix(in srgb, var(--sd-editor-outline) 45%, transparent);
         box-shadow:
-          0 0 10px rgba(4, 120, 87, 0.35),
-          0 0 25px rgba(4, 120, 87, 0.15);
+          0 0 10px color-mix(in srgb, var(--sd-editor-outline) 35%, transparent),
+          0 0 25px color-mix(in srgb, var(--sd-editor-outline) 15%, transparent);
         line-height: 1.5;
         position: relative;
         box-sizing: border-box;
@@ -653,7 +653,7 @@ function createResizableImageExtension() {
           font-style: italic;
           color: var(--sd-text);
           background: var(--sd-surface-overlay);
-          border: 1px solid #3b82f6;
+          border: 1px solid var(--sd-focus);
           border-radius: 4px;
           padding: 6px 8px;
           resize: vertical;
@@ -735,7 +735,7 @@ function createResizableImageExtension() {
           height: ${r.height}px;
           font-size: 13px;
           text-align: center;
-          border: 1px solid #3b82f6;
+          border: 1px solid var(--sd-focus);
           border-radius: 3px;
           padding: 0 4px;
           outline: none;
@@ -815,15 +815,15 @@ function createResizableImageExtension() {
           align-items: center;
           justify-content: center;
           z-index: 5;
-          background: rgba(59,130,246,0.15);
+          background: color-mix(in srgb, var(--sd-editor-outline) 15%, transparent);
           border-radius: 0 0 4px 0;
         `
         // Diagonal resize arrows SVG - two arrows pointing from corners
         handle.innerHTML = `
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M14 2L18 6M18 6H14M18 6V2" stroke="#047857" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M6 18L2 14M2 14H6M2 14V18" stroke="#047857" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            <circle cx="10" cy="10" r="2" fill="#047857"/>
+            <path d="M14 2L18 6M18 6H14M18 6V2" stroke="var(--sd-editor-outline)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M6 18L2 14M2 14H6M2 14V18" stroke="var(--sd-editor-outline)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="10" cy="10" r="2" fill="var(--sd-editor-outline)"/>
           </svg>
         `
         return handle
@@ -842,7 +842,7 @@ function createResizableImageExtension() {
       // Show/hide resize handle on hover
       container.addEventListener("mouseenter", () => {
         if (resizeHandle) resizeHandle.style.opacity = "1"
-        img.style.boxShadow = "0 0 0 2px #047857"
+        img.style.boxShadow = "0 0 0 2px var(--sd-editor-outline)"
       })
 
       container.addEventListener("mouseleave", () => {

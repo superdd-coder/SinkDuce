@@ -25,10 +25,10 @@ import { useT } from "@/i18n/use-t"
 import type { FolderTreeNode, NodeGroup } from "@/types/file-mgmt"
 
 /**
- * System / brand forest — `--pm-green` / `--ze-green`.
- * Prefer this for Meeting · Notes · branch chrome so icons match Premium shell.
+ * Theme colors only apply to display defaults. Shared icon settings keep their explicit swatches.
  */
-export const ZE_GREEN = "#1A5E3D"
+const SYSTEM_ICON_COLOR = "var(--sd-accent-emphasis)"
+const FOLDER_ICON_COLOR = "var(--sd-focus)"
 
 /** Archived system folder — `--pm-faint` family (warm gray, not cool slate). */
 export const ARCHIVE_GRAY = "#969C96"
@@ -69,7 +69,7 @@ export const LUCIDE_PRESETS: { key: string; Icon: LucideIcon; label: string }[] 
  * Still below neon; brand green stays one option among a full ring.
  */
 export const ICON_COLORS = [
-  "#1A5E3D", // brand forest (--pm-green)
+  "#1A5E3D", // forest green
   "#2A8A9A", // teal
   "#3B6FBF", // blue
   "#7B5CB8", // violet
@@ -153,41 +153,41 @@ export function resolveGroupIcon(source: GroupIconSource): {
     return {
       kind: "lucide",
       Icon,
-      color: source.icon_color || DEFAULT_ICON_COLOR,
+      color: source.icon_color || FOLDER_ICON_COLOR,
     }
   }
 
   if (!source || !source.name) {
-    return { kind: "lucide", Icon: FolderIcon, color: DEFAULT_ICON_COLOR }
+    return { kind: "lucide", Icon: FolderIcon, color: FOLDER_ICON_COLOR }
   }
   const name = source.name.trim().toLowerCase()
 
-  // System groups / folders — ink green
-  if (name === "meeting") return { kind: "lucide", Icon: Video, color: ZE_GREEN }
+  // System groups / folders use the stronger accent.
+  if (name === "meeting") return { kind: "lucide", Icon: Video, color: SYSTEM_ICON_COLOR }
   if (name === "notes" || name === "note")
-    return { kind: "lucide", Icon: Pencil, color: ZE_GREEN }
+    return { kind: "lucide", Icon: Pencil, color: SYSTEM_ICON_COLOR }
   if (name === "archived" || name === "archive")
     return { kind: "lucide", Icon: Archive, color: ARCHIVE_GRAY }
   if (name === "unassigned")
-    return { kind: "lucide", Icon: Inbox, color: ZE_GREEN }
+    return { kind: "lucide", Icon: Inbox, color: SYSTEM_ICON_COLOR }
   // Virtual containers (display-only grouping in the Library grid)
-  if (name === "branches") return { kind: "lucide", Icon: GitBranch, color: ZE_GREEN }
-  if (name === "groups") return { kind: "lucide", Icon: Users, color: ZE_GREEN }
+  if (name === "branches") return { kind: "lucide", Icon: GitBranch, color: SYSTEM_ICON_COLOR }
+  if (name === "groups") return { kind: "lucide", Icon: Users, color: SYSTEM_ICON_COLOR }
 
   if (
     name === "未分类" ||
     name === "uncategorized" ||
     name === "no group"
   ) {
-    return { kind: "lucide", Icon: FolderIcon, color: DEFAULT_ICON_COLOR }
+    return { kind: "lucide", Icon: FolderIcon, color: FOLDER_ICON_COLOR }
   }
 
-  return { kind: "lucide", Icon: Users, color: DEFAULT_ICON_COLOR }
+  return { kind: "lucide", Icon: Users, color: FOLDER_ICON_COLOR }
 }
 
 /**
  * Kind-based folder icon when no custom / bound group icon applies.
- * System + branch → ink green; Archived → gray; plain → Morandi default.
+ * System groups and branches use the stronger accent, plain folders the softer tone.
  */
 export function resolveFolderKindIcon(folder: {
   kind: string
@@ -197,16 +197,16 @@ export function resolveFolderKindIcon(folder: {
     if (folder.name === "Archived" || folder.name === "Archive") {
       return { Icon: Archive, color: ARCHIVE_GRAY }
     }
-    if (folder.name === "Meeting") return { Icon: Video, color: ZE_GREEN }
-    if (folder.name === "Notes") return { Icon: Pencil, color: ZE_GREEN }
-    if (folder.name === "Unassigned") return { Icon: Inbox, color: ZE_GREEN }
-    if (folder.name === "Branches") return { Icon: GitBranch, color: ZE_GREEN }
-    if (folder.name === "Groups") return { Icon: Users, color: ZE_GREEN }
-    return { Icon: FolderIcon, color: ZE_GREEN }
+    if (folder.name === "Meeting") return { Icon: Video, color: SYSTEM_ICON_COLOR }
+    if (folder.name === "Notes") return { Icon: Pencil, color: SYSTEM_ICON_COLOR }
+    if (folder.name === "Unassigned") return { Icon: Inbox, color: SYSTEM_ICON_COLOR }
+    if (folder.name === "Branches") return { Icon: GitBranch, color: SYSTEM_ICON_COLOR }
+    if (folder.name === "Groups") return { Icon: Users, color: SYSTEM_ICON_COLOR }
+    return { Icon: FolderIcon, color: SYSTEM_ICON_COLOR }
   }
-  if (folder.kind === "user_group") return { Icon: Users, color: DEFAULT_ICON_COLOR }
-  if (folder.kind === "branch") return { Icon: GitBranch, color: ZE_GREEN }
-  return { Icon: FolderIcon, color: DEFAULT_ICON_COLOR }
+  if (folder.kind === "user_group") return { Icon: Users, color: FOLDER_ICON_COLOR }
+  if (folder.kind === "branch") return { Icon: GitBranch, color: SYSTEM_ICON_COLOR }
+  return { Icon: FolderIcon, color: FOLDER_ICON_COLOR }
 }
 
 /** Prefer bound group icon, then folder custom icon, then kind defaults. */
@@ -226,14 +226,14 @@ export function resolveFolderDisplayIcon(
     return {
       kind: "lucide",
       Icon: FolderIcon,
-      color: folder.icon_color || DEFAULT_ICON_COLOR,
+      color: folder.icon_color || FOLDER_ICON_COLOR,
     }
   }
   if (folder.kind === "branch") {
     return {
       kind: "lucide",
       Icon: GitBranch,
-      color: folder.icon_color || ZE_GREEN,
+      color: folder.icon_color || SYSTEM_ICON_COLOR,
     }
   }
   if (
@@ -248,7 +248,7 @@ export function resolveFolderDisplayIcon(
       return {
         kind: "lucide",
         Icon: Users,
-        color: boundGroup.icon_color || DEFAULT_ICON_COLOR,
+        color: boundGroup.icon_color || FOLDER_ICON_COLOR,
       }
     }
     return resolveGroupIcon(boundGroup)
@@ -261,7 +261,7 @@ export function resolveFolderDisplayIcon(
       return {
         kind: "lucide",
         Icon: Users,
-        color: folder.icon_color || DEFAULT_ICON_COLOR,
+        color: folder.icon_color || FOLDER_ICON_COLOR,
       }
     }
     return resolveGroupIcon({

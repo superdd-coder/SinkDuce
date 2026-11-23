@@ -1,0 +1,156 @@
+/* Opaque surfaces keep the gaps around the stage and its reading cards visible. */
+:root[data-accent-theme="black"] {
+  --sd-canvas: #f2f2f2;
+  --sd-canvas-image: none;
+  --sd-grain: none;
+  --sd-nav-fill: none;
+  --sd-rail-fill: none;
+  --sd-stage-fill: none;
+  --sd-rail-base: #fcfcfc;
+  --sd-stage-base: #f8f8f8;
+  --sd-surface: var(--sd-stage-base);
+  --sd-surface-raised: #ffffff;
+  --sd-surface-overlay: #ffffff;
+  --sd-ink: #171717;
+  --sd-text: #292929;
+  --sd-muted: #646464;
+  --sd-field: #f7f7f7;
+  --sd-hover: #f4f4f4;
+  --sd-selected-hover: #ededed;
+  --border: #e8e8e8;
+  --input: #d7d7d7;
+  --pm-faint: var(--sd-muted);
+  --pm-ink-display: var(--sd-ink);
+  --pm-ink-prose: var(--sd-text);
+  --sd-shadow-panel: 0 0 0 1px #0000000e, 0 6px 18px -8px #00000029;
+  --sd-shadow-control: 0 1px 5px #00000010;
+  --sd-shadow-float: 0 0 0 1px var(--border), 0 8px 24px #00000012;
+  --sd-menu-ink: var(--sd-ink);
+  --sd-menu-check: var(--sd-brand);
+  --sd-menu-hover: var(--sd-hover);
+  --sd-menu-selected: var(--sd-selected);
+  --sd-menu-selected-hover: var(--sd-selected-hover);
+  --sd-menu-shadow: var(--sd-shadow-float);
+}
+:root.dark[data-accent-theme="black"], :root[data-accent-theme="black"] .dark {
+  --sd-canvas: #151515;
+  --sd-rail-base: #242424;
+  --sd-stage-base: #202020;
+  --sd-surface: var(--sd-stage-base);
+  --sd-surface-raised: #2a2a2a;
+  --sd-surface-overlay: #303030;
+  --sd-ink: #f4f4f4;
+  --sd-text: #e2e2e2;
+  --sd-muted: #aaaaaa;
+  --sd-field: #252525;
+  --sd-hover: #343434;
+  --sd-selected-hover: #3a3a3a;
+  --sd-menu-mark: var(--sd-hover);
+  --sd-menu-check: var(--sd-brand);
+  --sd-menu-icon: var(--sd-muted);
+  --sd-brand-hover: #dcdcdc;
+  --pm-green-deep: var(--sd-brand);
+  --pm-on: #171717;
+  --border: #414141;
+  --input: #4d4d4d;
+  --sd-shadow-panel: 0 0 0 1px #ffffff0e, 0 8px 20px -8px #00000075;
+  --sd-shadow-control: 0 1px 5px #00000040;
+  --sd-shadow-float: 0 0 0 1px var(--border), 0 10px 28px #00000040;
+}
+
+:root[data-accent-theme="black"] {
+  & :is(.sd-navigation, .pm-chat-source-panel, .pm-meeting-title-actions, .pm-meeting-group-chat-card,
+      .pm-meeting-tx-side-inner, .pm-settings-card .pm-settings-fold-card),
+  & :is(.pm-rail-stack .pm-rail-card, .pm-config-card, .pm-timeline-panel, .pm-timeline-todo-shell,
+      .pm-timeline-acc-stack > .pm-ws-side-card, .qa-lists, .qa-overview, .qa-question-nav) {
+    background-color: var(--sd-surface-raised);
+  }
+
+  & .sd-navigation .sd-nav-item:not(.is-active, :hover, :focus-visible),
+  & .sd-navigation .pm-source-pill:not(:hover, .is-open) {
+    background: transparent;
+  }
+  & .sd-nav-item.is-active { background: var(--sd-brand); }
+  & .pm-rail-new { color: var(--primary-foreground) !important; }
+  & :is(.pm-rail-title, .pm-meeting-title) { color: var(--sd-ink); font-weight: var(--type-weight-medium); }
+
+  /* The current row keeps its sliding indicator and full-size hit target. */
+  & :is(.pm-chat-sess-indicator, .pm-shell-col-indicator) {
+    background: var(--sd-surface-raised);
+  }
+  & :is(.pm-chat-sess-indicator, .pm-shell-col-indicator)::before {
+    content: "";
+    position: absolute;
+    inset-inline-start: 0;
+    top: 50%;
+    width: 2px;
+    height: 16px;
+    transform: translateY(-50%);
+    border-radius: 2px;
+    background: var(--sd-brand);
+  }
+  & :is(.pm-chat-sess-row, .pm-shell-col-row).is-active :is(.pm-chat-sess-name, .pm-shell-col-name),
+  & .pm-meeting-section-card.is-active .pm-meeting-section-card-name {
+    color: var(--sd-ink);
+    font-weight: 600;
+  }
+  & :is(.pm-chat-sess-row, .pm-shell-col-row, .pm-meeting-section-card):focus-visible {
+    outline: 2px solid var(--sd-focus);
+    outline-offset: -2px;
+  }
+
+  /* The existing tab indicator still moves between tabs, including on the right rail. */
+  & [data-slot="tabs-list"][data-variant="pill"] {
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+  & [data-slot="tabs-list"][data-variant="pill"] [data-slot="tabs-indicator"],
+  & [data-slot="tabs-list"][data-variant="pill"]:not(:has([data-slot="tabs-indicator"])) [aria-selected="true"] {
+    background: transparent !important;
+    box-shadow: none !important;
+    &::before {
+      content: "";
+      position: absolute;
+      left: 50%;
+      bottom: 1px;
+      width: min(24px, calc(100% - 12px));
+      height: 2px;
+      transform: translateX(-50%);
+      border-radius: 2px;
+      background: var(--sd-brand);
+    }
+  }
+  & [data-slot="tabs-list"][data-variant="pill"] [aria-selected="true"] { color: var(--sd-ink) !important; }
+
+  & .pm-meeting-player-tools,
+  & .pm-meeting-section-card:not(.is-active, .is-picked, :hover) { background: transparent; }
+  & .pm-meeting-player-play { color: var(--primary-foreground); }
+  & .pm-meeting-content-card .pm-meeting-tabs-bar { background: var(--sd-surface-raised) !important; }
+  & :is(.pm-meeting-content-scroll-shell, .pm-meeting-group-chat-card .pm-panel-scroll-shell),
+  & :is(.pm-meeting-content-scroll-shell, .pm-meeting-group-chat-card .pm-panel-scroll-shell) > .pm-rail-edge-fade {
+    --pm-edge-fade-color: var(--sd-surface-raised);
+  }
+  & .pm-meeting-summary-export .pm-select-trigger--tag,
+  & .pm-meeting-ingest-col--choose .pm-meeting-ingest-pill {
+    background: var(--sd-surface-raised);
+    color: var(--sd-ink);
+    box-shadow: inset 0 0 0 1px var(--input);
+    &:is(:hover, .is-open, .is-active):not(:disabled) { background: var(--sd-hover); }
+    &:disabled { background: transparent; box-shadow: none; color: var(--sd-muted); }
+  }
+
+  & .pm-chat-composer {
+    background: var(--sd-surface-raised);
+    box-shadow: 0 0 0 1px var(--input), 0 2px 5px #00000008;
+    &:is(:focus-within, .is-streaming) { box-shadow: 0 0 0 1.5px var(--sd-focus); }
+  }
+  & .pm-chat-msg-user-body { background: var(--sd-field); color: var(--sd-text); }
+  & .sd-files :is(.pm-files-browser, .pm-files-msg-panel) {
+    background: var(--sd-surface-raised);
+    box-shadow: var(--sd-shadow-control);
+  }
+  & .sd-files .pm-files-item:not(.is-selected, .is-busy, :hover) {
+    background: var(--sd-surface-raised);
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+}

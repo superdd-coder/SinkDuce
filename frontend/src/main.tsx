@@ -6,11 +6,12 @@ import './styles/library.css'
 import './styles/controls.css'
 import './styles/search.css'
 import './styles/menus.css'
+import './styles/monochrome.css'
 import './styles/diagrams.css'
 import App from './App.tsx'
 import { bootstrapLocalKey, getLocalHealth, startAccessTokenWarmer } from './api/client'
 import { setRemoteShellActive } from './api/origin'
-import { useAppStore } from './stores/app-store'
+import { bindAccentTheme, useAppStore } from './stores/app-store'
 import { startIdentityRevalidation } from './lib/identity-revalidate'
 import { bumpDomain } from './lib/domain-refresh'
 
@@ -68,4 +69,7 @@ async function start() {
   )
 }
 
+// Personal colors are in place before any startup requests or the first render.
+const unbindAccentTheme = bindAccentTheme()
+if (import.meta.hot) import.meta.hot.dispose(unbindAccentTheme)
 void start()
