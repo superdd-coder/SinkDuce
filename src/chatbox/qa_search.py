@@ -6,6 +6,7 @@ import re
 import unicodedata
 from collections import defaultdict
 
+from src.rag.agent_prompts import PARTIAL_COLLECTION_COVERAGE
 from src.rag.agentic_query import AgenticQueryResult
 from src.rag.direct_query import DirectQueryResult
 from src.rag.source_scope import is_qa_chat_chunk, qa_chat_scope
@@ -26,6 +27,17 @@ _DIRECTORY_REQUEST = re.compile(
 
 def _normalized(text):
     return unicodedata.normalize("NFKC", text).casefold()
+
+
+def _warn_partial_coverage(content: str | list[dict] | None) -> str | list[dict] | None:
+    if not content:
+        return content
+    first_text = content if isinstance(content, str) else (content[0].get("text") or "")
+    if first_text.startswith(PARTIAL_COLLECTION_COVERAGE):
+        return content
+    if isinstance(content, str):
+        return PARTIAL_COLLECTION_COVERAGE + "\n\n" + content
+    return [{"type": "text", "text": PARTIAL_COLLECTION_COVERAGE}, *content]
 
 
 def _named_projects(question, directory):
@@ -150,10 +162,9 @@ class QaTurn:
             return AgenticQueryResult(answer=None, context=context) if agentic else DirectQueryResult(context=context)
         result = call(query, **(kwargs | {"collections": available}))
         if agentic and unavailable.intersection(requested):
-            from src.rag.agent_prompts import PARTIAL_COLLECTION_COVERAGE
             result.coverage_complete = False
-            if result.context and not result.context.startswith(PARTIAL_COLLECTION_COVERAGE):
-                result.context = PARTIAL_COLLECTION_COVERAGE + "\n\n" + result.context
+            result.context = _warn_partial_coverage(result.context)
+            result.answer = _warn_partial_coverage(result.answer)
         # Only completed vector-store reads carry the model actually used.
         # Agentic searches may produce several events for one collection.
         for event in getattr(result, "trace", []) or []:

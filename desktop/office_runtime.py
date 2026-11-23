@@ -13,11 +13,13 @@ import urllib.request
 from pathlib import Path
 
 VERSION = "26.8.1"
+ARCHIVED_BUILD = f"{VERSION}.1"
 ARCHIVE = f"LibreOffice_{VERSION}_MacOS_aarch64.dmg"
 SHA256 = "ca074e0b13571efb30a31fc531c5f95e997030637325e5d5de92d67aefdf0dfc"
 URLS = (
     f"https://download.documentfoundation.org/libreoffice/stable/{VERSION}/mac/aarch64/{ARCHIVE}",
-    f"https://downloadarchive.documentfoundation.org/libreoffice/old/{VERSION}/mac/aarch64/{ARCHIVE}",
+    f"https://downloadarchive.documentfoundation.org/libreoffice/old/{ARCHIVED_BUILD}/mac/aarch64/"
+    f"LibreOffice_{ARCHIVED_BUILD}_MacOS_aarch64.dmg",
 )
 VENDOR_REQUIREMENT = '=anchor apple generic and certificate leaf[subject.OU] = "7P5S3ZLCN7"'
 

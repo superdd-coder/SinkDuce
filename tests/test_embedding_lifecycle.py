@@ -137,6 +137,17 @@ def test_distinct_spaces_route_offline_and_reconnect(indexes):
     assert service.run.call_args.kwargs["collections"] == ["papers"]
     assert partial.context.startswith(PARTIAL_COLLECTION_COVERAGE) and not partial.coverage_complete
     assert turn.search_metadata()["skipped_collections"] == ["books"]
+    image = {"type": "image_url", "image_url": {"url": "https://example.test/figure.png"}}
+    multimodal = [image, {"type": "text", "text": "Figure caption."}]
+    for answer, expected in [
+        ("A finding.", PARTIAL_COLLECTION_COVERAGE + "\n\nA finding."),
+        (multimodal, [{"type": "text", "text": PARTIAL_COLLECTION_COVERAGE}, *multimodal]),
+    ]:
+        service.run.return_value = AgenticQueryResult(answer=answer, context="available evidence")
+        partial = turn.agentic(service, "find", collections=["books", "papers"])
+        assert partial.answer == expected
+        assert partial.context == PARTIAL_COLLECTION_COVERAGE + "\n\navailable evidence"
+        assert turn.agentic(service, "find", collections=["books", "papers"]).answer == expected
     cfg.providers = []
     assert not QaTurn("question", ["books"], None).direct(direct, "find", collections=["books"]).chunks
     cfg.providers = [a.model_copy(update={"id": "new-record", "api_key": "rotated"})]
