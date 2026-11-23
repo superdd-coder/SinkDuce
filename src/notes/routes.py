@@ -424,19 +424,24 @@ def _do_ingest_note_with_model(collection: str, note_id: str, note_title: str, c
         )
         services.db.delete_by_filter(collection, key="source", value=source, keep_ids=ids)
 
-    # ── Sparse encoding ──
-    try:
-        from src.rag.sparse_encoder import SparseEncoder
-        encoder = SparseEncoder()
-        encoder.load(services.db, collection)
-        texts = [_build_enriched_text(c) for c in chunks]
-        sparse_vectors = encoder.encode(texts)
-        encoder.save(services.db, collection)
-        services.db.upsert_sparse_vectors(
-            collection=collection, ids=ids, sparse_vectors=sparse_vectors,
-        )
-    except Exception:
-        logger.warning("[INGEST] Note %s: sparse encoding failed", note_id, exc_info=True)
+        # ── Sparse encoding ──
+        try:
+            from src.rag.sparse_encoder import SparseEncoder
+            encoder = SparseEncoder()
+            encoder.load(services.db, collection)
+            texts = [_build_enriched_text(c) for c in chunks]
+            sparse_vectors = encoder.encode(texts)
+            encoder.save(services.db, collection)
+            services.db.upsert_sparse_vectors(
+                collection=collection, ids=ids, sparse_vectors=sparse_vectors,
+            )
+        except Exception:
+            from src.tasks.handlers import _bump_sparse_recalc_counter
+            try:
+                _bump_sparse_recalc_counter(collection, len(ids), repair=True)
+            except Exception:
+                logger.warning("Could not queue keyword repair for %s", collection, exc_info=True)
+            logger.warning("[INGEST] Note %s: sparse encoding failed", note_id, exc_info=True)
 
     logger.info("[INGEST] Note %s: store done in %.1fs. Total: %.1fs",
                 note_id, time.time() - t_store, time.time() - t_start)

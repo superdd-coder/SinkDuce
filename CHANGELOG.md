@@ -4,6 +4,18 @@ Kept newest-first. CI extracts the section matching the release tag into
 `latest.json → notes` (shown in the desktop update dialog), so headings must
 stay in the exact `## vX.Y.Z` form.
 
+## v1.7.6
+
+- 为当前设备选择界面配色，或自定义色调。
+- 知识库会记住入库时使用的向量模型。更换模型时可确认并查看重建进度。跨库搜索使用各库对应的模型，并提示哪些库无法检索。
+- 重建关键词索引时仍可搜索已有内容。部分知识库暂时不可用时，聊天仍可引用其余库的原文。
+- 召回评测单独列出失效的参考片段。改进共享工作区的权限检查，并修复从聊天引用跳转到会议原文的问题。
+
+- Choose an interface accent or set a custom hue on this device.
+- Each collection keeps its embedding model. Confirm a model change and follow the rebuild progress. Cross-collection search uses each collection’s model and identifies unavailable collections.
+- Search existing content while the keyword index rebuilds. When some collections are unavailable, chat can still cite documents from the others.
+- Recall evaluation lists unavailable reference passages separately. This release also improves shared-workspace permission checks and restores links from chat citations to meeting sources.
+
 ## v1.7.5
 
 - 会议列表底部新增归档区，可查看和恢复已归档会议。

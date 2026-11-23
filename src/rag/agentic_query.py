@@ -44,6 +44,29 @@ class AgenticQueryResult:
     coverage_complete: bool = False
 
 
+def _partial_preliminary_result(preliminary, collections, qa_projects):
+    from src.rag.agent_prompts import PARTIAL_COLLECTION_COVERAGE
+    from src.rag.context_builder import build_context
+    from src.rag.evidence_planner import select_seed_chunks
+    from src.rag.source_scope import QA_CHAT_KINDS
+
+    errors = list(preliminary.errors)
+    result = AgenticQueryResult(answer=None, errors=errors, trace=list(preliminary.trace))
+    if qa_projects or any(e.get("stage") != "retrieve" or e.get("collection") not in collections for e in errors):
+        return result
+    failed = {e["collection"] for e in errors}
+    visible = [c for c in collections if c not in failed and _collection_visible(c)]
+    originals = [chunk for chunk in preliminary.chunks
+                 if isinstance(meta := getattr(chunk, "metadata", None), dict)
+                 and not meta.get("archived") and not meta.get("unassigned")
+                 and meta.get("source_kind") not in (*QA_CHAT_KINDS, "qa_material")]
+    evidence = select_seed_chunks(originals, visible)
+    if evidence:
+        result.all_chunks = result.retained_chunks = result.candidate_chunks = evidence
+        result.context = PARTIAL_COLLECTION_COVERAGE + "\n\n" + build_context(evidence)
+    return result
+
+
 def _subquery_result(aq, targets, fetched, *, qa_enabled):
     retrieved = list(getattr(fetched, "retrieved_chunks", None) or [])
     retained = list(fetched.chunks)
@@ -301,10 +324,7 @@ class AgenticQueryService:
                             )
                         if preliminary.errors:
                             _emit("retrieving", "Preliminary retrieval failed", aq_id="preliminary", error=True)
-                            return AgenticQueryResult(
-                                answer=None, errors=list(preliminary.errors),
-                                trace=list(preliminary.trace),
-                            )
+                            return _partial_preliminary_result(preliminary, seed_collections, qa_projects)
                         seed_chunks = select_seed_chunks(preliminary.chunks, seed_collections)
                         planning_trace = list(preliminary.trace) + [{
                             "kind": "preliminary_retrieval_before_decomposition", "query": raw_query,

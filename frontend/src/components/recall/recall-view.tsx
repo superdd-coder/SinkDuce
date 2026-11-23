@@ -75,6 +75,10 @@ import { useT } from "@/i18n/use-t"
 
 // ── Helpers ────────────────────────────────────────────────
 
+function recallPercent(value: number | null | undefined, digits = 0): string {
+  return value == null ? "—" : `${(value * 100).toFixed(digits)}%`
+}
+
 function formatSigned(n: number, digits = 2): string {
   if (n > 0) return `+${n.toFixed(digits)}`
   if (n < 0) return n.toFixed(digits)
@@ -599,6 +603,9 @@ const GEN_RUNNING_PREFIX = "gen_running_"
 
 function EvaluateTab() {
   const t = useT()
+  const caseCoverage = (run: EvalReport) => run.valid_cases == null
+    ? t("recall.nCases", { n: run.total_cases })
+    : t("recall.caseCoverage", { valid: run.valid_cases, stale: run.stale_count ?? 0 })
   const {
     recallCollections,
     setRecallCollections,
@@ -1297,15 +1304,11 @@ function EvaluateTab() {
                     : t("recall.runN", { n: 1 })}
                 </span>
                 <Badge variant="outline">
-                  {t("recall.nCases", { n: hSelected.total_cases })}
+                  {caseCoverage(hSelected)}
                 </Badge>
                 <span className="text-[var(--pm-text)] font-[family-name:var(--pm-ff)] font-[300]">
                   {t("recall.recallMetric")}:{" "}
-                  {(
-                    (hSelected.avg_recall ?? hSelected.avg_hard_recall ?? 0) *
-                    100
-                  ).toFixed(0)}
-                  %
+                  {recallPercent(hSelected.avg_recall ?? hSelected.avg_hard_recall)}
                 </span>
                 <span
                   className={cn(
@@ -1313,10 +1316,10 @@ function EvaluateTab() {
                     qualityClass(hSelected.avg_quality_score ?? 0),
                   )}
                 >
-                  Q: {formatSigned(hSelected.avg_quality_score ?? 0)}
+                  Q: {hSelected.avg_quality_score == null ? "—" : formatSigned(hSelected.avg_quality_score)}
                 </span>
                 <span className="pm-meta">
-                  {(hSelected.avg_time_ms ?? 0).toFixed(0)}ms
+                  {hSelected.avg_time_ms == null ? "—" : `${hSelected.avg_time_ms.toFixed(0)}ms`}
                 </span>
               </>
             ) : (
@@ -1356,13 +1359,10 @@ function EvaluateTab() {
                           ? new Date(h.timestamp).toLocaleString()
                           : t("recall.runN", { n: i + 1 })}
                       </span>
-                      <Badge variant="outline">{t("recall.nCases", { n: h.total_cases })}</Badge>
+                      <Badge variant="outline">{caseCoverage(h)}</Badge>
                       <span className="text-[var(--pm-text)] font-[family-name:var(--pm-ff)] font-[300]">
                         {t("recall.recallMetric")}:{" "}
-                        {(
-                          (h.avg_recall ?? h.avg_hard_recall ?? 0) * 100
-                        ).toFixed(0)}
-                        %
+                        {recallPercent(h.avg_recall ?? h.avg_hard_recall)}
                       </span>
                       <span
                         className={cn(
@@ -1370,10 +1370,10 @@ function EvaluateTab() {
                           qualityClass(h.avg_quality_score ?? 0),
                         )}
                       >
-                        Q: {formatSigned(h.avg_quality_score ?? 0)}
+                        Q: {h.avg_quality_score == null ? "—" : formatSigned(h.avg_quality_score)}
                       </span>
                       <span className="pm-meta">
-                        {(h.avg_time_ms ?? 0).toFixed(0)}ms
+                        {h.avg_time_ms == null ? "—" : `${h.avg_time_ms.toFixed(0)}ms`}
                       </span>
                     </button>
                   ))}
@@ -1425,30 +1425,43 @@ function EvaluateTab() {
                     <h3 className="pm-recall-section-title">{t("recall.scoreboard")}<HelpHint label={t("recall.scoreboard")}>{t("recall.scoreboardDesc")}</HelpHint></h3>
                   </div>
                 </div>
+                {report.valid_cases != null && (
+                  <div className="pm-meta">
+                    {caseCoverage(report)}
+                    {!!report.stale_cases?.length && (
+                      <details className="mt-2">
+                        <summary className="cursor-pointer">{t("recall.staleTargets")}</summary>
+                        <ul className="mt-1 list-disc pl-4">
+                          {report.stale_cases.map(c => <li key={c.test_case_id}>{c.query}</li>)}
+                        </ul>
+                      </details>
+                    )}
+                  </div>
+                )}
                 <div className="pm-recall-metrics">
                   {(
                     [
                       {
                         label: t("recall.recallMetric"),
-                        value: `${((report.avg_recall ?? 0) * 100).toFixed(1)}%`,
+                        value: recallPercent(report.avg_recall, 1),
                         good: (report.avg_recall ?? 0) >= 0.7,
                         delay: 0,
                       },
                       {
                         label: t("recall.hardRecall"),
-                        value: `${((report.avg_hard_recall ?? 0) * 100).toFixed(1)}%`,
+                        value: recallPercent(report.avg_hard_recall, 1),
                         good: (report.avg_hard_recall ?? 0) >= 0.7,
                         delay: 70,
                       },
                       {
                         label: t("recall.quality"),
-                        value: formatSigned(report.avg_quality_score ?? 0),
+                        value: report.avg_quality_score == null ? "—" : formatSigned(report.avg_quality_score),
                         good: (report.avg_quality_score ?? 0) >= 0.5,
                         delay: 140,
                       },
                       {
                         label: t("recall.mrr"),
-                        value: (report.avg_mrr ?? 0).toFixed(3),
+                        value: report.avg_mrr?.toFixed(3) ?? "—",
                         good: (report.avg_mrr ?? 0) >= 0.5,
                         delay: 210,
                       },

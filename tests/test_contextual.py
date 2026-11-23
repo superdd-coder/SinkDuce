@@ -468,3 +468,29 @@ def test_build_enriched_text_strips_table_source_fence():
     assert ":::image" not in text
     assert "| Col | Val |" in text
     assert "Document:" not in text
+
+
+def test_short_document_waits_between_summary_and_context(monkeypatch):
+    from types import SimpleNamespace
+
+    from src.config import LLMProviderConfig
+    from src.providers.llm import openai_compat
+
+    client = MagicMock()
+    monkeypatch.setattr(openai_compat, "OpenAI", lambda **kwargs: client)
+    llm = openai_compat.OpenAICompatLLM(LLMProviderConfig(model="gpt-6", base_url="https://example.invalid/v1"))
+    create = client.chat.completions.create
+    usage = SimpleNamespace(prompt_tokens=710, prompt_tokens_details=SimpleNamespace(cached_tokens=0))
+
+    def reply(content):
+        message = SimpleNamespace(content=content)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=usage)
+
+    create.side_effect = [reply(_json_summary()), reply(_json_contexts({0: "Lamp assembly."}))]
+    waits = []
+    monkeypatch.setattr("src.rag.contextual.time.sleep", lambda delay: waits.append((delay, create.call_count)))
+    chunks = _chunks("Attach the lamp base.")
+    ContextualRetrieval(llm).add_context(chunks, full_document=chunks[0].text)
+
+    assert waits == [(3.0, 1)]
+    assert chunks[0].metadata["context"] == "Lamp assembly."

@@ -1693,6 +1693,9 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
               },
             })
           }
+          if (task.warnings?.includes("sparse_repair_pending")) {
+            toast.warning(tr("fileMgmt.sparseRepairPending"), { id: "sparse-repair-pending" })
+          }
           if (task.warnings?.includes("local_ocr_unverified")) {
             toast.warning(tr("fileMgmt.localOcrReviewTitle"), {
               id: "local-ocr-unverified",

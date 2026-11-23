@@ -135,3 +135,16 @@ def test_vocabulary_persists_vector_format_and_legacy_is_compatible():
     assert loaded.encode_query("alpha") == {saved["term_to_id"]["alpha"]: 1}
     loaded.save(db, "col")
     assert db.update_collection_config.call_args.args[1]["sparse_vocab"]["vector_format"] == "bm25_idf_v1"
+
+def test_sparse_configuration_faults_propagate_before_any_invented_ids_are_used():
+    from unittest.mock import Mock
+    db = Mock()
+    encoder = SparseEncoder()
+    encoder.encode(["original terms"])
+    db.get_collection_config.side_effect = ConnectionError("read")
+    db.update_collection_config.side_effect = ConnectionError("write")
+    with pytest.raises(ConnectionError, match="read"):
+        encoder.load(db, "collection")
+    assert "original" in encoder.term_to_id
+    with pytest.raises(ConnectionError, match="write"):
+        encoder.save(db, "collection")

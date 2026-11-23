@@ -315,3 +315,27 @@ def test_exact_duplicate_gap_queries_are_fetched_once():
     svc.run("permit status")
     assert len(fetcher.calls) == 1
     assert fetcher.calls[0][1] == ["col-b"]
+
+def test_one_offline_collection_keeps_only_visible_current_original_sources(monkeypatch):
+    rows = [passage(), passage(chunk_id="archived", archived=True),
+            passage(chunk_id="orphan", unassigned=True), passage(chunk_id="old", is_current=False),
+            passage(chunk_id="qa", source_kind="qa_material"), passage(collection="col-b")]
+    svc, llm, _, fetch = service([], rows, [{"stage": "retrieve", "collection": "col-b", "error": "IOError"}])
+    result = svc.run("compare the sources", collections=["col-a", "col-b"])
+    assert [c.metadata["id"] for c in result.retained_chunks] == ["chunk-a"]
+    assert result.all_chunks == result.retained_chunks and BODY in result.context
+    assert "only the available collections" in result.context and not result.coverage_complete
+    assert result.errors and not llm.calls and not fetch.calls
+    checks = iter([True, True, False])
+    monkeypatch.setattr("src.rag.agentic_query._collection_visible", lambda _: next(checks))
+    assert not svc.run("compare the sources", collections=["col-a", "col-b"]).all_chunks
+
+
+@pytest.mark.parametrize("errors", [
+    [{"stage": "rerank", "collection": "col-b"}], [{"stage": "retrieve", "collection": "unknown"}],
+    [{"stage": "retrieve", "collection": "col-b"}, {"stage": "retrieve", "collection": "col-a"}],
+])
+def test_unscoped_failure_or_total_outage_returns_no_partial_evidence(errors):
+    svc, _, _, _ = service([], [passage()], errors)
+    result = svc.run("compare", collections=["col-a", "col-b"])
+    assert result.errors and not result.context and not result.all_chunks

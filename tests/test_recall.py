@@ -724,3 +724,56 @@ def test_generate_eval_cases_skips_archived_points():
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
+
+
+def test_eval_scores_only_live_searchable_targets_and_matches_child_rank(monkeypatch, tmp_path):
+    from qdrant_client.qdrant_client import QdrantClient
+    from src.db.qdrant import QdrantManager
+    from src.api.routes import recall
+    from src.api.schemas import EvalRequest, RecallResult, RecallSearchResponse
+    from src.services import services
+
+    db = QdrantManager.__new__(QdrantManager)
+    db.client = QdrantClient(":memory:")
+    monkeypatch.setattr(services, "config", None)
+    monkeypatch.setattr(services, "db", db)
+    monkeypatch.setattr(recall, "EVAL_DIR", tmp_path)
+    monkeypatch.setattr(recall, "embedding_status", lambda *_: {"embedding_model": "model"})
+    monkeypatch.setattr("src.rag.contextual.get_agentic_query_llm", lambda: None)
+    db.create_collection("sample", 2, {"chunk_mode": "parent_child"})
+    payloads = [{"chunk_type": "parent", "text": "chapter"},
+                {"chunk_type": "child", "parent_id": "1", "text": "passage"},
+                {"chunk_type": "child", "parent_id": "1", "text": "retired", "is_current": False},
+                {"chunk_type": "child", "parent_id": "1", "text": "archived", "archived": True},
+                {"chunk_type": "child", "parent_id": "1", "text": "unassigned", "unassigned": True},
+                {"chunk_type": "parent", "text": "no searchable children"},
+                {"chunk_type": "child", "text": "off-scope", "source_kind": "qa_material", "parent_id": "1"}]
+    db.upsert_points("sample", list(range(1, 8)), [[1., 0.]] * 7, payloads)
+    ids = ["1", "2", "3", "4", "5", "6", "7", "70", "", "invalid-id"]
+    cases = [{"id": str(i), "query": f"question {i}", "target_chunk_id": k} for i, k in enumerate(ids)]
+    recall._save_cases("sample", cases)
+    common = dict(text="passage", score=0.8, source="fixture.txt", collection="sample", chunk_index=0)
+    parent = RecallResult(id="1", chunk_type="parent", children=[RecallResult(id="2", chunk_type="child", **common)], **common)
+    search = MagicMock(return_value=RecallSearchResponse(results=[parent], query_used="query", time_ms=1, total=1))
+    monkeypatch.setattr(recall, "recall_search", search)
+    req = EvalRequest(collection="sample")
+    result = recall.run_eval("sample", req)
+    assert (result["total_cases"], result["valid_cases"], result["stale_count"]) == (10, 2, 8)
+    assert result["avg_hard_recall"] == result["avg_mrr"] == 1
+    assert all(r["chunk_judgments"][0]["is_target"] for r in result["per_query"])
+    assert search.call_count == 2
+    recall._save_cases("sample", cases[2:])
+    empty = recall.run_eval("sample", req)
+    assert empty["avg_recall"] is None and empty["valid_cases"] == 0 and empty["stale_count"] == 8
+    assert recall.get_eval_history("sample")["history"][-1]["avg_recall"] is None
+    assert search.call_count == 2
+    # Debug-only pre-grade candidates never enter the actual answer.
+    recall._save_cases("sample", cases[:1])
+    parent.used_in_context = False
+    assert recall.run_eval("sample", req)["avg_hard_recall"] == 0
+    assert search.call_count == 3
+    monkeypatch.setattr(db, "get_points_by_ids", MagicMock(side_effect=ConnectionError()))
+    with pytest.raises(recall.HTTPException) as error:
+        recall.run_eval("sample", req)
+    assert error.value.status_code == 503
+    assert len(recall.get_eval_history("sample")["history"]) == 3

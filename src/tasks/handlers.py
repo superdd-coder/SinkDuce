@@ -711,29 +711,14 @@ from src.rag.index_text import (  # backward-compatible private imports
 )
 
 
-# 同一 collection 的 sparse 词表 load/encode/save 必须串行（2026-09-19 P2）：
-# _do_sparse 跑在 embed 池的多个线程里，两个任务同时 save 会让后写者的词表
-# 统计覆盖前者 → BM25 编码与已入库向量失配。按 collection 名分锁。
-_sparse_vocab_locks_guard = threading.Lock()
-_sparse_vocab_locks: dict[str, threading.Lock] = {}
-
-
-def _sparse_vocab_lock(collection: str) -> threading.Lock:
-    with _sparse_vocab_locks_guard:
-        lock = _sparse_vocab_locks.get(collection)
-        if lock is None:
-            lock = threading.Lock()
-            _sparse_vocab_locks[collection] = lock
-        return lock
-
-
 def _do_sparse(texts: list[str], collection: str):
     """Run sparse encoding on assembled chunk texts. Returns sparse vectors or None."""
     if not texts:
         return None
     try:
         from src.rag.sparse_encoder import SparseEncoder
-        with _sparse_vocab_lock(collection):
+        from src.db.index_routing import collection_work
+        with collection_work(collection).commit:
             encoder = SparseEncoder()
             encoder.load(services.db, collection)
             sparse_vectors = encoder.encode(texts)
@@ -754,33 +739,41 @@ def _schedule_sparse_recalc(collection: str, reason: str = "") -> bool:
     Returns True when a task was created.
     """
     from src.tasks import task_manager as _tman
-    if _tman.has_active_task(collection, "sparse_recalc"):
-        logger.info(
-            "[SparseRecalc] skip scheduling for %s (%s) — one already active",
-            collection, reason or "trigger",
+    from src.db.index_routing import collection_work
+    with collection_work(collection).commit:
+        if _tman.has_active_task(collection, "sparse_recalc"):
+            logger.info(
+                "[SparseRecalc] skip scheduling for %s (%s) — one already active",
+                collection, reason or "trigger",
+            )
+            return False
+        _tman.create_task(
+            filename=f"recalc:{collection}",
+            task_type="sparse_recalc",
+            collection=collection,
         )
-        return False
-    _tman.create_task(
-        filename=f"recalc:{collection}",
-        task_type="sparse_recalc",
-        collection=collection,
-    )
     logger.info("[SparseRecalc] scheduled for %s (%s)", collection, reason or "trigger")
     return True
 
 
-def _bump_sparse_recalc_counter(collection: str, delta: int) -> None:
+def _bump_sparse_recalc_counter(collection: str, delta: int, *, repair: bool = False) -> None:
     """Increment the sparse recalc counter and trigger a rebuild if the threshold is crossed."""
-    config = services.db.get_collection_config(collection)
-    threshold = config.get("sparse_recalc_threshold", 5000)
-    counter = config.get("sparse_recalc_counter", 0) + delta
-    services.db.update_collection_config(collection, {"sparse_recalc_counter": counter})
+    from src.db.index_routing import collection_work
+    with collection_work(collection).commit:
+        config = services.db.get_collection_config(collection)
+        threshold = config.get("sparse_recalc_threshold", 5000)
+        counter = config.get("sparse_recalc_counter", 0) + delta
+        pending = repair or config.get("sparse_repair_pending", False)
+        updates = {"sparse_recalc_counter": counter}
+        if repair:
+            updates["sparse_repair_pending"] = True
+        services.db.update_collection_config(collection, updates)
 
     logger.info("[SparseRecalc] counter col=%s delta=%+d counter=%d threshold=%d",
                 collection, delta, counter, threshold)
 
-    if counter >= threshold:
-        _schedule_sparse_recalc(collection, reason=f"counter={counter} >= {threshold}")
+    if pending or counter >= threshold:
+        _schedule_sparse_recalc(collection, reason="missing vectors" if pending else f"counter={counter} >= {threshold}")
 
 
 # ── Consolidation ──────────────────────────────────────────
@@ -2238,24 +2231,14 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
         for c in chunks:
             batcher.on_ready(c, c.metadata.get("context", ""))
 
-        # Validate dense embeddings before sparse encoding publishes vocabulary
-        # statistics. Both blocking operations run outside the event loop.
+        # Finish and validate every dense embedding before publishing any document points.
         t_embed_store = time.time()
         batcher.flush()
         if batcher._futures:
             embeddings = await asyncio.to_thread(batcher.wait_all, chunks)
-            sparse_vectors = await loop.run_in_executor(
-                _cpu_executor, _do_sparse, batcher.get_all_texts(chunks), collection,
-            )
+            keyword_texts = batcher.get_all_texts(chunks)
         else:
             raise RuntimeError("Embedding produced no searchable chunks; ingest aborted")
-
-        ingest_trace.add(
-            "sparse", "Sparse encoding", status="ok" if sparse_vectors is not None else "error",
-            detail="Searchable chunks encoded" if sparse_vectors is not None else "Sparse unavailable; dense only",
-            data={"searchable": embed_count, "vectors": len(sparse_vectors or []),
-                  "fallback": None if sparse_vectors is not None else "dense"},
-        )
 
         mid_work.finish("Enrich+Embed done")
         t_emb = time.time()
@@ -2303,13 +2286,27 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                 payloads=payloads,
                 **({"expected_binding": pin} if isinstance(pin, EmbeddingBinding) else {}),
             )
-            # Add sparse vectors separately — does not touch dense vectors
+            # Count terms only after the corresponding dense documents exist.
+            sparse_started = time.time()
+            sparse_vectors = _do_sparse(keyword_texts, collection)
+            repair = sparse_vectors is None
             if sparse_vectors:
-                services.db.upsert_sparse_vectors(
-                    collection=collection,
-                    ids=[id_ for id_, c in zip(ids, chunks) if c.chunk_type != "parent"],
-                    sparse_vectors=sparse_vectors,
-                )
+                try:
+                    services.db.upsert_sparse_vectors(
+                        collection=collection,
+                        ids=[id_ for id_, c in zip(ids, chunks) if c.chunk_type != "parent"],
+                        sparse_vectors=sparse_vectors,
+                    )
+                except Exception:
+                    repair = True
+                    logger.warning("Keyword vectors need repair in %s", collection, exc_info=True)
+            ingest_trace.add(
+                "sparse", "Sparse encoding", status="error" if repair else "ok",
+                detail="Dense index stored; keyword repair needed" if repair else "Keyword vectors stored",
+                data={"searchable": embed_count, "vectors": len(sparse_vectors or []),
+                      "fallback": "dense" if repair else None, "repair_pending": repair},
+                started_at=sparse_started, ended_at=time.time(),
+            )
             # Post-store rollback: file deleted between the pre-check and the
             # upsert → remove the just-written chunks so no zombies remain.
             if managed and file_id and not _file_row_exists(collection, file_id):
@@ -2329,11 +2326,9 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                         "[%s] zombie-chunk rollback failed for %s",
                         filename_param, file_id, exc_info=True,
                     )
-            # Track chunk changes for sparse vocab drift detection
-            non_parent_count = len([c for c in chunks if c.chunk_type != "parent"])
-            _bump_sparse_recalc_counter(collection, non_parent_count)
             logger.info("[%s] Store done in %.1fs. Total: %.1fs",
                         filename_param, time.time() - t_store, time.time() - t_start)
+            return repair
 
         # Use default thread pool for storage (I/O bound)
         ingest_trace.add(
@@ -2343,7 +2338,18 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
             detail="Writing vectors",
             started_at=t_embed_store,
         )
-        await asyncio.to_thread(_do_store)
+        repair = await asyncio.to_thread(_do_store)
+        if repair:
+            task.warnings.append("sparse_repair_pending")
+        try:
+            await asyncio.to_thread(_bump_sparse_recalc_counter, collection, embed_count, repair=repair)
+        except Exception:
+            logger.warning("Could not update keyword repair counter for %s", collection, exc_info=True)
+            if repair:
+                try:
+                    _schedule_sparse_recalc(collection, reason="keyword indexing incomplete")
+                except Exception:
+                    logger.warning("Could not enqueue keyword repair for %s", collection, exc_info=True)
         if pending_summary is not None:
             await asyncio.to_thread(_store_structured_summary, [pending_summary], doc, config, collection,
             )
@@ -2680,11 +2686,13 @@ async def doc_summary_handler(task: Task, collection: str, source: str) -> dict:
 async def sparse_recalc_handler(task, collection: str) -> dict:
     """Rebuild sparse vocabulary and vectors from scratch for a collection."""
     del task  # unused
-    from src.rag.sparse_recalc import run_sparse_recalc
+    from src.rag.sparse_recalc import SparseIndexChanged, run_sparse_recalc
 
     logger.info("[SparseRecalc] Starting recalc for collection=%s", collection)
-    loop = asyncio.get_running_loop()
-    result = await asyncio.to_thread(run_sparse_recalc, services.db, collection)
+    try:
+        result = await asyncio.to_thread(run_sparse_recalc, services.db, collection)
+    except SparseIndexChanged:
+        result = await asyncio.to_thread(run_sparse_recalc, services.db, collection)
     logger.info("[SparseRecalc] Completed: %s", result)
     # Batch uploads keep bumping the counter while this rebuild ran — if the
     # drift is already past the threshold again, queue the next pass now.

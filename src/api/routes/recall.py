@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from qdrant_client.models import FieldCondition, Filter, MatchValue
+from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
 
 from src.api.schemas import (
     BenchmarkResult,
@@ -79,6 +79,7 @@ def _searchable_chunk_scroll_filter() -> Filter:
     return Filter(
         must_not=[
             FieldCondition(key="archived", match=MatchValue(value=True)),
+            FieldCondition(key="unassigned", match=MatchValue(value=True)),
             FieldCondition(key="is_current", match=MatchValue(value=False)),
         ]
     )
@@ -92,7 +93,7 @@ def _is_searchable_eval_payload(payload: dict | None) -> bool:
     """
     if not isinstance(payload, dict):
         return False
-    if payload.get("archived") is True:
+    if payload.get("archived") is True or payload.get("unassigned") is True:
         return False
     if payload.get("is_current") is False:
         return False
@@ -596,7 +597,7 @@ def generate_eval_cases(collection: str, regenerate: bool = False):
             scroll_filter=scroll_filter,
             with_payload=[
                 "source", "text", "summary", "context",
-                "archived", "is_current", "chunk_type",
+                "archived", "is_current", "unassigned", "chunk_type",
             ],
             with_vectors=False,
         )
@@ -769,12 +770,68 @@ def generate_eval_cases(collection: str, regenerate: bool = False):
     return {"message": f"{action} {len(new_cases)} test cases", "total": len(all_cases)}
 
 
+def _point_id(value):
+    """Normalize legacy string/number labels to the two Qdrant ID types."""
+    if type(value) not in (int, str):
+        return None
+    value = str(value).strip()
+    if value.isascii() and value.isdecimal() and len(value) <= 20 and int(value) < 2**64:
+        return int(value)
+    try:
+        return str(uuid.UUID(value))
+    except ValueError:
+        return None
+
+
+def _eval_targets(collection, cases, chunk_mode):
+    ids = list(dict.fromkeys(pid for case in cases if (pid := _point_id(case.get("target_chunk_id"))) is not None))
+    available = set()
+    try:
+        for start in range(0, len(ids), 128):
+            parents = []
+            for row in services.db.get_points_by_ids(collection, ids[start:start + 128]):
+                payload = row.get("payload") or {}
+                if not _is_searchable_eval_payload(payload):
+                    continue
+                if chunk_mode != "parent_child" or (payload.get("chunk_type") == "child" and payload.get("parent_id")):
+                    available.add(str(row["id"]))
+                elif payload.get("chunk_type") == "parent":
+                    parents.append(str(row["id"]))
+            # A parent is returned only through a searchable child.
+            if parents:
+                children = Filter(must=[
+                    _searchable_chunk_scroll_filter(),
+                    FieldCondition(key="parent_id", match=MatchAny(any=parents)),
+                    FieldCondition(key="chunk_type", match=MatchValue(value="child")),
+                ])
+                offset = None
+                while True:
+                    rows, offset = services.db.scroll_points(
+                        collection, limit=256, offset=offset, scroll_filter=children,
+                        with_payload=["parent_id"], with_vectors=False,
+                    )
+                    available.update(str(row["payload"]["parent_id"]) for row in rows)
+                    if offset is None:
+                        break
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Could not verify evaluation targets. Please retry.") from exc
+    return available
+
+
 @router.post("/recall/eval/{collection}/run")
 def run_eval(collection: str, req: EvalRequest):
     collection = _recall_collection_gate(collection, write=True)
     if not services.db.collection_exists(collection):
         raise HTTPException(status_code=404, detail="Collection not found")
 
+    from contextlib import nullcontext
+    from src.db.index_routing import IndexRoutingClient
+    client = services.db.client
+    with client.snapshot(collection) if isinstance(client, IndexRoutingClient) else nullcontext():
+        return _evaluate_current_index(collection, req)
+
+
+def _evaluate_current_index(collection, req):
     cases = _load_cases(collection)
     if not cases:
         raise HTTPException(status_code=400, detail="No test cases. Add or generate cases first.")
@@ -790,11 +847,19 @@ def run_eval(collection: str, req: EvalRequest):
         "top_k": req.top_k,
     }
 
+    from src.db.index_routing import collection_work
+    state = collection_work(collection)
+    initial_revision = state.revision
+    targets = _eval_targets(collection, cases, config_snapshot["chunk_mode"])
     per_query: list[dict] = []
+    stale_cases = []
     for case in cases:
         t0 = time.time()
         query_text = case["query"]
-        target_chunk_id = case.get("target_chunk_id", "")
+        target_chunk_id = str(_point_id(case.get("target_chunk_id")))
+        if target_chunk_id not in targets:
+            stale_cases.append({"test_case_id": case.get("id", ""), "query": query_text})
+            continue
         target_source = case.get("target_source", "")
 
         search_req = RecallSearchRequest(
@@ -804,7 +869,10 @@ def run_eval(collection: str, req: EvalRequest):
             rerank_provider_id=req.rerank_provider_id,
         )
         resp = recall_search(search_req)
+        if resp.errors:
+            raise HTTPException(status_code=503, detail="Retrieval did not complete during evaluation. Please retry.")
 
+        evidence = [r for r in resp.results if r.used_in_context is not False]
         retrieved_chunks = [
             {
                 "id": r.id,
@@ -815,18 +883,15 @@ def run_eval(collection: str, req: EvalRequest):
                 "chunk_type": r.chunk_type,
                 "context": r.context,
             }
-            for r in resp.results
+            for r in evidence
         ]
 
         k = len(retrieved_chunks)
-        retrieved_ids = {c["id"] for c in retrieved_chunks}
-
-        # ── Hard recall: target chunk present in top K?
-        hard_recall = 1 if target_chunk_id and target_chunk_id in retrieved_ids else 0
         target_position = next(
-            (i + 1 for i, c in enumerate(retrieved_chunks) if c["id"] == target_chunk_id),
-            0,
+            (rank for rank, hit in enumerate(evidence, 1)
+             if target_chunk_id == hit.id or any(child.id == target_chunk_id for child in hit.children or [])), 0,
         )
+        hard_recall = int(target_position > 0)
 
         # ── Per-chunk judgment + holistic check via ONE batched LLM call
         #   Layer 1: per-chunk -1/0/+1 (loose "useful" definition) — for detailed feedback only
@@ -870,7 +935,7 @@ def run_eval(collection: str, req: EvalRequest):
                                     score = 0
                                 score = max(-1, min(1, score))
                                 reason = str(j.get("reason", "")).strip()
-                                is_target = c["id"] == target_chunk_id
+                                is_target = i + 1 == target_position
                                 chunk_judgments.append({
                                     "id": c["id"],
                                     "source": c["source"],
@@ -896,7 +961,7 @@ def run_eval(collection: str, req: EvalRequest):
 
         # Backfill any chunks that didn't get judged (in case LLM response was short)
         judged_ids = {j["id"] for j in chunk_judgments}
-        for c in retrieved_chunks:
+        for rank, c in enumerate(retrieved_chunks, 1):
             if c["id"] not in judged_ids:
                 chunk_judgments.append({
                     "id": c["id"],
@@ -905,7 +970,7 @@ def run_eval(collection: str, req: EvalRequest):
                     "score": c["score"],
                     "judgment": 0,
                     "reason": "(no judgment)",
-                    "is_target": c["id"] == target_chunk_id,
+                    "is_target": rank == target_position,
                 })
                 judged_count += 1
 
@@ -943,20 +1008,26 @@ def run_eval(collection: str, req: EvalRequest):
             "time_ms": elapsed,
         })
 
-    n = len(per_query) or 1
+    if state.revision != initial_revision and targets != _eval_targets(collection, cases, config_snapshot["chunk_mode"]):
+        raise HTTPException(status_code=409, detail="Evaluation targets changed during this run. Please retry.")
+
+    def average(key, digits=4):
+        return round(sum(r[key] for r in per_query) / len(per_query), digits) if per_query else None
+
     report = {
         "collection": collection,
         "config_snapshot": config_snapshot,
-        "total_cases": len(per_query),
-        "avg_hard_recall": round(sum(r["hard_recall"] for r in per_query) / n, 4),
-        "avg_holistic_recall": round(
-            sum(r["holistic_can_answer"] for r in per_query) / n, 4
-        ),
-        "avg_recall": round(sum(r["recalled"] for r in per_query) / n, 4),
-        "avg_quality_score": round(sum(r["quality_score"] for r in per_query) / n, 4),
-        "avg_mrr": round(sum(r["mrr"] for r in per_query) / n, 4),
-        "hit_rate": round(sum(1 for r in per_query if r["recalled"]) / n, 4),
-        "avg_time_ms": round(sum(r["time_ms"] for r in per_query) / n, 1),
+        "total_cases": len(cases),
+        "valid_cases": len(per_query),
+        "stale_count": len(stale_cases),
+        "stale_cases": stale_cases,
+        "avg_hard_recall": average("hard_recall"),
+        "avg_holistic_recall": average("holistic_can_answer"),
+        "avg_recall": average("recalled"),
+        "avg_quality_score": average("quality_score"),
+        "avg_mrr": average("mrr"),
+        "hit_rate": average("recalled"),
+        "avg_time_ms": average("time_ms", 1),
         "per_query": per_query,
     }
 
