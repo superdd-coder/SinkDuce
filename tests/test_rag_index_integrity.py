@@ -49,7 +49,7 @@ def ingest(monkeypatch, tmp_path):
     chunker = MagicMock()
     chunker.chunk_with_metadata.return_value = chunks
     monkeypatch.setattr(handlers, "ParentChildChunker", lambda **kwargs: chunker)
-    monkeypatch.setattr(handlers, "_bump_sparse_recalc_counter", lambda *args: None)
+    monkeypatch.setattr(handlers, "_bump_sparse_recalc_counter", lambda *args, **kwargs: None)
 
     def enrich(chunks, *args, on_chunk_ready, **kwargs):
         # Context completion can arrive in any order, even without parents.
@@ -78,6 +78,36 @@ def test_ingest_sparse_vectors_belong_to_their_child_not_callback_position(inges
     assert set(actual) == {"child-a", "child-b"}
     assert "alpha" in actual["child-a"] and "beta" not in actual["child-a"]
     assert "beta" in actual["child-b"] and "alpha" not in actual["child-b"]
+
+
+@pytest.mark.parametrize("failure", ["vocabulary_read", "vocabulary_write", "vector_write"])
+def test_keyword_failure_keeps_dense_points_and_requests_repair(ingest, monkeypatch, failure):
+    from src.tasks import handlers
+
+    run, db, _, _ = ingest
+    if failure == "vocabulary_read":
+        monkeypatch.setattr("src.rag.sparse_encoder.SparseEncoder.load", MagicMock(side_effect=ConnectionError()))
+    elif failure == "vocabulary_write":
+        db.update_collection_config.side_effect = ConnectionError()
+    else:
+        db.upsert_sparse_vectors.side_effect = ConnectionError()
+    counter = MagicMock()
+    monkeypatch.setattr(handlers, "_bump_sparse_recalc_counter", counter)
+    run()
+    db.upsert_points.assert_called_once()
+    counter.assert_called_once_with("isolated", 2, repair=True)
+    if failure != "vector_write":
+        db.upsert_sparse_vectors.assert_not_called()
+
+
+def test_failed_dense_write_never_extends_keyword_vocabulary(ingest):
+    run, db, _, _ = ingest
+    db.upsert_points.side_effect = ConnectionError("dense storage unavailable")
+    with pytest.raises(Exception, match="dense storage unavailable") as error:
+        run()
+    assert isinstance(error.value.__context__, ConnectionError)
+    db.update_collection_config.assert_not_called()
+    db.upsert_sparse_vectors.assert_not_called()
 
 
 def test_failed_embedding_aborts_ingest_before_points_are_written(ingest, monkeypatch):

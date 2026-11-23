@@ -125,12 +125,8 @@ class SparseEncoder:
             "doc_count": self._doc_count,
             "vector_format": self.vector_format,
         }
-        try:
-            db.update_collection_config(collection, {"sparse_vocab": data})
-            logger.info("[Sparse] vocab saved to Qdrant collection=%s terms=%d docs=%d avg_dl=%.1f",
-                        collection, len(self.term_to_id), self._doc_count, self.avg_dl)
-        except Exception:
-            logger.warning("[Sparse] failed to save vocab to Qdrant for %s", collection, exc_info=True)
+        db.update_collection_config(collection, {"sparse_vocab": data})
+        logger.info("[Sparse] saved vocab for %s: %d terms", collection, len(self.term_to_id))
 
     def _reset_vocab(self) -> None:
         self.term_to_id = {}
@@ -145,11 +141,7 @@ class SparseEncoder:
         Missing vocab clears any previously loaded collection so a shared
         encoder cannot encode queries against the wrong term ids.
         """
-        try:
-            config = db.get_collection_config(collection)
-            data = config.get("sparse_vocab")
-        except Exception:
-            data = None
+        data = db.get_collection_config(collection).get("sparse_vocab")
         if not data:
             self._reset_vocab()
             logger.info("[Sparse] no vocab found in Qdrant for collection=%s", collection)
@@ -169,8 +161,10 @@ class SparseEncoder:
         if not texts:
             return
 
+        new_total_len = 0
         for text in texts:
             tokens = _tokenize(text)
+            new_total_len += len(tokens)
             for t in set(tokens):
                 if t not in self.term_to_id:
                     self.term_to_id[t] = len(self.term_to_id)
@@ -180,7 +174,6 @@ class SparseEncoder:
         # Preserve old total token length before updating doc_count
         old_total_len = self.avg_dl * self._doc_count
         new_count = len(texts)
-        new_total_len = sum(len(_tokenize(t)) for t in texts)
         self._doc_count += new_count
         self.avg_dl = (old_total_len + new_total_len) / self._doc_count if self._doc_count else 1.0
 
@@ -191,12 +184,11 @@ class SparseEncoder:
 
         self.build_vocab(texts)
 
-        vectors = []
-        for text in texts:
-            tokens = _tokenize(text)
-            vec = self._compute_bm25(tokens)
-            vectors.append(vec)
-        return vectors
+        return [self.document_weights(text) for text in texts]
+
+    def document_weights(self, text: str) -> dict[int, float]:
+        """Weight a document against the finalized vocabulary without extending it."""
+        return self._compute_bm25(_tokenize(text))
 
     def encode_query(self, query: str) -> dict[int, float]:
         """Apply IDF exactly once, respecting the persisted document format.

@@ -886,10 +886,12 @@ def index_meeting_transcripts(
     ]))
     if sparse_encoder is not None:
         try:
-            sparse_encoder.load(db, collection)
-            sv = sparse_encoder.encode(texts)
-            db.upsert_sparse_vectors(collection, ids, sv)
-            sparse_encoder.save(db, collection)
+            from src.db.index_routing import collection_work
+            with collection_work(collection).commit:
+                sparse_encoder.load(db, collection)
+                sv = sparse_encoder.encode(texts)
+                sparse_encoder.save(db, collection)
+                db.upsert_sparse_vectors(collection, ids, sv)
         except Exception:
             logger.warning("sparse upsert failed meeting=%s", meeting_id, exc_info=True)
         else:

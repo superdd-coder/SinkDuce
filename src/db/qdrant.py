@@ -141,7 +141,7 @@ class QdrantManager:
             return self.client.list_names()
         return [c.name for c in self.client.get_collections().collections]
 
-    def clear_sparse_locks(self) -> int:
+    def clear_sparse_locks(self, *, on_pending=None) -> int:
         """Clear sparse_lock flags left behind by a dead process.
 
         Quitting mid-rebuild leaves ``sparse_lock: True`` stuck in the
@@ -154,11 +154,18 @@ class QdrantManager:
             try:
                 cfg = self.get_collection_config(name)
                 if cfg.get("sparse_lock"):
-                    self.update_collection_config(
-                        name, {"sparse_lock": False, "sparse_lock_at": 0}
-                    )
+                    from src.rag.sparse_recalc import SPARSE_STAGE_PREFIX
+                    stage = cfg.get("sparse_rebuild_stage") or ""
+                    updates = {"sparse_lock": False, "sparse_lock_at": 0}
+                    if stage.startswith(SPARSE_STAGE_PREFIX):
+                        if stage not in self.client.aliases().values() and self.client.raw.collection_exists(stage):
+                            self.client.raw.delete_collection(stage)
+                        updates.update(sparse_rebuild_stage="", sparse_repair_pending=True)
+                    self.update_collection_config(name, updates)
                     cleared += 1
                     logger.info("[SparseRecalc] cleared stale lock for %s", name)
+                if on_pending and not name.startswith("__") and (cfg.get("sparse_repair_pending") or cfg.get("sparse_lock")):
+                    on_pending(name)
             except Exception:
                 logger.warning(
                     "[SparseRecalc] lock clear failed for %s", name, exc_info=True

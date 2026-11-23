@@ -162,7 +162,7 @@ def ingest_pipeline(tmp_path, monkeypatch):
 
     monkeypatch.setattr(routes, "_do_enrich", enrich)
     monkeypatch.setattr(handlers, "_do_enrich", enrich)
-    monkeypatch.setattr(handlers, "_bump_sparse_recalc_counter", lambda *args: None)
+    monkeypatch.setattr(handlers, "_bump_sparse_recalc_counter", lambda *args, **kwargs: None)
     monkeypatch.setattr(handlers, "_after_ingest_definitive_followup", lambda *args, **kwargs: None)
     monkeypatch.setattr("src.file_mgmt.definitive_suggestions.schedule_definitive_suggestion_judge", lambda *args: None)
     monkeypatch.setattr("src.collections.file_index.record_ingest_chunks", lambda *args: None)

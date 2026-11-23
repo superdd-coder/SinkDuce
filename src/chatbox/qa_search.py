@@ -134,12 +134,14 @@ class QaTurn:
                       and (kwargs.get("include_archived") or not store.is_archived(cid))]
         visible = visibility.filter_collection_ids(get_actor(), candidates)
         available = []
+        unavailable = set()
         for cid in visible:
             try:
                 config = get_collection_embedding_config(services.db.get_collection_config(cid), cid)
             except Exception:
                 config = None
             if config is None:
+                unavailable.add(cid)
                 self.skipped_collections[cid] = True
             elif cid in requested:
                 available.append(cid)
@@ -147,6 +149,11 @@ class QaTurn:
             context = "No searchable collections in the selected scope. No knowledge-base evidence is available."
             return AgenticQueryResult(answer=None, context=context) if agentic else DirectQueryResult(context=context)
         result = call(query, **(kwargs | {"collections": available}))
+        if agentic and unavailable.intersection(requested):
+            from src.rag.agent_prompts import PARTIAL_COLLECTION_COVERAGE
+            result.coverage_complete = False
+            if result.context and not result.context.startswith(PARTIAL_COLLECTION_COVERAGE):
+                result.context = PARTIAL_COLLECTION_COVERAGE + "\n\n" + result.context
         # Only completed vector-store reads carry the model actually used.
         # Agentic searches may produce several events for one collection.
         for event in getattr(result, "trace", []) or []:

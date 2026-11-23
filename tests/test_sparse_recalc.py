@@ -39,7 +39,7 @@ class TestLock:
         db = MagicMock()
         _release_lock(db, "col")
         db.update_collection_config.assert_called_once_with(
-            "col", {"sparse_lock": False, "sparse_lock_at": 0}
+            "col", {"sparse_lock": False, "sparse_lock_at": 0, "sparse_rebuild_stage": ""}
         )
 
     def test_release_lock_swallows_error(self):
@@ -52,65 +52,42 @@ class TestLock:
 
 # ── Rebuild flow tests ────────────────────────────────────────
 
+@pytest.fixture
+def index(monkeypatch):
+    from qdrant_client.qdrant_client import QdrantClient
+    from src.db.qdrant import QdrantManager
+    from src.services import services
+
+    db = QdrantManager.__new__(QdrantManager)
+    db.client = QdrantClient(":memory:")
+    monkeypatch.setattr(services, "config", None)
+    db.create_collection("col", 2, {"sparse_recalc_counter": 50, "sparse_repair_pending": True})
+    return db
+
+
+def _points(db, payloads):
+    db.upsert_points("col", list(range(1, len(payloads) + 1)), [[1., 0.]] * len(payloads), payloads)
+
+
 class TestRunSparseRecalc:
-    """Test run_sparse_recalc with mocked Qdrant."""
-
-    def test_empty_collection(self):
+    def test_empty_collection(self, index):
         from src.rag.sparse_recalc import run_sparse_recalc
-        db = MagicMock()
-        db.get_collection_config.return_value = {"sparse_lock": False, "sparse_recalc_counter": 5}
-        db.scroll_points.return_value = ([], None)  # no points
+        assert run_sparse_recalc(index, "col")["rebuilt_chunks"] == 0
+        config = index.get_collection_config("col")
+        assert config["sparse_recalc_counter"] == 0 and not config["sparse_lock"]
+        assert not config["sparse_repair_pending"]
 
-        result = run_sparse_recalc(db, "col")
-
-        assert result == {"collection": "col", "rebuilt_chunks": 0}
-        # Counter should be reset
-        assert call("col", {"sparse_recalc_counter": 0}) in db.update_collection_config.call_args_list
-        # Lock should be released (with timestamp cleared)
-        assert call("col", {"sparse_lock": False, "sparse_lock_at": 0}) in db.update_collection_config.call_args_list
-
-    def test_full_flow(self):
-        from src.rag.sparse_recalc import run_sparse_recalc
-        db = MagicMock()
-        db.get_collection_config.return_value = {
-            "sparse_lock": False,
-            "sparse_recalc_counter": 5000,
-            "sparse_recalc_threshold": 5000,
-        }
-        # Return two batches, then empty (loop termination)
-        db.scroll_points.side_effect = [
-            (
-                [
-                    {"id": "id1", "payload": {"text": "hello world"}},
-                    {"id": "id2", "payload": {"text": "foo bar"}},
-                ],
-                "offset-2",
-            ),
-            (
-                [{"id": "id3", "payload": {"text": "hello foo"}}],
-                None,
-            ),
-            ([], None),  # signal end-of-collection
-        ]
-
-        result = run_sparse_recalc(db, "col")
-
-        assert result["rebuilt_chunks"] == 3
-        assert result["terms"] >= 4  # hello, world, foo, bar
-        # Verify sparse vectors were upserted
-        db.upsert_sparse_vectors.assert_called_once()
-        _args, _kwargs = db.upsert_sparse_vectors.call_args
-        # upsert_sparse_vectors(self, collection, ids, sparse_vectors)
-        assert _args[0] == "col"
-        assert _args[1] == ["id1", "id2", "id3"]
-        assert len(_args[2]) == 3
-        # Vocab should be saved
-        assert any(
-            "sparse_vocab" in str(c)
-            for c in db.update_collection_config.call_args_list
-        )
-        # Counter: 5000 - 3 = 4997
-        assert call("col", {"sparse_recalc_counter": 4997}) in db.update_collection_config.call_args_list
+    def test_full_flow(self, index, monkeypatch):
+        from src.rag import sparse_recalc
+        monkeypatch.setattr(sparse_recalc, "SCROLL_BATCH", 2)
+        _points(index, [{"text": "hello world"}, {"text": "foo bar"}, {"text": "hello foo"}, {"text": ""}])
+        assert sparse_recalc.run_sparse_recalc(index, "col")["rebuilt_chunks"] == 3
+        config = index.get_collection_config("col")
+        assert config["sparse_recalc_counter"] == 0
+        assert set(config["sparse_vocab"]["term_to_id"]) == {"hello", "foo", "bar", "world"}
+        rows = index.client.retrieve("col", [1, 2, 3, 4], with_vectors=True)
+        assert all("sparse" in row.vector for row in rows[:3])
+        assert rows[-1].vector == [1., 0.] or "sparse" not in rows[-1].vector
 
     def test_lock_failure_raises_readable_error(self):
         """Lock timeout surfaces a readable cause (was: silent None → generic
@@ -128,53 +105,45 @@ class TestRunSparseRecalc:
         # Should NOT have upserted
         db.upsert_sparse_vectors.assert_not_called()
 
-    def test_scroll_error_propagates_real_cause(self):
-        """If rebuild fails mid-way, the real exception propagates (was:
-        swallowed into a silent None). Counter is NOT reset."""
-        import pytest as _pytest
-        from src.rag.sparse_recalc import run_sparse_recalc
-        db = MagicMock()
-        db.get_collection_config.side_effect = [
-            {"sparse_lock": False, "sparse_recalc_counter": 5000},
-        ]
-        db.scroll_points.side_effect = RuntimeError("Qdrant down")
+    @pytest.mark.parametrize("stage", ["scroll", "write", "vocabulary", "publish"])
+    def test_failure_preserves_live_index_and_allows_retry(self, index, monkeypatch, stage):
+        from src.rag import sparse_recalc
+        from src.rag.sparse_encoder import SparseEncoder
+        from src.db.index_routing import STAGE_PREFIX
+        _points(index, [{"text": "alpha"}, {"text": "beta"}])
+        initial = SparseEncoder()
+        index.upsert_sparse_vectors("col", [1, 2], initial.encode(["beta", "alpha"]))
+        initial.save(index, "col")
+        original = index.client.retrieve("col", [1, 2], with_vectors=True)
+        def fail(*args, **kwargs):
+            raise RuntimeError("interrupted rebuild")
+        with monkeypatch.context() as m:
+            if stage == "scroll":
+                m.setattr(index.client, "scroll", fail)
+            elif stage == "write":
+                upsert = index.client.upsert
+                def fail_stage(collection_name, **kwargs):
+                    if collection_name.startswith(STAGE_PREFIX):
+                        fail()
+                    return upsert(collection_name, **kwargs)
+                m.setattr(index.client, "upsert", fail_stage)
+            elif stage == "vocabulary":
+                m.setattr(SparseEncoder, "save", fail)
+            else:
+                m.setattr(index.client, "publish", fail)
+            with pytest.raises(RuntimeError, match="interrupted rebuild"):
+                sparse_recalc.run_sparse_recalc(index, "col")
+        assert index.client.retrieve("col", [1, 2], with_vectors=True) == original
+        config = index.get_collection_config("col")
+        assert config["sparse_vocab"]["term_to_id"] == initial.term_to_id
+        assert config["sparse_repair_pending"] and not config["sparse_lock"]
+        assert not any(c.name.startswith(STAGE_PREFIX) for c in index.client.raw.get_collections().collections)
+        with index.client.snapshot("col"):
+            assert sparse_recalc.run_sparse_recalc(index, "col")["rebuilt_chunks"] == 2
+            assert index.client.retrieve("col", [1, 2], with_vectors=True) == original
+        saved = index.get_collection_config("col")["sparse_vocab"]["term_to_id"]
+        assert index.client.retrieve("col", [1], with_vectors=True)[0].vector["sparse"].indices == [saved["alpha"]]
 
-        with _pytest.raises(RuntimeError, match="Qdrant down"):
-            run_sparse_recalc(db, "col")
-
-        # Counter should NOT have been reset (no call with counter=0)
-        reset_calls = [
-            c for c in db.update_collection_config.call_args_list
-            if "sparse_recalc_counter" in str(c) and "0" in str(c)
-        ]
-        assert len(reset_calls) == 0
-        # Lock must still be released (with timestamp cleared)
-        assert call("col", {"sparse_lock": False, "sparse_lock_at": 0}) in db.update_collection_config.call_args_list
-
-    def test_skip_points_without_text(self):
-        from src.rag.sparse_recalc import run_sparse_recalc
-        db = MagicMock()
-        db.get_collection_config.return_value = {"sparse_lock": False, "sparse_recalc_counter": 3}
-        db.scroll_points.side_effect = [
-            (
-                [
-                    {"id": "id1", "payload": {"text": "hello"}},
-                    {"id": "cfg", "payload": {"chunk_type": "__config__"}},  # no text
-                    {"id": "id2", "payload": {"text": "world"}},
-                ],
-                None,
-            ),
-            ([], None),  # signal end
-        ]
-
-        result = run_sparse_recalc(db, "col")
-
-        assert result["rebuilt_chunks"] == 2  # config point skipped
-        _args, _kwargs = db.upsert_sparse_vectors.call_args
-        assert _args[1] == ["id1", "id2"]
-
-
-# ── Counter bump tests ────────────────────────────────────────
 
 class TestCounterBump:
     def test_under_threshold(self):
@@ -236,38 +205,31 @@ class TestCounterBump:
 
 # ── Batched sparse write-back ─────────────────────────────────
 
-def test_rebuild_preserves_ingest_metadata_and_excludes_parent_containers():
+def test_rebuild_preserves_ingest_metadata_and_excludes_parent_containers(index):
     from src.rag.sparse_recalc import run_sparse_recalc
-
-    db = MagicMock()
-    db.get_collection_config.return_value = {"sparse_lock": False}
-    db.scroll_points.return_value = ([
-        {"id": "parent", "payload": {"text": "parentonly", "chunk_type": "parent"}},
-        {"id": "child", "payload": {"text": "ordinary", "chunk_type": "child",
-            "source_label": "zebratrigger.txt", "context": "ambertrigger",
-            "images": [{"ocr_text": "quartztrigger"}]}},
-    ], None)
-    result = run_sparse_recalc(db, "col")
-    saved = next(c.args[1]["sparse_vocab"] for c in db.update_collection_config.call_args_list
-                 if "sparse_vocab" in c.args[1])
-    assert {"zebratrigger", "ambertrigger", "quartztrigger"}.issubset(saved["term_to_id"])
-    assert "parentonly" not in saved["term_to_id"]
-    assert result["rebuilt_chunks"] == 1
-    assert db.upsert_sparse_vectors.call_args.args[1] == ["child"]
+    rows = [{"text": "parentonly", "chunk_type": "parent"},
+            {"text": "ordinary", "chunk_type": "child", "source_label": "zebratrigger.txt",
+             "context": "ambertrigger", "images": [{"ocr_text": "quartztrigger"}]},
+            {"text": "privatequestion", "source_kind": "qa_question"}]
+    _points(index, rows)
+    index.upsert_sparse_vectors("col", [3], [{77: 2.0}])
+    assert run_sparse_recalc(index, "col")["rebuilt_chunks"] == 1
+    saved = index.get_collection_config("col")["sparse_vocab"]["term_to_id"]
+    assert {"zebratrigger", "ambertrigger", "quartztrigger"}.issubset(saved)
+    assert not {"parentonly", "privatequestion"}.intersection(saved)
+    retrieved = index.client.retrieve("col", [1, 2, 3], with_vectors=True)
+    assert [r.payload for r in retrieved] == rows
+    assert retrieved[2].vector["sparse"].indices == [77]
 
 
-def test_rebuild_keeps_legacy_vector_format_until_explicit_migration():
+def test_rebuild_keeps_legacy_vector_format_until_explicit_migration(index):
     from src.rag.sparse_recalc import run_sparse_recalc
-
-    db = MagicMock()
-    db.get_collection_config.return_value = {"sparse_lock": False, "sparse_vocab": {
-        "term_to_id": {"alpha": 0}, "doc_freqs": {0: 1}, "avg_dl": 1, "doc_count": 1,
-    }}
-    db.scroll_points.return_value = ([{"id": "child", "payload": {"text": "alpha"}}], None)
-    run_sparse_recalc(db, "col")
-    saved = next(c.args[1]["sparse_vocab"] for c in db.update_collection_config.call_args_list
-                 if "sparse_vocab" in c.args[1])
-    assert saved["vector_format"] == "bm25_idf_v1"
+    index.update_collection_config("col", {"sparse_vocab": {
+        "term_to_id": {"alpha": 0}, "doc_freqs": {"0": 1}, "avg_dl": 1, "doc_count": 1,
+    }})
+    _points(index, [{"text": "alpha"}])
+    run_sparse_recalc(index, "col")
+    assert index.get_collection_config("col")["sparse_vocab"]["vector_format"] == "bm25_idf_v1"
 
 
 class TestBatchedSparseUpsert:
@@ -397,7 +359,7 @@ class TestStaleLockTakeover:
         db = MagicMock()
         _release_lock(db, "col")
         db.update_collection_config.assert_called_once_with(
-            "col", {"sparse_lock": False, "sparse_lock_at": 0}
+            "col", {"sparse_lock": False, "sparse_lock_at": 0, "sparse_rebuild_stage": ""}
         )
 
 
@@ -423,3 +385,51 @@ class TestClearSparseLocks:
         mgr.update_collection_config.assert_called_once_with(
             "colA", {"sparse_lock": False, "sparse_lock_at": 0}
         )
+
+
+def test_restart_resumes_interrupted_keyword_rebuild_without_touching_live_index(index):
+    from src.rag.sparse_recalc import SPARSE_STAGE_PREFIX, run_sparse_recalc
+
+    name = SPARSE_STAGE_PREFIX + "abandoned"
+    index.create_collection(name, 2, {"sparse_recalc_counter": 0})
+    index.update_collection_config("col", {"sparse_lock": True, "sparse_rebuild_stage": name})
+    pending = []
+    assert index.clear_sparse_locks(on_pending=pending.append) == 1
+    assert pending == ["col"] and not index.client.raw.collection_exists(name)
+    _points(index, [{"text": "source"}])
+    run_sparse_recalc(index, "col")
+    assert index.clear_sparse_locks(on_pending=pending.append) == 0
+    assert pending == ["col"] and index.count_points("col") == 2
+
+def test_edit_during_keyword_rebuild_is_preserved(index, monkeypatch):
+    from src.rag import sparse_recalc
+    _points(index, [{"text": "alpha"}])
+    build = sparse_recalc._build_replacement
+    def build_then_edit(db, collection, stage, config):
+        result = build(db, collection, stage, config)
+        db.client.set_payload(collection, {"archived": True}, points=[1])
+        return result
+    with monkeypatch.context() as m:
+        m.setattr(sparse_recalc, "_build_replacement", build_then_edit)
+        with pytest.raises(sparse_recalc.SparseIndexChanged):
+            sparse_recalc.run_sparse_recalc(index, "col")
+    assert index.client.retrieve("col", [1])[0].payload["archived"]
+    sparse_recalc.run_sparse_recalc(index, "col")
+    assert index.client.retrieve("col", [1])[0].payload["archived"]
+
+
+def test_replacement_preserves_server_index_limits(index, monkeypatch):
+    from qdrant_client import models
+    from src.rag.sparse_recalc import run_sparse_recalc
+
+    get_collection = index.client.get_collection
+    create_collection = MagicMock(wraps=index.client.create_collection)
+    def remote_info(collection_name):
+        info = get_collection(collection_name)
+        info.config.strict_mode_config = models.StrictModeConfigOutput(enabled=True)
+        return info
+    monkeypatch.setattr(index.client, "get_collection", remote_info)
+    monkeypatch.setattr(index.client, "create_collection", create_collection)
+    run_sparse_recalc(index, "col")
+    strict = create_collection.call_args.kwargs["strict_mode_config"]
+    assert isinstance(strict, models.StrictModeConfig) and strict.enabled

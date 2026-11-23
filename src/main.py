@@ -120,13 +120,14 @@ async def lifespan(app: FastAPI):
 
     configure_host_math_threads()
     init_services()
+    pending_sparse_repairs = []
     # A quit mid-rebuild leaves sparse_lock stuck True and every later
     # rebuild times out waiting for a dead holder — startup is the one
     # moment nothing can be holding it, so clear stale locks here.
     try:
         from src.services import services
         if services.db is not None:
-            cleared = services.db.clear_sparse_locks()
+            cleared = services.db.clear_sparse_locks(on_pending=pending_sparse_repairs.append)
             if cleared:
                 logger.info("Cleared %d stale sparse rebuild lock(s)", cleared)
     except Exception:
@@ -135,6 +136,9 @@ async def lifespan(app: FastAPI):
 
     start_sysaudio_watchdog()
     await task_manager.start()
+    from src.tasks.handlers import _schedule_sparse_recalc
+    for collection in pending_sparse_repairs:
+        _schedule_sparse_recalc(collection, reason="resume interrupted keyword indexing")
     from src.rag.embedding_rebuild import recover_rebuilds
     try:
         recover_rebuilds()

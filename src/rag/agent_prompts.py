@@ -454,3 +454,9 @@ Relevant context:
 {context}
 
 Answer the question based on the above information."""
+
+
+PARTIAL_COLLECTION_COVERAGE = (
+    "Some selected collections could not be searched. Explain that the evidence covers only "
+    "the available collections. Qualify comparisons and conclusions that require the missing sources."
+)

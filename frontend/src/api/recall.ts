@@ -98,13 +98,16 @@ export interface EvalReport {
   collection: string
   config_snapshot: Record<string, unknown>
   total_cases: number
-  avg_hard_recall: number
-  avg_holistic_recall: number
-  avg_recall: number       // avg of (hard OR holistic)
-  avg_quality_score: number
-  avg_mrr: number
-  hit_rate: number
-  avg_time_ms: number
+  valid_cases?: number
+  stale_count?: number
+  stale_cases?: { test_case_id: string; query: string }[]
+  avg_hard_recall: number | null
+  avg_holistic_recall: number | null
+  avg_recall: number | null       // avg of (hard OR holistic)
+  avg_quality_score: number | null
+  avg_mrr: number | null
+  hit_rate: number | null
+  avg_time_ms: number | null
   per_query: EvalResultRow[]
   timestamp: string
 }

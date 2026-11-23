@@ -129,6 +129,14 @@ def test_distinct_spaces_route_offline_and_reconnect(indexes):
         "collection": "papers", "model": "B", "dimensions": 3, "mode": "dense",
         "provider_id": "B", "provider_name": "",
     }]}
+    from src.rag.agentic_query import AgenticQueryResult
+    from src.rag.agent_prompts import PARTIAL_COLLECTION_COVERAGE
+    service = Mock()
+    service.run.return_value = AgenticQueryResult(answer=None, context="available evidence", coverage_complete=True)
+    partial = turn.agentic(service, "find", collections=["books", "papers"])
+    assert service.run.call_args.kwargs["collections"] == ["papers"]
+    assert partial.context.startswith(PARTIAL_COLLECTION_COVERAGE) and not partial.coverage_complete
+    assert turn.search_metadata()["skipped_collections"] == ["books"]
     cfg.providers = []
     assert not QaTurn("question", ["books"], None).direct(direct, "find", collections=["books"]).chunks
     cfg.providers = [a.model_copy(update={"id": "new-record", "api_key": "rotated"})]
